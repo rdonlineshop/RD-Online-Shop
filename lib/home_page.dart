@@ -5,7 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 
-import 'admin_dashboard_page.dart';
+import 'admin_auth_page.dart';
 import 'cart_page.dart';
 import 'data/cart_data.dart';
 import 'data/product_data.dart';
@@ -1036,7 +1036,7 @@ class _HomePageState extends State<HomePage> {
                   context,
                   MaterialPageRoute<void>(
                     builder: (_) =>
-                        const AdminDashboardPage(),
+                        const AdminAuthPage(),
                   ),
                 ).then((_) {
                   if (mounted) {

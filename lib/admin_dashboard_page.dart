@@ -1,3 +1,5 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_order_page.dart';
@@ -7,8 +9,88 @@ import 'admin_seller_page.dart';
 class AdminDashboardPage extends StatelessWidget {
   const AdminDashboardPage({super.key});
 
+  Future<void> _logout(BuildContext context) async {
+    final bool? confirm = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('Admin Logout'),
+        content: const Text('Are you sure you want to logout?'),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton.icon(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            icon: const Icon(Icons.logout),
+            label: const Text('Logout'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirm != true) return;
+
+    await FirebaseAuth.instance.signOut();
+    await FirebaseAuth.instance.signInAnonymously();
+
+    if (!context.mounted) return;
+    Navigator.popUntil(context, (Route<dynamic> route) => route.isFirst);
+  }
+
+  bool _isAllowedAdmin(Map<String, dynamic> admin) {
+    final String role = admin['role']?.toString().trim() ?? '';
+    return admin['isActive'] == true &&
+        (role == 'admin' || role == 'superAdmin');
+  }
+
   @override
   Widget build(BuildContext context) {
+    final User? user = FirebaseAuth.instance.currentUser;
+
+    if (user == null || user.isAnonymous) {
+      return _accessDenied(context, 'Admin login required.');
+    }
+
+    return FutureBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      future: FirebaseFirestore.instance
+          .collection('admins')
+          .doc(user.uid)
+          .get(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> snapshot,
+      ) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Scaffold(
+            body: Center(child: CircularProgressIndicator()),
+          );
+        }
+
+        if (snapshot.hasError) {
+          return _accessDenied(
+            context,
+            'Could not verify Admin access.\n${snapshot.error}',
+          );
+        }
+
+        final DocumentSnapshot<Map<String, dynamic>>? document =
+            snapshot.data;
+        final Map<String, dynamic> admin =
+            document?.data() ?? <String, dynamic>{};
+
+        if (document == null ||
+            !document.exists ||
+            !_isAllowedAdmin(admin)) {
+          return _accessDenied(context, 'Active Admin access required.');
+        }
+
+        return _dashboard(context);
+      },
+    );
+  }
+
+  Widget _dashboard(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
         title: const Text(
@@ -16,59 +98,101 @@ class AdminDashboardPage extends StatelessWidget {
           style: TextStyle(fontWeight: FontWeight.bold),
         ),
         centerTitle: true,
+        actions: <Widget>[
+          IconButton(
+            tooltip: 'Admin Logout',
+            onPressed: () => _logout(context),
+            icon: const Icon(Icons.logout),
+          ),
+        ],
       ),
       body: GridView.count(
         padding: const EdgeInsets.all(16),
         crossAxisCount: 2,
         crossAxisSpacing: 12,
         mainAxisSpacing: 12,
-        children: [
+        children: <Widget>[
           _dashboardCard(
-            context,
             icon: Icons.shopping_bag,
             title: 'Orders',
-            onTap: () => Navigator.push(
+            onTap: () => Navigator.push<void>(
               context,
-              MaterialPageRoute(builder: (_) => const AdminOrderPage()),
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminOrderPage(),
+              ),
             ),
           ),
           _dashboardCard(
-            context,
             icon: Icons.inventory_2,
             title: 'Products',
-            onTap: () => Navigator.push(
+            onTap: () => Navigator.push<void>(
               context,
-              MaterialPageRoute(builder: (_) => const AdminProductPage()),
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminProductPage(),
+              ),
             ),
           ),
           _dashboardCard(
-            context,
             icon: Icons.store,
             title: 'Sellers',
-            onTap: () => Navigator.push(
+            onTap: () => Navigator.push<void>(
               context,
-              MaterialPageRoute(builder: (_) => const AdminSellerPage()),
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminSellerPage(),
+              ),
             ),
           ),
           _dashboardCard(
-            context,
             icon: Icons.people,
             title: 'Customers',
             onTap: () => _comingSoon(context, 'Customer Management'),
           ),
           _dashboardCard(
-            context,
             icon: Icons.payment,
             title: 'Payments',
             onTap: () => _comingSoon(context, 'Payment Management'),
           ),
           _dashboardCard(
-            context,
             icon: Icons.settings,
             title: 'Settings',
             onTap: () => _comingSoon(context, 'Admin Settings'),
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _accessDenied(BuildContext context, String message) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('Admin Dashboard'),
+        centerTitle: true,
+      ),
+      body: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(24),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              const Icon(Icons.lock_outline, size: 72, color: Colors.red),
+              const SizedBox(height: 16),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+              const SizedBox(height: 20),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.arrow_back),
+                label: const Text('Back'),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -79,8 +203,7 @@ class AdminDashboardPage extends StatelessWidget {
     );
   }
 
-  Widget _dashboardCard(
-    BuildContext context, {
+  Widget _dashboardCard({
     required IconData icon,
     required String title,
     required VoidCallback onTap,
@@ -92,12 +215,15 @@ class AdminDashboardPage extends StatelessWidget {
         onTap: onTap,
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
-          children: [
+          children: <Widget>[
             Icon(icon, size: 45),
             const SizedBox(height: 10),
             Text(
               title,
-              style: const TextStyle(fontSize: 17, fontWeight: FontWeight.bold),
+              style: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.bold,
+              ),
             ),
           ],
         ),
