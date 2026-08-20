@@ -18,6 +18,9 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
   final TextEditingController searchController =
       TextEditingController();
 
+  List<Map<String, dynamic>> _sellerOrders =
+      <Map<String, dynamic>>[];
+
   String selectedFilter = 'All';
 
   final List<String> statuses = <String>[
@@ -44,13 +47,28 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
   // =========================================================
 
   Future<void> _loadOrders() async {
-    await loadOrders();
+    final String sellerId =
+        FirebaseAuth.instance.currentUser?.uid ?? '';
+
+    if (sellerId.trim().isEmpty) {
+      if (mounted) {
+        setState(() {
+          _sellerOrders = <Map<String, dynamic>>[];
+        });
+      }
+      return;
+    }
+
+    final List<Map<String, dynamic>> orders =
+        await sellerOrdersStream(sellerId).first;
 
     if (!mounted) {
       return;
     }
 
-    setState(() {});
+    setState(() {
+      _sellerOrders = orders;
+    });
   }
 
   void _refreshPage() {
@@ -576,6 +594,16 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     return ids;
   }
 
+  bool _isCurrentSellerOrder(
+    Map<String, dynamic> order,
+  ) {
+    final String sellerId =
+        FirebaseAuth.instance.currentUser?.uid ?? '';
+
+    return sellerId.isNotEmpty &&
+        _orderSellerIds(order).contains(sellerId);
+  }
+
   // =========================================================
   // CURRENT SELLER ORDERS ONLY
   // =========================================================
@@ -598,7 +626,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
             .trim()
             .toLowerCase();
 
-    return orderHistory.where(
+    return _sellerOrders.where(
       (
         Map<String, dynamic> order,
       ) {
@@ -647,6 +675,13 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     Map<String, dynamic> order,
     String newStatus,
   ) async {
+    if (!_isCurrentSellerOrder(order)) {
+      _showMessage(
+        'You can only update your own order.',
+      );
+      return;
+    }
+
     final String orderId =
         order['id']
                 ?.toString()
@@ -755,6 +790,13 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
   Future<void> _assignDeliveryPerson(
     Map<String, dynamic> order,
   ) async {
+    if (!_isCurrentSellerOrder(order)) {
+      _showMessage(
+        'You can only manage delivery for your own order.',
+      );
+      return;
+    }
+
     final String orderId =
         order['id']
                 ?.toString()
