@@ -1,12 +1,14 @@
 import 'dart:async';
+import 'dart:math';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
 
 import '../order_data.dart';
 
-class DeliveryPersonTrackingPage
-    extends StatefulWidget {
+class DeliveryPersonTrackingPage extends StatefulWidget {
   final String orderId;
   final String driverName;
   final String driverPhone;
@@ -19,18 +21,18 @@ class DeliveryPersonTrackingPage
   });
 
   @override
-  State<DeliveryPersonTrackingPage>
-      createState() =>
-          _DeliveryPersonTrackingPageState();
+  State<DeliveryPersonTrackingPage> createState() =>
+      _DeliveryPersonTrackingPageState();
 }
 
 class _DeliveryPersonTrackingPageState
     extends State<DeliveryPersonTrackingPage> {
-  StreamSubscription<Position>?
-      _positionSubscription;
+  StreamSubscription<Position>? _positionSubscription;
 
   bool _isTracking = false;
   bool _isLoading = false;
+  bool _isVerifyingOtp = false;
+  bool _orderDelivered = false;
 
   double? _latitude;
   double? _longitude;
@@ -40,8 +42,15 @@ class _DeliveryPersonTrackingPageState
 
   String _lastUpdated = '';
 
+  @override
+  void initState() {
+    super.initState();
+
+    _prepareDeliveryConfirmation();
+  }
+
   // =========================================================
-  // SHOW MESSAGE
+  // MESSAGE
   // =========================================================
 
   void _showMessage(
@@ -51,12 +60,99 @@ class _DeliveryPersonTrackingPageState
       return;
     }
 
-    ScaffoldMessenger.of(context)
-        .showSnackBar(
+    ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(message),
       ),
     );
+  }
+
+  // =========================================================
+  // PREPARE DELIVERY OTP
+  // =========================================================
+
+  Future<void> _prepareDeliveryConfirmation() async {
+    final String orderId =
+        widget.orderId.trim();
+
+    if (orderId.isEmpty) {
+      return;
+    }
+
+    try {
+      final DocumentReference<Map<String, dynamic>>
+          orderReference =
+          FirebaseFirestore.instance
+              .collection('orders')
+              .doc(orderId);
+
+      final DocumentSnapshot<Map<String, dynamic>>
+          snapshot =
+          await orderReference.get();
+
+      if (!snapshot.exists) {
+        return;
+      }
+
+      final Map<String, dynamic> data =
+          snapshot.data() ??
+              <String, dynamic>{};
+
+      final String status =
+          data['status']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      final String existingOtp =
+          data['deliveryOtp']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      if (status == 'Delivered') {
+        if (!mounted) {
+          return;
+        }
+
+        setState(() {
+          _orderDelivered = true;
+          _statusText =
+              'Order already delivered.';
+        });
+
+        return;
+      }
+
+      if (existingOtp.isEmpty) {
+        final int otp =
+            100000 +
+                Random.secure()
+                    .nextInt(900000);
+
+        await orderReference.set(
+          <String, dynamic>{
+            'deliveryOtp':
+                otp.toString(),
+            'deliveryOtpCreatedAt':
+                DateTime.now()
+                    .toIso8601String(),
+            'deliveryOtpVerified':
+                false,
+            'deliveryOtpVerifiedAt':
+                null,
+            'deliveryConfirmationMethod':
+                '',
+          },
+          SetOptions(
+            merge: true,
+          ),
+        );
+      }
+    } catch (error) {
+      // OTP preparation failure should
+      // not stop live GPS tracking.
+    }
   }
 
   // =========================================================
@@ -97,10 +193,10 @@ class _DeliveryPersonTrackingPageState
     }
 
     if (permission ==
-        LocationPermission
-            .deniedForever) {
+        LocationPermission.deniedForever) {
       _showMessage(
-        'Location permission permanently denied. Please enable it from Settings.',
+        'Location permission permanently denied. '
+        'Please enable it from Settings.',
       );
 
       return false;
@@ -110,7 +206,7 @@ class _DeliveryPersonTrackingPageState
   }
 
   // =========================================================
-  // SAVE LOCATION
+  // SAVE DRIVER LOCATION
   // =========================================================
 
   Future<void> _saveDriverLocation(
@@ -185,7 +281,8 @@ class _DeliveryPersonTrackingPageState
 
   Future<void> _startTracking() async {
     if (_isTracking ||
-        _isLoading) {
+        _isLoading ||
+        _orderDelivered) {
       return;
     }
 
@@ -285,7 +382,7 @@ class _DeliveryPersonTrackingPageState
       _showMessage(
         'Live delivery tracking started.',
       );
-    } catch (error) {
+    } catch (_) {
       if (!mounted) {
         return;
       }
@@ -339,59 +436,234 @@ class _DeliveryPersonTrackingPageState
   }
 
   // =========================================================
-  // MARK DELIVERED
+  // READ CUSTOMER LATITUDE
   // =========================================================
 
-  Future<void> _markDelivered() async {
-    final String orderId =
-        widget.orderId.trim();
+  double? _customerLatitude(
+    Map<String, dynamic> order,
+  ) {
+    final dynamic value =
+        order['customerLat'] ??
+            order['latitude'];
 
-    if (orderId.isEmpty) {
-      return;
+    if (value is num) {
+      return value.toDouble();
     }
 
-    final bool? confirm =
-        await showDialog<bool>(
+    if (value != null) {
+      return double.tryParse(
+        value.toString(),
+      );
+    }
+
+    return null;
+  }
+
+  // =========================================================
+  // READ CUSTOMER LONGITUDE
+  // =========================================================
+
+  double? _customerLongitude(
+    Map<String, dynamic> order,
+  ) {
+    final dynamic value =
+        order['customerLng'] ??
+            order['longitude'];
+
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    if (value != null) {
+      return double.tryParse(
+        value.toString(),
+      );
+    }
+
+    return null;
+  }
+
+  // =========================================================
+  // CHECK DRIVER IS NEAR CUSTOMER
+  //
+  // 250 meters limit for delivery confirmation.
+  // =========================================================
+
+  Future<bool> _checkCustomerProximity(
+    Map<String, dynamic> order,
+  ) async {
+    final double? customerLat =
+        _customerLatitude(order);
+
+    final double? customerLng =
+        _customerLongitude(order);
+
+    if (customerLat == null ||
+        customerLng == null) {
+      _showMessage(
+        'Customer GPS location is not available.',
+      );
+
+      return false;
+    }
+
+    double? driverLat =
+        _latitude;
+
+    double? driverLng =
+        _longitude;
+
+    if (driverLat == null ||
+        driverLng == null) {
+      final bool permission =
+          await _checkPermission();
+
+      if (!permission) {
+        return false;
+      }
+
+      try {
+        final Position position =
+            await Geolocator
+                .getCurrentPosition(
+          locationSettings:
+              const LocationSettings(
+            accuracy:
+                LocationAccuracy.high,
+          ),
+        );
+
+        driverLat =
+            position.latitude;
+
+        driverLng =
+            position.longitude;
+
+        await _saveDriverLocation(
+          position,
+        );
+      } catch (_) {
+        _showMessage(
+          'Could not get your current GPS location.',
+        );
+
+        return false;
+      }
+    }
+
+    final double distanceMeters =
+        Geolocator.distanceBetween(
+      driverLat,
+      driverLng,
+      customerLat,
+      customerLng,
+    );
+
+    if (distanceMeters > 250) {
+      _showMessage(
+        'You are still about '
+        '${distanceMeters.round()} meters '
+        'away from the customer. '
+        'Delivery can only be confirmed near the customer.',
+      );
+
+      return false;
+    }
+
+    return true;
+  }
+
+  // =========================================================
+  // DELIVERY OTP DIALOG
+  // =========================================================
+
+  Future<String?> _askForOtp() async {
+    final TextEditingController controller =
+        TextEditingController();
+
+    final String? result =
+        await showDialog<String>(
       context: context,
+      barrierDismissible: false,
       builder: (
         BuildContext dialogContext,
       ) {
         return AlertDialog(
-          title:
-              const Text(
-            'Mark as Delivered',
+          title: const Text(
+            'Customer Delivery OTP',
           ),
-          content:
+          content: Column(
+            mainAxisSize:
+                MainAxisSize.min,
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
+            children: <Widget>[
               const Text(
-            'Has this order been delivered to the customer?',
+                'Ask the customer for the 6-digit '
+                'Delivery OTP shown in their My Orders page.',
+              ),
+
+              const SizedBox(
+                height: 16,
+              ),
+
+              TextField(
+                controller: controller,
+                autofocus: true,
+                keyboardType:
+                    TextInputType.number,
+                maxLength: 6,
+                decoration:
+                    const InputDecoration(
+                  labelText:
+                      '6-digit OTP',
+                  hintText:
+                      '123456',
+                  prefixIcon:
+                      Icon(
+                    Icons.password,
+                  ),
+                  border:
+                      OutlineInputBorder(),
+                  counterText:
+                      '',
+                ),
+              ),
+            ],
           ),
           actions: <Widget>[
             TextButton(
               onPressed: () {
                 Navigator.pop(
                   dialogContext,
-                  false,
                 );
               },
-              child:
-                  const Text(
+              child: const Text(
                 'Cancel',
               ),
             ),
+
             FilledButton.icon(
               onPressed: () {
+                final String otp =
+                    controller.text.trim();
+
+                if (otp.length != 6 ||
+                    int.tryParse(otp) ==
+                        null) {
+                  return;
+                }
+
                 Navigator.pop(
                   dialogContext,
-                  true,
+                  otp,
                 );
               },
-              icon:
-                  const Icon(
-                Icons.check_circle,
+              icon: const Icon(
+                Icons.verified,
               ),
-              label:
-                  const Text(
-                'Delivered',
+              label: const Text(
+                'Verify',
               ),
             ),
           ],
@@ -399,39 +671,295 @@ class _DeliveryPersonTrackingPageState
       },
     );
 
-    if (confirm != true) {
+    controller.dispose();
+
+    return result;
+  }
+
+  // =========================================================
+  // VERIFY OTP AND MARK DELIVERED
+  // =========================================================
+
+  Future<void> _verifyOtpAndDeliver() async {
+    if (_isVerifyingOtp ||
+        _orderDelivered) {
       return;
     }
 
-    await _positionSubscription
-        ?.cancel();
+    final String orderId =
+        widget.orderId.trim();
 
-    _positionSubscription = null;
+    if (orderId.isEmpty) {
+      _showMessage(
+        'Order ID is missing.',
+      );
 
-    await updateOrderStatus(
-      orderId,
-      'Delivered',
-    );
-
-    await updateTrackingStatus(
-      orderId,
-      'Delivered',
-    );
-
-    if (!mounted) {
       return;
     }
 
     setState(() {
-      _isTracking = false;
-
-      _statusText =
-          'Order delivered.';
+      _isVerifyingOtp = true;
     });
 
-    _showMessage(
-      'Order marked as delivered.',
-    );
+    try {
+      final DocumentReference<Map<String, dynamic>>
+          orderReference =
+          FirebaseFirestore.instance
+              .collection('orders')
+              .doc(orderId);
+
+      final DocumentSnapshot<Map<String, dynamic>>
+          snapshot =
+          await orderReference.get();
+
+      if (!snapshot.exists) {
+        _showMessage(
+          'Order was not found.',
+        );
+
+        return;
+      }
+
+      final Map<String, dynamic> order =
+          snapshot.data() ??
+              <String, dynamic>{};
+
+      final String status =
+          order['status']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      if (status == 'Delivered') {
+        if (mounted) {
+          setState(() {
+            _orderDelivered = true;
+          });
+        }
+
+        _showMessage(
+          'This order is already delivered.',
+        );
+
+        return;
+      }
+
+      // =====================================================
+      // DRIVER ID SECURITY CHECK
+      // =====================================================
+
+      final String savedDriverId =
+          order['driverId']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      final String currentDriverId =
+          FirebaseAuth
+                  .instance
+                  .currentUser
+                  ?.uid ??
+              '';
+
+      if (savedDriverId.isNotEmpty &&
+          currentDriverId.isNotEmpty &&
+          savedDriverId !=
+              currentDriverId) {
+        _showMessage(
+          'This order is assigned to another delivery person.',
+        );
+
+        return;
+      }
+
+      // =====================================================
+      // DRIVER MUST BE NEAR CUSTOMER
+      // =====================================================
+
+      final bool nearCustomer =
+          await _checkCustomerProximity(
+        order,
+      );
+
+      if (!nearCustomer) {
+        return;
+      }
+
+      // =====================================================
+      // ASK CUSTOMER OTP
+      // =====================================================
+
+      final String? enteredOtp =
+          await _askForOtp();
+
+      if (enteredOtp == null) {
+        return;
+      }
+
+      final DocumentSnapshot<
+              Map<String, dynamic>>
+          latestSnapshot =
+          await orderReference.get();
+
+      final Map<String, dynamic>
+          latestOrder =
+          latestSnapshot.data() ??
+              <String, dynamic>{};
+
+      final String savedOtp =
+          latestOrder['deliveryOtp']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      if (savedOtp.isEmpty) {
+        _showMessage(
+          'Delivery OTP has not been generated.',
+        );
+
+        await _prepareDeliveryConfirmation();
+
+        return;
+      }
+
+      if (enteredOtp !=
+          savedOtp) {
+        _showMessage(
+          'Incorrect Delivery OTP.',
+        );
+
+        return;
+      }
+
+      // =====================================================
+      // OTP CORRECT
+      // =====================================================
+
+      await _positionSubscription
+          ?.cancel();
+
+      _positionSubscription =
+          null;
+
+      final String now =
+          DateTime.now()
+              .toIso8601String();
+
+      await orderReference.set(
+        <String, dynamic>{
+          'status':
+              'Delivered',
+
+          'trackingStatus':
+              'Delivered',
+
+          'deliveryOtpVerified':
+              true,
+
+          'deliveryOtpVerifiedAt':
+              now,
+
+          'deliveryConfirmationMethod':
+              'OTP',
+
+          'deliveredAt':
+              now,
+
+          'deliveredByDriverId':
+              currentDriverId,
+
+          'deliveredByDriverName':
+              widget.driverName.trim(),
+
+          'deliveredByDriverPhone':
+              widget.driverPhone.trim(),
+
+          'deliveryConfirmedLat':
+              _latitude,
+
+          'deliveryConfirmedLng':
+              _longitude,
+
+          // Remove OTP after successful verification.
+          'deliveryOtp':
+              FieldValue.delete(),
+        },
+        SetOptions(
+          merge: true,
+        ),
+      );
+
+      // Keep local/order-data system synced too.
+      await updateOrderStatus(
+        orderId,
+        'Delivered',
+      );
+
+      await updateTrackingStatus(
+        orderId,
+        'Delivered',
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isTracking = false;
+
+        _orderDelivered = true;
+
+        _statusText =
+            'Delivery confirmed successfully.';
+      });
+
+      await showDialog<void>(
+        context: context,
+        builder: (
+          BuildContext dialogContext,
+        ) {
+          return AlertDialog(
+            icon: const Icon(
+              Icons.verified,
+              color:
+                  Colors.green,
+              size: 50,
+            ),
+            title: const Text(
+              'Delivery Confirmed',
+            ),
+            content: const Text(
+              'Customer OTP verified successfully. '
+              'This order is now marked as Delivered.',
+            ),
+            actions: <Widget>[
+              FilledButton(
+                onPressed: () {
+                  Navigator.pop(
+                    dialogContext,
+                  );
+                },
+                child: const Text(
+                  'OK',
+                ),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (error) {
+      _showMessage(
+        'Could not confirm delivery: '
+        '${error.toString()}',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isVerifyingOtp =
+              false;
+        });
+      }
+    }
   }
 
   // =========================================================
@@ -439,9 +967,15 @@ class _DeliveryPersonTrackingPageState
   // =========================================================
 
   Widget _locationCard() {
+    final double? latitude =
+        _latitude;
+
+    final double? longitude =
+        _longitude;
+
     final bool hasLocation =
-        _latitude != null &&
-            _longitude != null;
+        latitude != null &&
+            longitude != null;
 
     return Card(
       child: Padding(
@@ -458,9 +992,11 @@ class _DeliveryPersonTrackingPageState
                     Icons.local_shipping,
                   ),
                 ),
+
                 SizedBox(
                   width: 12,
                 ),
+
                 Expanded(
                   child: Text(
                     'Delivery Person Live GPS',
@@ -505,13 +1041,17 @@ class _DeliveryPersonTrackingPageState
             Row(
               children: <Widget>[
                 Icon(
-                  _isTracking
-                      ? Icons.gps_fixed
-                      : Icons.gps_off,
+                  _orderDelivered
+                      ? Icons.verified
+                      : _isTracking
+                          ? Icons.gps_fixed
+                          : Icons.gps_off,
                   color:
-                      _isTracking
+                      _orderDelivered
                           ? Colors.green
-                          : Colors.orange,
+                          : _isTracking
+                              ? Colors.green
+                              : Colors.orange,
                 ),
 
                 const SizedBox(
@@ -523,10 +1063,10 @@ class _DeliveryPersonTrackingPageState
                     _statusText,
                     style: TextStyle(
                       color:
-                          _isTracking
+                          _orderDelivered ||
+                                  _isTracking
                               ? Colors.green
-                              : Colors
-                                  .blueGrey,
+                              : Colors.blueGrey,
                       fontWeight:
                           FontWeight.w600,
                     ),
@@ -535,40 +1075,104 @@ class _DeliveryPersonTrackingPageState
               ],
             ),
 
-            if (hasLocation)
-              ...<Widget>[
-                const SizedBox(
-                  height: 14,
-                ),
+            if (hasLocation) ...<Widget>[
+              const SizedBox(
+                height: 14,
+              ),
 
-                Text(
-                  'Latitude: '
-                  '${_latitude!.toStringAsFixed(6)}',
-                ),
+              Text(
+                'Latitude: '
+                '${latitude.toStringAsFixed(6)}',
+              ),
 
-                Text(
-                  'Longitude: '
-                  '${_longitude!.toStringAsFixed(6)}',
-                ),
+              Text(
+                'Longitude: '
+                '${longitude.toStringAsFixed(6)}',
+              ),
 
-                if (_lastUpdated
-                    .isNotEmpty)
-                  Padding(
-                    padding:
-                        const EdgeInsets.only(
-                      top: 5,
-                    ),
-                    child: Text(
-                      'Last updated: $_lastUpdated',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color:
-                            Colors.grey
-                                .shade700,
-                      ),
+              if (_lastUpdated
+                  .isNotEmpty)
+                Padding(
+                  padding:
+                      const EdgeInsets.only(
+                    top: 5,
+                  ),
+                  child: Text(
+                    'Last updated: $_lastUpdated',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color:
+                          Colors.grey
+                              .shade700,
                     ),
                   ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================================================
+  // OTP INFORMATION CARD
+  // =========================================================
+
+  Widget _otpInfoCard() {
+    return Card(
+      child: Padding(
+        padding:
+            const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: <Widget>[
+            const Row(
+              children: <Widget>[
+                Icon(
+                  Icons.security,
+                  color:
+                      Colors.green,
+                ),
+
+                SizedBox(
+                  width: 8,
+                ),
+
+                Expanded(
+                  child: Text(
+                    'Secure Delivery Confirmation',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                ),
               ],
+            ),
+
+            const SizedBox(
+              height: 10,
+            ),
+
+            const Text(
+              'The order cannot be marked Delivered '
+              'without the customer\'s 6-digit Delivery OTP.',
+            ),
+
+            const SizedBox(
+              height: 7,
+            ),
+
+            const Text(
+              'The delivery person must also be near '
+              'the customer GPS location.',
+              style: TextStyle(
+                color:
+                    Colors.blueGrey,
+              ),
+            ),
           ],
         ),
       ),
@@ -584,7 +1188,8 @@ class _DeliveryPersonTrackingPageState
     BuildContext context,
   ) {
     return PopScope(
-      canPop: !_isTracking,
+      canPop:
+          !_isTracking,
       onPopInvokedWithResult: (
         bool didPop,
         dynamic result,
@@ -597,6 +1202,7 @@ class _DeliveryPersonTrackingPageState
           'Stop live tracking before leaving this page.',
         );
       },
+
       child: Scaffold(
         appBar: AppBar(
           title: const Text(
@@ -615,8 +1221,8 @@ class _DeliveryPersonTrackingPageState
                 const BoxConstraints(
               maxWidth: 700,
             ),
-            child:
-                ListView(
+
+            child: ListView(
               padding:
                   const EdgeInsets.all(
                 16,
@@ -628,7 +1234,8 @@ class _DeliveryPersonTrackingPageState
                   height: 16,
                 ),
 
-                if (!_isTracking)
+                if (!_orderDelivered &&
+                    !_isTracking)
                   SizedBox(
                     height: 55,
                     child:
@@ -659,7 +1266,8 @@ class _DeliveryPersonTrackingPageState
                     ),
                   ),
 
-                if (_isTracking)
+                if (!_orderDelivered &&
+                    _isTracking)
                   SizedBox(
                     height: 55,
                     child:
@@ -681,35 +1289,63 @@ class _DeliveryPersonTrackingPageState
                   height: 12,
                 ),
 
+                // =================================================
+                // OLD DIRECT DELIVERED BUTTON REMOVED
+                // OTP REQUIRED NOW
+                // =================================================
+
                 SizedBox(
                   height: 55,
                   child:
                       OutlinedButton.icon(
                     onPressed:
-                        _markDelivered,
-                    icon: const Icon(
-                      Icons
-                          .check_circle_outline,
-                    ),
-                    label:
-                        const Text(
-                      'Mark Order Delivered',
+                        _orderDelivered ||
+                                _isVerifyingOtp
+                            ? null
+                            : _verifyOtpAndDeliver,
+                    icon: _isVerifyingOtp
+                        ? const SizedBox(
+                            width: 20,
+                            height: 20,
+                            child:
+                                CircularProgressIndicator(
+                              strokeWidth:
+                                  2,
+                            ),
+                          )
+                        : Icon(
+                            _orderDelivered
+                                ? Icons.verified
+                                : Icons
+                                    .password,
+                          ),
+                    label: Text(
+                      _orderDelivered
+                          ? 'Order Delivered'
+                          : _isVerifyingOtp
+                              ? 'Verifying...'
+                              : 'Confirm Delivery with OTP',
                     ),
                   ),
                 ),
 
                 const SizedBox(
-                  height: 18,
+                  height: 16,
                 ),
 
-                Card(
+                _otpInfoCard(),
+
+                const SizedBox(
+                  height: 16,
+                ),
+
+                const Card(
                   child: Padding(
                     padding:
-                        const EdgeInsets.all(
+                        EdgeInsets.all(
                       14,
                     ),
-                    child:
-                        const Column(
+                    child: Column(
                       crossAxisAlignment:
                           CrossAxisAlignment
                               .start,
@@ -718,24 +1354,36 @@ class _DeliveryPersonTrackingPageState
                           'How it works',
                           style: TextStyle(
                             fontWeight:
-                                FontWeight
-                                    .bold,
+                                FontWeight.bold,
                           ),
                         ),
+
                         SizedBox(
                           height: 8,
                         ),
+
                         Text(
-                          '1. Tap Start Live Tracking.',
+                          '1. Start Live Tracking.',
                         ),
+
                         Text(
-                          '2. Keep GPS enabled while delivering.',
+                          '2. Travel to the customer delivery location.',
                         ),
+
                         Text(
-                          '3. The customer Track Order map will receive updated driver location.',
+                          '3. Ask the customer for their 6-digit Delivery OTP.',
                         ),
+
                         Text(
-                          '4. Stop tracking or mark the order Delivered after delivery.',
+                          '4. Tap Confirm Delivery with OTP.',
+                        ),
+
+                        Text(
+                          '5. Enter the correct customer OTP.',
+                        ),
+
+                        Text(
+                          '6. Only then will the order become Delivered.',
                         ),
                       ],
                     ),
@@ -755,7 +1403,8 @@ class _DeliveryPersonTrackingPageState
 
   @override
   void dispose() {
-    _positionSubscription?.cancel();
+    _positionSubscription
+        ?.cancel();
 
     super.dispose();
   }

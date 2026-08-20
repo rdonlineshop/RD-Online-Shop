@@ -210,7 +210,8 @@ class _OrderHistoryPageState
         order['items'];
 
     if (items is List) {
-      for (final dynamic item in items) {
+      for (final dynamic item
+          in items) {
         if (item is Map) {
           final String sellerId =
               item['sellerId']
@@ -394,9 +395,13 @@ class _OrderHistoryPageState
     double latitude,
     double longitude,
   ) async {
-    final Uri uri = Uri.parse(
-      'https://www.google.com/maps/search/'
-      '?api=1&query=$latitude,$longitude',
+    final Uri uri = Uri.https(
+      'www.google.com',
+      '/maps/search/',
+      <String, String>{
+        'api': '1',
+        'query': '$latitude,$longitude',
+      },
     );
 
     try {
@@ -707,29 +712,34 @@ class _OrderHistoryPageState
                           .start,
                   children: <Widget>[
                     GestureDetector(
-                      onTap: hasNetworkImage
-                          ? () {
-                              _showProductImage(
-                                image,
-                              );
-                            }
-                          : null,
+                      onTap:
+                          hasNetworkImage
+                              ? () {
+                                  _showProductImage(
+                                    image,
+                                  );
+                                }
+                              : null,
                       child: ClipRRect(
                         borderRadius:
                             BorderRadius
-                                .circular(10),
+                                .circular(
+                          10,
+                        ),
                         child: Container(
                           width: 78,
                           height: 78,
                           color: Colors
-                              .grey.shade100,
+                              .grey
+                              .shade100,
                           child:
                               hasNetworkImage
                                   ? Image.network(
                                       image,
-                                      fit: BoxFit
-                                          .cover,
-                                      errorBuilder: (
+                                      fit:
+                                          BoxFit.cover,
+                                      errorBuilder:
+                                          (
                                         BuildContext
                                             context,
                                         Object
@@ -740,8 +750,7 @@ class _OrderHistoryPageState
                                         return const Icon(
                                           Icons
                                               .image_not_supported,
-                                          size:
-                                              35,
+                                          size: 35,
                                         );
                                       },
                                     )
@@ -903,9 +912,9 @@ class _OrderHistoryPageState
                           ?.toString()
                           .trim() ??
                       seller['address']
-                          ?.toString()
-                          .trim() ??
-                      '';
+                              ?.toString()
+                              .trim() ??
+                          '';
 
               final double? latitude =
                   _toDouble(
@@ -1453,6 +1462,280 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
+  // SECURE DELIVERY OTP / CODE
+  // =========================================================
+
+  Widget _deliveryVerificationSection(
+    Map<String, dynamic> order,
+  ) {
+    final String deliveryOtp =
+        order['deliveryOtp']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final bool verified =
+        order['deliveryOtpVerified'] ==
+            true;
+
+    final String status =
+        order['status']
+                ?.toString()
+                .trim() ??
+            'Pending';
+
+    final String method =
+        order['deliveryConfirmationMethod']
+                ?.toString()
+                .trim() ??
+            '';
+
+    // Old orders without OTP should not show an empty card.
+    if (deliveryOtp.isEmpty &&
+        !verified &&
+        status != 'Delivered') {
+      return const SizedBox.shrink();
+    }
+
+    final bool delivered =
+        verified ||
+            status == 'Delivered';
+
+    return Card(
+      child: Padding(
+        padding:
+            const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                CircleAvatar(
+                  backgroundColor:
+                      delivered
+                          ? Colors.green
+                              .withValues(
+                              alpha: 0.15,
+                            )
+                          : Colors.orange
+                              .withValues(
+                              alpha: 0.15,
+                            ),
+                  child: Icon(
+                    delivered
+                        ? Icons.verified
+                        : Icons.lock_outline,
+                    color: delivered
+                        ? Colors.green
+                        : Colors.orange,
+                  ),
+                ),
+
+                const SizedBox(
+                  width: 12,
+                ),
+
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment
+                            .start,
+                    children: <Widget>[
+                      const Text(
+                        'Secure Delivery Code',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight:
+                              FontWeight.bold,
+                        ),
+                      ),
+
+                      const SizedBox(
+                        height: 3,
+                      ),
+
+                      Text(
+                        delivered
+                            ? 'Delivery verified successfully'
+                            : 'Give this code only after receiving your order.',
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: delivered
+                              ? Colors.green
+                              : Colors
+                                  .grey.shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+
+            if (!delivered &&
+                deliveryOtp.isNotEmpty) ...<Widget>[
+              const SizedBox(
+                height: 16,
+              ),
+
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.symmetric(
+                  vertical: 18,
+                  horizontal: 12,
+                ),
+                decoration: BoxDecoration(
+                  color:
+                      Colors.orange.withValues(
+                    alpha: 0.08,
+                  ),
+                  borderRadius:
+                      BorderRadius.circular(
+                    12,
+                  ),
+                  border: Border.all(
+                    color:
+                        Colors.orange.withValues(
+                      alpha: 0.35,
+                    ),
+                  ),
+                ),
+                child: Column(
+                  children: <Widget>[
+                    const Text(
+                      'DELIVERY CODE',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight:
+                            FontWeight.bold,
+                        letterSpacing: 1.5,
+                        color: Colors.orange,
+                      ),
+                    ),
+
+                    const SizedBox(
+                      height: 8,
+                    ),
+
+                    SelectableText(
+                      deliveryOtp,
+                      textAlign:
+                          TextAlign.center,
+                      style:
+                          const TextStyle(
+                        fontSize: 32,
+                        fontWeight:
+                            FontWeight.bold,
+                        letterSpacing: 8,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+
+              const SizedBox(
+                height: 12,
+              ),
+
+              const Row(
+                crossAxisAlignment:
+                    CrossAxisAlignment.start,
+                children: <Widget>[
+                  Icon(
+                    Icons.security,
+                    size: 18,
+                    color: Colors.red,
+                  ),
+                  SizedBox(
+                    width: 7,
+                  ),
+                  Expanded(
+                    child: Text(
+                      'Do not share this code by phone or SMS. Give it to the delivery person only after you physically receive your product.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.red,
+                        fontWeight:
+                            FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+
+            if (delivered) ...<Widget>[
+              const SizedBox(
+                height: 14,
+              ),
+
+              Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.all(
+                  14,
+                ),
+                decoration: BoxDecoration(
+                  color:
+                      Colors.green.withValues(
+                    alpha: 0.10,
+                  ),
+                  borderRadius:
+                      BorderRadius.circular(
+                    10,
+                  ),
+                ),
+                child: Row(
+                  children: <Widget>[
+                    const Icon(
+                      Icons.verified_user,
+                      color: Colors.green,
+                    ),
+
+                    const SizedBox(
+                      width: 10,
+                    ),
+
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment:
+                            CrossAxisAlignment
+                                .start,
+                        children: <Widget>[
+                          const Text(
+                            'Delivery Verified',
+                            style: TextStyle(
+                              color:
+                                  Colors.green,
+                              fontWeight:
+                                  FontWeight.bold,
+                            ),
+                          ),
+
+                          if (method.isNotEmpty)
+                            Text(
+                              'Confirmation: $method',
+                              style:
+                                  const TextStyle(
+                                fontSize: 12,
+                              ),
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================================================
   // TRACK ORDER
   // =========================================================
 
@@ -1737,6 +2020,18 @@ class _OrderHistoryPageState
           // ==============================================
 
           _deliveryPersonSection(
+            order,
+          ),
+
+          const SizedBox(
+            height: 10,
+          ),
+
+          // ==============================================
+          // SECURE DELIVERY OTP
+          // ==============================================
+
+          _deliveryVerificationSection(
             order,
           ),
 

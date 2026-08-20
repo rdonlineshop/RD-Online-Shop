@@ -71,6 +71,15 @@ class _SellerProductPageState extends State<SellerProductPage> {
       return value.millisecondsSinceEpoch;
     }
 
+    if (value is String) {
+      final DateTime? date =
+          DateTime.tryParse(value);
+
+      if (date != null) {
+        return date.millisecondsSinceEpoch;
+      }
+    }
+
     return 0;
   }
 
@@ -195,16 +204,32 @@ class _SellerProductPageState extends State<SellerProductPage> {
       }
     }
 
-    return product['imagePath']
-            ?.toString()
-            .trim() ??
-        '';
+    final List<dynamic> possibleImages =
+        <dynamic>[
+      product['imagePath'],
+      product['image'],
+      product['imageUrl'],
+      product['photoUrl'],
+    ];
+
+    for (final dynamic value in possibleImages) {
+      final String image =
+          value?.toString().trim() ?? '';
+
+      if (image.isNotEmpty &&
+          image.toLowerCase() != 'null') {
+        return image;
+      }
+    }
+
+    return '';
   }
 
   Widget _productImage(
     Map<String, dynamic> product,
   ) {
-    final String path = _primaryImage(product);
+    final String path =
+        _primaryImage(product);
 
     final IconData icon = iconForCategory(
       product['category']?.toString() ?? '',
@@ -299,16 +324,38 @@ class _SellerProductPageState extends State<SellerProductPage> {
       return;
     }
 
+    final String productId =
+        product['id']?.toString().trim() ?? '';
+
+    if (productId.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Product ID is missing.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
     final bool? confirm =
         await showDialog<bool>(
       context: context,
-      builder: (BuildContext dialogContext) {
+      builder: (
+        BuildContext dialogContext,
+      ) {
         return AlertDialog(
           title: const Text(
             'Delete Product?',
           ),
           content: Text(
-            '${product['name']} will be permanently removed.',
+            '${product['name'] ?? 'This product'} '
+            'will be permanently removed.',
           ),
           actions: <Widget>[
             TextButton(
@@ -318,7 +365,9 @@ class _SellerProductPageState extends State<SellerProductPage> {
                   false,
                 );
               },
-              child: const Text('Cancel'),
+              child: const Text(
+                'Cancel',
+              ),
             ),
             FilledButton(
               onPressed: () {
@@ -327,7 +376,9 @@ class _SellerProductPageState extends State<SellerProductPage> {
                   true,
                 );
               },
-              child: const Text('Delete'),
+              child: const Text(
+                'Delete',
+              ),
             ),
           ],
         );
@@ -340,7 +391,7 @@ class _SellerProductPageState extends State<SellerProductPage> {
 
     try {
       await deleteSellerProduct(
-        product['id'].toString(),
+        productId,
         sellerId: user.uid,
       );
     } catch (error) {
@@ -364,13 +415,17 @@ class _SellerProductPageState extends State<SellerProductPage> {
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     final User? user = _user;
 
     if (user == null) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text('My Products'),
+          title: const Text(
+            'My Products',
+          ),
           centerTitle: true,
         ),
         body: const Center(
@@ -396,7 +451,9 @@ class _SellerProductPageState extends State<SellerProductPage> {
         if (sellerSnapshot.hasError) {
           return Scaffold(
             appBar: AppBar(
-              title: const Text('My Products'),
+              title: const Text(
+                'My Products',
+              ),
               centerTitle: true,
             ),
             body: Center(
@@ -409,22 +466,35 @@ class _SellerProductPageState extends State<SellerProductPage> {
           );
         }
 
-        if (!sellerSnapshot.hasData) {
+        if (sellerSnapshot.connectionState ==
+                ConnectionState.waiting ||
+            !sellerSnapshot.hasData) {
           return Scaffold(
             appBar: AppBar(
-              title: const Text('My Products'),
+              title: const Text(
+                'My Products',
+              ),
               centerTitle: true,
             ),
             body: const Center(
-              child: CircularProgressIndicator(),
+              child:
+                  CircularProgressIndicator(),
             ),
           );
         }
 
-        if (!sellerSnapshot.data!.exists) {
+        final DocumentSnapshot<
+                Map<String, dynamic>>?
+            sellerDocument =
+            sellerSnapshot.data;
+
+        if (sellerDocument == null ||
+            !sellerDocument.exists) {
           return Scaffold(
             appBar: AppBar(
-              title: const Text('My Products'),
+              title: const Text(
+                'My Products',
+              ),
               centerTitle: true,
             ),
             body: const Center(
@@ -436,13 +506,15 @@ class _SellerProductPageState extends State<SellerProductPage> {
         }
 
         final Map<String, dynamic> seller =
-            sellerSnapshot.data!.data() ??
+            sellerDocument.data() ??
                 <String, dynamic>{};
 
         if (seller['isActive'] == false) {
           return Scaffold(
             appBar: AppBar(
-              title: const Text('My Products'),
+              title: const Text(
+                'My Products',
+              ),
               centerTitle: true,
             ),
             body: const Center(
@@ -470,7 +542,9 @@ class _SellerProductPageState extends State<SellerProductPage> {
                 seller: seller,
               );
             },
-            icon: const Icon(Icons.add),
+            icon: const Icon(
+              Icons.add,
+            ),
             label: const Text(
               'Add Product',
             ),
@@ -500,7 +574,9 @@ class _SellerProductPageState extends State<SellerProductPage> {
                 );
               }
 
-              if (!snapshot.hasData) {
+              if (snapshot.connectionState ==
+                      ConnectionState.waiting &&
+                  !snapshot.hasData) {
                 return const Center(
                   child:
                       CircularProgressIndicator(),
@@ -508,10 +584,13 @@ class _SellerProductPageState extends State<SellerProductPage> {
               }
 
               final List<Map<String, dynamic>>
+                  products =
+                  snapshot.data ??
+                      <Map<String, dynamic>>[];
+
+              final List<Map<String, dynamic>>
                   sellerProducts =
-                  _filteredProducts(
-                snapshot.data!,
-              );
+                  _filteredProducts(products);
 
               return Center(
                 child: ConstrainedBox(
@@ -549,7 +628,8 @@ class _SellerProductPageState extends State<SellerProductPage> {
                                         .isEmpty
                                     ? null
                                     : IconButton(
-                                        onPressed: () {
+                                        onPressed:
+                                            () {
                                           _searchController
                                               .clear();
 
@@ -846,15 +926,18 @@ class _SellerProductPageState extends State<SellerProductPage> {
                                           ),
                                           subtitle:
                                               Text(
-                                            '${product['price']}'
-                                            '\nStock: $stock • ${product['category']}'
-                                            '\n${active ? 'Active' : 'Inactive'} • $approval',
+                                            '${product['price'] ?? ''}'
+                                            '\nStock: $stock • '
+                                            '${product['category'] ?? ''}'
+                                            '\n${active ? 'Active' : 'Inactive'}'
+                                            ' • $approval',
                                           ),
                                           isThreeLine:
                                               true,
                                           trailing:
                                               Wrap(
-                                            children: <Widget>[
+                                            children:
+                                                <Widget>[
                                               IconButton(
                                                 tooltip:
                                                     'Edit Product',
@@ -913,7 +996,8 @@ class _SellerProductPageState extends State<SellerProductPage> {
   }
 }
 
-class SellerProductFormPage extends StatefulWidget {
+class SellerProductFormPage
+    extends StatefulWidget {
   final Map<String, dynamic>? product;
   final String sellerShopName;
   final String sellerEmail;
@@ -981,7 +1065,8 @@ class _SellerProductFormPageState
   bool _saving = false;
   bool _uploading = false;
 
-  bool get _editing => widget.product != null;
+  bool get _editing =>
+      widget.product != null;
 
   @override
   void initState() {
@@ -1010,7 +1095,9 @@ class _SellerProductFormPageState
       text: product?['price']
               ?.toString()
               .replaceAll('Rs. ', '')
-              .replaceAll(',', '') ??
+              .replaceAll('Rs.', '')
+              .replaceAll(',', '')
+              .trim() ??
           '',
     );
 
@@ -1018,16 +1105,30 @@ class _SellerProductFormPageState
       text: product?['originalPrice']
               ?.toString()
               .replaceAll('Rs. ', '')
-              .replaceAll(',', '') ??
+              .replaceAll('Rs.', '')
+              .replaceAll(',', '')
+              .trim() ??
           '',
     );
 
+    final dynamic stockValue =
+        product?['stockQuantity'];
+
+    int initialStock = 1;
+
+    if (stockValue is num) {
+      initialStock =
+          stockValue.toInt();
+    } else if (stockValue != null) {
+      initialStock =
+          int.tryParse(
+                stockValue.toString(),
+              ) ??
+              1;
+    }
+
     _stock = TextEditingController(
-      text:
-          (product?['stockQuantity'] as num?)
-                  ?.toInt()
-                  .toString() ??
-              '1',
+      text: initialStock.toString(),
     );
 
     _sku = TextEditingController(
@@ -1035,43 +1136,102 @@ class _SellerProductFormPageState
           product?['sku']?.toString() ?? '',
     );
 
-    _sizes = TextEditingController(
-      text:
-          (product?['sizeOptions'] as List?)
-                  ?.whereType<String>()
-                  .join(', ') ??
-              '',
-    );
+    final dynamic sizeOptions =
+        product?['sizeOptions'];
 
-    _category =
-        product?['category']?.toString() ??
-            'Phones';
+    if (sizeOptions is List) {
+      _sizes = TextEditingController(
+        text: sizeOptions
+            .map(
+              (dynamic value) =>
+                  value.toString(),
+            )
+            .where(
+              (String value) =>
+                  value.trim().isNotEmpty,
+            )
+            .join(', '),
+      );
+    } else {
+      _sizes =
+          TextEditingController();
+    }
+
+    final String savedCategory =
+        product?['category']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (savedCategory.isNotEmpty &&
+        productCategories.contains(
+          savedCategory,
+        )) {
+      _category = savedCategory;
+    } else if (productCategories.isNotEmpty) {
+      _category =
+          productCategories.first;
+    } else {
+      _category = 'Phones';
+    }
 
     _active =
         product?['productStatus'] !=
             'inactive';
 
-    _imagePaths =
-        (product?['imagePaths'] as List?)
-                ?.whereType<String>()
-                .toList() ??
-            <String>[];
+    _imagePaths = <String>[];
+
+    final dynamic imagePaths =
+        product?['imagePaths'];
+
+    if (imagePaths is List) {
+      for (final dynamic value in imagePaths) {
+        final String path =
+            value?.toString().trim() ?? '';
+
+        if (path.isNotEmpty &&
+            path.toLowerCase() != 'null') {
+          _imagePaths.add(path);
+        }
+      }
+    }
+
+    // =======================================================
+    // NULL-SAFE SINGLE IMAGE FALLBACK
+    // No product! used here.
+    // =======================================================
+
+    final String singleImagePath =
+        product?['imagePath']
+                ?.toString()
+                .trim() ??
+            '';
 
     if (_imagePaths.isEmpty &&
-        product?['imagePath'] is String &&
-        (product!['imagePath'] as String)
-            .trim()
-            .isNotEmpty) {
+        singleImagePath.isNotEmpty &&
+        singleImagePath.toLowerCase() !=
+            'null') {
       _imagePaths.add(
-        product['imagePath'] as String,
+        singleImagePath,
       );
     }
 
     _selectedColors =
-        (product?['colorOptions'] as List?)
-                ?.whereType<String>()
-                .toSet() ??
-            <String>{};
+        <String>{};
+
+    final dynamic colors =
+        product?['colorOptions'];
+
+    if (colors is List) {
+      for (final dynamic value in colors) {
+        final String color =
+            value?.toString().trim() ?? '';
+
+        if (color.isNotEmpty) {
+          _selectedColors.add(color);
+        }
+      }
+    }
   }
 
   @override
@@ -1168,10 +1328,10 @@ class _SellerProductFormPageState
       );
     }
 
-    final dynamic decoded = jsonDecode(body);
+    final dynamic decoded =
+        jsonDecode(body);
 
-    if (decoded
-        is! Map<String, dynamic>) {
+    if (decoded is! Map<String, dynamic>) {
       throw Exception(
         'Invalid Cloudinary response.',
       );
@@ -1198,8 +1358,7 @@ class _SellerProductFormPageState
     }
 
     if (_imagePaths.length >= 8) {
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
             'Maximum 8 product photos are allowed.',
@@ -1209,31 +1368,30 @@ class _SellerProductFormPageState
       return;
     }
 
-    final List<XFile> selected =
-        await ImagePicker()
-            .pickMultiImage(
-      imageQuality: 85,
-    );
-
-    if (selected.isEmpty) {
-      return;
-    }
-
-    final int remaining =
-        8 - _imagePaths.length;
-
-    final List<XFile> selectedPhotos =
-        selected.take(remaining).toList();
-
-    if (!mounted) {
-      return;
-    }
-
-    setState(() {
-      _uploading = true;
-    });
-
     try {
+      final List<XFile> selected =
+          await ImagePicker().pickMultiImage(
+        imageQuality: 85,
+      );
+
+      if (selected.isEmpty) {
+        return;
+      }
+
+      final int remaining =
+          8 - _imagePaths.length;
+
+      final List<XFile> selectedPhotos =
+          selected.take(remaining).toList();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _uploading = true;
+      });
+
       final List<String> urls =
           <String>[];
 
@@ -1252,8 +1410,7 @@ class _SellerProductFormPageState
         _imagePaths.addAll(urls);
       });
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             '${urls.length} photo(s) uploaded successfully.',
@@ -1265,8 +1422,7 @@ class _SellerProductFormPageState
         return;
       }
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             error
@@ -1321,6 +1477,21 @@ class _SellerProductFormPageState
         width: 90,
         height: 90,
         fit: BoxFit.cover,
+        errorBuilder: (
+          BuildContext context,
+          Object error,
+          StackTrace? stackTrace,
+        ) {
+          return Container(
+            width: 90,
+            height: 90,
+            alignment: Alignment.center,
+            color: Colors.grey.shade200,
+            child: const Icon(
+              Icons.broken_image_outlined,
+            ),
+          );
+        },
       );
     }
 
@@ -1348,13 +1519,16 @@ class _SellerProductFormPageState
   }
 
   Future<void> _save() async {
-    if (_formKey.currentState
-            ?.validate() !=
-        true) {
+    final FormState? form =
+        _formKey.currentState;
+
+    if (form == null ||
+        !form.validate()) {
       return;
     }
 
-    if (_saving || _uploading) {
+    if (_saving ||
+        _uploading) {
       return;
     }
 
@@ -1362,6 +1536,16 @@ class _SellerProductFormPageState
         FirebaseAuth.instance.currentUser;
 
     if (user == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Seller login required.',
+            ),
+          ),
+        );
+      }
+
       return;
     }
 
@@ -1384,7 +1568,12 @@ class _SellerProductFormPageState
         );
       }
 
-      if (seller.data()?['isActive'] ==
+      final Map<String, dynamic>
+          sellerData =
+          seller.data() ??
+              <String, dynamic>{};
+
+      if (sellerData['isActive'] ==
           false) {
         throw Exception(
           'Seller account is inactive.',
@@ -1402,6 +1591,12 @@ class _SellerProductFormPageState
 
       final String originalPrice =
           _originalPrice.text.trim();
+
+      if (_number(sellingPrice) <= 0) {
+        throw Exception(
+          'Please enter a valid selling price.',
+        );
+      }
 
       final Map<String, dynamic> data =
           <String, dynamic>{
@@ -1434,15 +1629,30 @@ class _SellerProductFormPageState
             _active
                 ? 'active'
                 : 'inactive',
-        'imagePaths': _imagePaths,
+
+        // Product photos
+        'imagePaths':
+            List<String>.from(
+          _imagePaths,
+        ),
         'imagePath':
             _imagePaths.isEmpty
                 ? null
                 : _imagePaths.first,
+        'image':
+            _imagePaths.isEmpty
+                ? null
+                : _imagePaths.first,
+        'imageUrl':
+            _imagePaths.isEmpty
+                ? null
+                : _imagePaths.first,
+
         'colorOptions':
             _selectedColors.toList(),
         'sizeOptions':
             _sizeOptions(),
+
         'approvalStatus':
             widget.product?[
                     'approvalStatus'] ??
@@ -1461,19 +1671,37 @@ class _SellerProductFormPageState
       };
 
       final String shopName =
-          seller.data()?['shopName']
-                  ?.toString() ??
+          sellerData['shopName']
+                  ?.toString()
+                  .trim() ??
               widget.sellerShopName;
 
       final String sellerEmail =
-          seller.data()?['email']
-                  ?.toString() ??
+          sellerData['email']
+                  ?.toString()
+                  .trim() ??
               widget.sellerEmail;
 
       if (_editing) {
+        // ===================================================
+        // NULL-SAFE EDIT
+        // No widget.product! used here.
+        // ===================================================
+
+        final String productId =
+            widget.product?['id']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        if (productId.isEmpty) {
+          throw Exception(
+            'Product ID is missing.',
+          );
+        }
+
         await updateSellerProduct(
-          widget.product!['id']
-              .toString(),
+          productId,
           data,
           sellerId: user.uid,
           sellerShopName: shopName,
@@ -1498,8 +1726,7 @@ class _SellerProductFormPageState
         return;
       }
 
-      ScaffoldMessenger.of(context)
-          .showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
             error
@@ -1621,7 +1848,9 @@ class _SellerProductFormPageState
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(
+    BuildContext context,
+  ) {
     return Scaffold(
       appBar: AppBar(
         title: Text(
@@ -1642,18 +1871,30 @@ class _SellerProductFormPageState
               'Product Name',
               requiredField: true,
             ),
-            const SizedBox(height: 12),
+
+            const SizedBox(
+              height: 12,
+            ),
+
             _field(
               _brand,
               'Brand (optional)',
             ),
-            const SizedBox(height: 12),
+
+            const SizedBox(
+              height: 12,
+            ),
+
             _field(
               _description,
               'Product Description',
               lines: 4,
             ),
-            const SizedBox(height: 12),
+
+            const SizedBox(
+              height: 12,
+            ),
+
             Row(
               children: <Widget>[
                 Expanded(
@@ -1665,7 +1906,11 @@ class _SellerProductFormPageState
                     requiredField: true,
                   ),
                 ),
-                const SizedBox(width: 12),
+
+                const SizedBox(
+                  width: 12,
+                ),
+
                 Expanded(
                   child: _field(
                     _originalPrice,
@@ -1676,7 +1921,11 @@ class _SellerProductFormPageState
                 ),
               ],
             ),
-            const SizedBox(height: 10),
+
+            const SizedBox(
+              height: 10,
+            ),
+
             Text(
               'Automatic Discount: $_discount%',
               style: const TextStyle(
@@ -1685,7 +1934,11 @@ class _SellerProductFormPageState
                 color: Colors.green,
               ),
             ),
-            const SizedBox(height: 12),
+
+            const SizedBox(
+              height: 12,
+            ),
+
             DropdownButtonFormField<String>(
               initialValue: _category,
               decoration:
@@ -1694,24 +1947,36 @@ class _SellerProductFormPageState
                 border:
                     OutlineInputBorder(),
               ),
-              items: productCategories.map(
-                (String category) {
+              items:
+                  productCategories.map(
+                (
+                  String category,
+                ) {
                   return DropdownMenuItem<
                       String>(
                     value: category,
-                    child: Text(category),
+                    child: Text(
+                      category,
+                    ),
                   );
                 },
               ).toList(),
-              onChanged: (String? value) {
-                if (value != null) {
-                  setState(() {
-                    _category = value;
-                  });
+              onChanged:
+                  (String? value) {
+                if (value == null) {
+                  return;
                 }
+
+                setState(() {
+                  _category = value;
+                });
               },
             ),
-            const SizedBox(height: 12),
+
+            const SizedBox(
+              height: 12,
+            ),
+
             Row(
               children: <Widget>[
                 Expanded(
@@ -1723,7 +1988,11 @@ class _SellerProductFormPageState
                     requiredField: true,
                   ),
                 ),
-                const SizedBox(width: 12),
+
+                const SizedBox(
+                  width: 12,
+                ),
+
                 Expanded(
                   child: _field(
                     _sku,
@@ -1732,7 +2001,11 @@ class _SellerProductFormPageState
                 ),
               ],
             ),
-            const SizedBox(height: 16),
+
+            const SizedBox(
+              height: 16,
+            ),
+
             const Text(
               'Product Photos',
               style: TextStyle(
@@ -1741,7 +2014,11 @@ class _SellerProductFormPageState
                     FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 8),
+
+            const SizedBox(
+              height: 8,
+            ),
+
             if (_imagePaths.isNotEmpty)
               SizedBox(
                 height: 90,
@@ -1765,6 +2042,9 @@ class _SellerProductFormPageState
                     BuildContext context,
                     int index,
                   ) {
+                    final String path =
+                        _imagePaths[index];
+
                     return Stack(
                       children: <Widget>[
                         ClipRRect(
@@ -1773,29 +2053,29 @@ class _SellerProductFormPageState
                                   .circular(
                             10,
                           ),
-                          child: _preview(
-                            _imagePaths[
-                                index],
-                          ),
+                          child:
+                              _preview(path),
                         ),
                         Positioned(
                           right: 0,
                           top: 0,
-                          child:
-                              CircleAvatar(
+                          child: CircleAvatar(
                             radius: 13,
-                            child:
-                                IconButton(
+                            child: IconButton(
                               padding:
                                   EdgeInsets
                                       .zero,
                               onPressed: () {
-                                setState(() {
-                                  _imagePaths
-                                      .removeAt(
-                                    index,
-                                  );
-                                });
+                                if (index <
+                                    _imagePaths
+                                        .length) {
+                                  setState(() {
+                                    _imagePaths
+                                        .removeAt(
+                                      index,
+                                    );
+                                  });
+                                }
                               },
                               icon:
                                   const Icon(
@@ -1810,12 +2090,15 @@ class _SellerProductFormPageState
                   },
                 ),
               ),
-            const SizedBox(height: 8),
+
+            const SizedBox(
+              height: 8,
+            ),
+
             OutlinedButton.icon(
-              onPressed:
-                  _uploading
-                      ? null
-                      : _choosePhotos,
+              onPressed: _uploading
+                  ? null
+                  : _choosePhotos,
               icon: _uploading
                   ? const SizedBox(
                       width: 18,
@@ -1835,7 +2118,11 @@ class _SellerProductFormPageState
                     : 'Choose Product Photos',
               ),
             ),
-            const SizedBox(height: 16),
+
+            const SizedBox(
+              height: 16,
+            ),
+
             const Text(
               'Color Options',
               style: TextStyle(
@@ -1843,7 +2130,11 @@ class _SellerProductFormPageState
                     FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 10),
+
+            const SizedBox(
+              height: 10,
+            ),
+
             Wrap(
               spacing: 12,
               runSpacing: 12,
@@ -1891,8 +2182,7 @@ class _SellerProductFormPageState
                             Border.all(
                           color: selected
                               ? Colors.blue
-                              : Colors
-                                  .grey,
+                              : Colors.grey,
                           width: selected
                               ? 4
                               : 1,
@@ -1917,12 +2207,20 @@ class _SellerProductFormPageState
                 },
               ).toList(),
             ),
-            const SizedBox(height: 16),
+
+            const SizedBox(
+              height: 16,
+            ),
+
             _field(
               _sizes,
               'Sizes (example: S, M, L, XL)',
             ),
-            const SizedBox(height: 10),
+
+            const SizedBox(
+              height: 10,
+            ),
+
             SwitchListTile(
               contentPadding:
                   EdgeInsets.zero,
@@ -1933,13 +2231,19 @@ class _SellerProductFormPageState
                 'Turn off to temporarily hide this product.',
               ),
               value: _active,
-              onChanged: (bool value) {
+              onChanged: (
+                bool value,
+              ) {
                 setState(() {
                   _active = value;
                 });
               },
             ),
-            const SizedBox(height: 16),
+
+            const SizedBox(
+              height: 16,
+            ),
+
             SizedBox(
               height: 52,
               child:

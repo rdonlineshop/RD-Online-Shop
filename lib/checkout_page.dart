@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
@@ -41,7 +43,7 @@ class _CheckoutPageState
   final TextEditingController landmarkController =
       TextEditingController();
 
-  final Geocoding geocoding = Geocoding();
+  Geocoding? geocoding;
 
   String deliveryAddress =
       'Select your delivery address';
@@ -67,7 +69,8 @@ class _CheckoutPageState
   double? savedLongitude;
 
   static const Map<String, double>
-      _areaCharges = <String, double>{
+      _areaCharges =
+      <String, double>{
     'Kathmandu Valley': 100,
     'Major City': 150,
     'Outside Kathmandu Valley': 250,
@@ -100,12 +103,22 @@ class _CheckoutPageState
   void initState() {
     super.initState();
 
+    // Geocoding has no Windows implementation. Avoid crashing the page
+    // while keeping address lookup available on supported platforms.
+    try {
+      geocoding = Geocoding();
+    } catch (_) {
+      geocoding = null;
+    }
+
     _loadSavedAddress();
 
     WidgetsBinding.instance
-        .addPostFrameCallback((_) {
-      _getCurrentLocation();
-    });
+        .addPostFrameCallback(
+      (_) {
+        _getCurrentLocation();
+      },
+    );
   }
 
   // =========================================================
@@ -137,10 +150,17 @@ class _CheckoutPageState
     }
 
     setState(() {
-      savedAddress = address ?? '';
-      savedLatitude = lat;
-      savedLongitude = lng;
-      isLoadingSavedAddress = false;
+      savedAddress =
+          address ?? '';
+
+      savedLatitude =
+          lat;
+
+      savedLongitude =
+          lng;
+
+      isLoadingSavedAddress =
+          false;
     });
   }
 
@@ -185,9 +205,14 @@ class _CheckoutPageState
     }
 
     setState(() {
-      savedAddress = address;
-      savedLatitude = lat;
-      savedLongitude = lng;
+      savedAddress =
+          address;
+
+      savedLatitude =
+          lat;
+
+      savedLongitude =
+          lng;
     });
   }
 
@@ -228,13 +253,22 @@ class _CheckoutPageState
     ].join(', ');
 
     setState(() {
-      isGeocodingManualAddress = true;
+      isGeocodingManualAddress =
+          true;
     });
 
     try {
+      final Geocoding? geocoder =
+          geocoding;
+
+      if (geocoder == null) {
+        throw UnsupportedError(
+          'Address search is not supported on this device. Please use Current Location.',
+        );
+      }
+
       final List<Location> locations =
-          await geocoding
-              .locationFromAddress(
+          await geocoder.locationFromAddress(
         address,
       );
 
@@ -263,7 +297,8 @@ class _CheckoutPageState
       }
 
       setState(() {
-        deliveryAddress = address;
+        deliveryAddress =
+            address;
 
         selectedDeliveryArea =
             _suggestAreaFromAddress(
@@ -281,9 +316,12 @@ class _CheckoutPageState
       });
 
       await _saveAddress(
-        address: address,
-        lat: location.latitude,
-        lng: location.longitude,
+        address:
+            address,
+        lat:
+            location.latitude,
+        lng:
+            location.longitude,
       );
 
       if (!mounted) {
@@ -412,7 +450,8 @@ class _CheckoutPageState
   Future<void> _getCurrentLocation() async {
     if (mounted) {
       setState(() {
-        isLoadingLocation = true;
+        isLoadingLocation =
+            true;
       });
     }
 
@@ -476,13 +515,23 @@ class _CheckoutPageState
         ),
       );
 
-      final List<Placemark>
+      List<Placemark> placemarks =
+          <Placemark>[];
+
+      final Geocoding? geocoder =
+          geocoding;
+
+      if (geocoder != null) {
+        try {
           placemarks =
-          await geocoding
-              .placemarkFromCoordinates(
-        position.latitude,
-        position.longitude,
-      );
+              await geocoder.placemarkFromCoordinates(
+            position.latitude,
+            position.longitude,
+          );
+        } catch (_) {
+          // GPS coordinates remain usable if reverse geocoding is unavailable.
+        }
+      }
 
       String address =
           '${position.latitude}, '
@@ -503,11 +552,13 @@ class _CheckoutPageState
             .where(
               (String? value) =>
                   value != null &&
-                  value.trim().isNotEmpty,
+                  value
+                      .trim()
+                      .isNotEmpty,
             )
             .map(
               (String? value) =>
-                  value!.trim(),
+                  value?.trim() ?? '',
             )
             .join(', ');
       }
@@ -536,9 +587,12 @@ class _CheckoutPageState
       });
 
       await _saveAddress(
-        address: address,
-        lat: position.latitude,
-        lng: position.longitude,
+        address:
+            address,
+        lat:
+            position.latitude,
+        lng:
+            position.longitude,
       );
     } catch (error) {
       if (mounted) {
@@ -554,7 +608,8 @@ class _CheckoutPageState
     } finally {
       if (mounted) {
         setState(() {
-          isLoadingLocation = false;
+          isLoadingLocation =
+              false;
         });
       }
     }
@@ -632,7 +687,8 @@ class _CheckoutPageState
                   '',
 
           'sellerShopName':
-              item['sellerShopName'] ?? '',
+              item['sellerShopName'] ??
+                  '',
 
           'sellerLatitude':
               item['sellerLatitude'],
@@ -679,9 +735,9 @@ class _CheckoutPageState
                     item,
               ) =>
                   item['sellerId']
-                      ?.toString()
-                      .trim() ??
-                  '',
+                          ?.toString()
+                          .trim() ??
+                      '',
             )
             .where(
               (String sellerId) =>
@@ -695,9 +751,23 @@ class _CheckoutPageState
     final DateTime now =
         DateTime.now();
 
-    // =========================================================
+    // =======================================================
+    // DELIVERY OTP
+    // =======================================================
+
+    final Random random =
+        Random.secure();
+
+    final String deliveryOtp =
+        (100000 +
+                random.nextInt(
+                  900000,
+                ))
+            .toString();
+
+    // =======================================================
     // CUSTOMER UNIQUE ID
-    // =========================================================
+    // =======================================================
 
     final String customerId =
         await getOrCreateCustomerId();
@@ -799,19 +869,27 @@ class _CheckoutPageState
 
         'subtotal':
             widget.cartSubtotal
-                .toStringAsFixed(0),
+                .toStringAsFixed(
+                  0,
+                ),
 
         'discount':
             widget.discountAmount
-                .toStringAsFixed(0),
+                .toStringAsFixed(
+                  0,
+                ),
 
         'delivery':
             _deliveryCharge
-                .toStringAsFixed(0),
+                .toStringAsFixed(
+                  0,
+                ),
 
         'amount':
             _finalTotal
-                .toStringAsFixed(0),
+                .toStringAsFixed(
+                  0,
+                ),
 
         // =====================================================
         // PRODUCTS
@@ -831,6 +909,31 @@ class _CheckoutPageState
             'Pending',
 
         // =====================================================
+        // SECURE DELIVERY VERIFICATION
+        // =====================================================
+
+        'deliveryOtp':
+            deliveryOtp,
+
+        'deliveryOtpVerified':
+            false,
+
+        'deliveryOtpCreatedAt':
+            now.toIso8601String(),
+
+        'deliveryOtpVerifiedAt':
+            null,
+
+        'deliveryVerifiedAt':
+            null,
+
+        'deliveryVerifiedBy':
+            '',
+
+        'deliveryConfirmationMethod':
+            '',
+
+        // =====================================================
         // LIVE TRACKING FOUNDATION
         // =====================================================
 
@@ -847,6 +950,9 @@ class _CheckoutPageState
             '',
 
         'driverPhone':
+            '',
+
+        'driverEmail':
             '',
 
         'driverLat':
@@ -873,23 +979,31 @@ class _CheckoutPageState
     }
 
     showDialog<void>(
-      context: context,
+      context:
+          context,
       builder:
-          (BuildContext dialogContext) {
+          (
+        BuildContext dialogContext,
+      ) {
         return AlertDialog(
           title:
               const Text(
             'Order Placed',
           ),
-          content: Text(
+          content:
+              Text(
             'Your order has been placed successfully.\n\n'
             'Order ID: $orderId\n'
             'Final amount: Rs. ${_finalTotal.toStringAsFixed(0)}\n\n'
+            'Delivery Code: $deliveryOtp\n\n'
+            'Keep this code private. Give it to the delivery person only after receiving your order.\n\n'
             'Delivery location has been saved for tracking.',
           ),
-          actions: <Widget>[
+          actions:
+              <Widget>[
             TextButton(
-              onPressed: () {
+              onPressed:
+                  () {
                 Navigator.pop(
                   dialogContext,
                 );
@@ -897,8 +1011,9 @@ class _CheckoutPageState
                 Navigator.push<void>(
                   context,
                   MaterialPageRoute<void>(
-                    builder: (_) =>
-                        const OrderHistoryPage(),
+                    builder:
+                        (_) =>
+                            const OrderHistoryPage(),
                   ),
                 );
               },
@@ -936,9 +1051,10 @@ class _CheckoutPageState
           Text(
             label,
             style: TextStyle(
-              fontWeight: bold
-                  ? FontWeight.bold
-                  : null,
+              fontWeight:
+                  bold
+                      ? FontWeight.bold
+                      : null,
             ),
           ),
           Text(
@@ -948,9 +1064,10 @@ class _CheckoutPageState
                 : 'Rs. ${amount.toStringAsFixed(0)}',
             style: TextStyle(
               color: color,
-              fontWeight: bold
-                  ? FontWeight.bold
-                  : FontWeight.w500,
+              fontWeight:
+                  bold
+                      ? FontWeight.bold
+                      : FontWeight.w500,
             ),
           ),
         ],
@@ -968,8 +1085,11 @@ class _CheckoutPageState
       return Container(
         width: double.infinity,
         padding:
-            const EdgeInsets.all(12),
-        decoration: BoxDecoration(
+            const EdgeInsets.all(
+          12,
+        ),
+        decoration:
+            BoxDecoration(
           color:
               Colors.blue.shade50,
           borderRadius:
@@ -977,13 +1097,17 @@ class _CheckoutPageState
             10,
           ),
         ),
-        child: const Row(
+        child:
+            const Row(
           children: <Widget>[
             Icon(
               Icons.store,
-              color: Colors.blue,
+              color:
+                  Colors.blue,
             ),
-            SizedBox(width: 8),
+            SizedBox(
+              width: 8,
+            ),
             Expanded(
               child: Text(
                 'Store Pickup selected. Customer GPS location is not required.',
@@ -998,26 +1122,34 @@ class _CheckoutPageState
       return Container(
         width: double.infinity,
         padding:
-            const EdgeInsets.all(12),
-        decoration: BoxDecoration(
+            const EdgeInsets.all(
+          12,
+        ),
+        decoration:
+            BoxDecoration(
           color:
               Colors.orange.shade50,
           borderRadius:
               BorderRadius.circular(
             10,
           ),
-          border: Border.all(
-            color: Colors
-                .orange.shade200,
+          border:
+              Border.all(
+            color:
+                Colors.orange.shade200,
           ),
         ),
-        child: const Row(
+        child:
+            const Row(
           children: <Widget>[
             Icon(
               Icons.location_off,
-              color: Colors.orange,
+              color:
+                  Colors.orange,
             ),
-            SizedBox(width: 8),
+            SizedBox(
+              width: 8,
+            ),
             Expanded(
               child: Text(
                 'Map location not saved yet.',
@@ -1028,16 +1160,29 @@ class _CheckoutPageState
       );
     }
 
+    final double? currentLat =
+        latitude;
+
+    final double? currentLng =
+        longitude;
+
     return Container(
-      width: double.infinity,
+      width:
+          double.infinity,
       padding:
-          const EdgeInsets.all(12),
-      decoration: BoxDecoration(
+          const EdgeInsets.all(
+        12,
+      ),
+      decoration:
+          BoxDecoration(
         color:
             Colors.green.shade50,
         borderRadius:
-            BorderRadius.circular(10),
-        border: Border.all(
+            BorderRadius.circular(
+          10,
+        ),
+        border:
+            Border.all(
           color:
               Colors.green.shade200,
         ),
@@ -1048,17 +1193,22 @@ class _CheckoutPageState
         children: <Widget>[
           const Icon(
             Icons.location_on,
-            color: Colors.green,
+            color:
+                Colors.green,
           ),
-          const SizedBox(width: 8),
+          const SizedBox(
+            width: 8,
+          ),
           Expanded(
             child: Column(
               crossAxisAlignment:
                   CrossAxisAlignment.start,
-              children: <Widget>[
+              children:
+                  <Widget>[
                 const Text(
                   'Map Location Saved',
-                  style: TextStyle(
+                  style:
+                      TextStyle(
                     fontWeight:
                         FontWeight.bold,
                   ),
@@ -1066,12 +1216,16 @@ class _CheckoutPageState
                 const SizedBox(
                   height: 3,
                 ),
-                Text(
-                  'Lat: ${latitude!.toStringAsFixed(6)}',
-                ),
-                Text(
-                  'Lng: ${longitude!.toStringAsFixed(6)}',
-                ),
+                if (currentLat !=
+                    null)
+                  Text(
+                    'Lat: ${currentLat.toStringAsFixed(6)}',
+                  ),
+                if (currentLng !=
+                    null)
+                  Text(
+                    'Lng: ${currentLng.toStringAsFixed(6)}',
+                  ),
                 if (locationSource
                     .isNotEmpty)
                   Text(
@@ -1100,9 +1254,16 @@ class _CheckoutPageState
       ),
       child:
           RadioListTile<String>(
-        value: title,
-        title: Text(title),
-        secondary: Icon(icon),
+        value:
+            title,
+        title:
+            Text(
+          title,
+        ),
+        secondary:
+            Icon(
+          icon,
+        ),
       ),
     );
   }
@@ -1131,31 +1292,41 @@ class _CheckoutPageState
     BuildContext context,
   ) {
     return Scaffold(
-      appBar: AppBar(
+      appBar:
+          AppBar(
         title:
             const Text(
           'Checkout',
         ),
-        centerTitle: true,
+        centerTitle:
+            true,
       ),
-      body: SingleChildScrollView(
+      body:
+          SingleChildScrollView(
         padding:
-            const EdgeInsets.all(16),
-        child: Column(
+            const EdgeInsets.all(
+          16,
+        ),
+        child:
+            Column(
           crossAxisAlignment:
               CrossAxisAlignment.start,
-          children: <Widget>[
+          children:
+              <Widget>[
             const Text(
               'Customer Information',
-              style: TextStyle(
-                fontSize: 18,
+              style:
+                  TextStyle(
+                fontSize:
+                    18,
                 fontWeight:
                     FontWeight.bold,
               ),
             ),
 
             const SizedBox(
-              height: 12,
+              height:
+                  12,
             ),
 
             TextField(
@@ -1166,14 +1337,17 @@ class _CheckoutPageState
                 labelText:
                     'Full Name',
                 prefixIcon:
-                    Icon(Icons.person),
+                    Icon(
+                  Icons.person,
+                ),
                 border:
                     OutlineInputBorder(),
               ),
             ),
 
             const SizedBox(
-              height: 12,
+              height:
+                  12,
             ),
 
             TextField(
@@ -1186,27 +1360,33 @@ class _CheckoutPageState
                 labelText:
                     'Mobile Number',
                 prefixIcon:
-                    Icon(Icons.phone),
+                    Icon(
+                  Icons.phone,
+                ),
                 border:
                     OutlineInputBorder(),
               ),
             ),
 
             const SizedBox(
-              height: 25,
+              height:
+                  25,
             ),
 
             const Text(
               'Manual Delivery Address',
-              style: TextStyle(
-                fontSize: 18,
+              style:
+                  TextStyle(
+                fontSize:
+                    18,
                 fontWeight:
                     FontWeight.bold,
               ),
             ),
 
             const SizedBox(
-              height: 8,
+              height:
+                  8,
             ),
 
             if (!isLoadingSavedAddress &&
@@ -1229,15 +1409,16 @@ class _CheckoutPageState
                   ),
                   border:
                       Border.all(
-                    color: Colors
-                        .green.shade200,
+                    color:
+                        Colors.green.shade200,
                   ),
                 ),
-                child: Column(
+                child:
+                    Column(
                   crossAxisAlignment:
-                      CrossAxisAlignment
-                          .start,
-                  children: <Widget>[
+                      CrossAxisAlignment.start,
+                  children:
+                      <Widget>[
                     const Text(
                       'Saved Address',
                       style:
@@ -1247,23 +1428,22 @@ class _CheckoutPageState
                       ),
                     ),
                     const SizedBox(
-                      height: 4,
+                      height:
+                          4,
                     ),
                     Text(
                       savedAddress,
                     ),
                     Align(
                       alignment:
-                          Alignment
-                              .centerRight,
+                          Alignment.centerRight,
                       child:
                           TextButton.icon(
                         onPressed:
                             _useSavedAddress,
                         icon:
                             const Icon(
-                          Icons
-                              .check_circle_outline,
+                          Icons.check_circle_outline,
                         ),
                         label:
                             const Text(
@@ -1275,7 +1455,8 @@ class _CheckoutPageState
                 ),
               ),
               const SizedBox(
-                height: 12,
+                height:
+                    12,
               ),
             ],
 
@@ -1296,7 +1477,8 @@ class _CheckoutPageState
             ),
 
             const SizedBox(
-              height: 10,
+              height:
+                  10,
             ),
 
             TextField(
@@ -1316,7 +1498,8 @@ class _CheckoutPageState
             ),
 
             const SizedBox(
-              height: 10,
+              height:
+                  10,
             ),
 
             TextField(
@@ -1336,11 +1519,13 @@ class _CheckoutPageState
             ),
 
             const SizedBox(
-              height: 10,
+              height:
+                  10,
             ),
 
             SizedBox(
-              width: double.infinity,
+              width:
+                  double.infinity,
               child:
                   OutlinedButton.icon(
                 onPressed:
@@ -1350,8 +1535,10 @@ class _CheckoutPageState
                 icon:
                     isGeocodingManualAddress
                         ? const SizedBox(
-                            width: 18,
-                            height: 18,
+                            width:
+                                18,
+                            height:
+                                18,
                             child:
                                 CircularProgressIndicator(
                               strokeWidth:
@@ -1359,30 +1546,34 @@ class _CheckoutPageState
                             ),
                           )
                         : const Icon(
-                            Icons
-                                .save_alt,
+                            Icons.save_alt,
                           ),
-                label: const Text(
+                label:
+                    const Text(
                   'Use & Save Manual Address',
                 ),
               ),
             ),
 
             const SizedBox(
-              height: 25,
+              height:
+                  25,
             ),
 
             const Text(
               'Delivery Location',
-              style: TextStyle(
-                fontSize: 18,
+              style:
+                  TextStyle(
+                fontSize:
+                    18,
                 fontWeight:
                     FontWeight.bold,
               ),
             ),
 
             const SizedBox(
-              height: 8,
+              height:
+                  8,
             ),
 
             DropdownButtonFormField<
@@ -1400,19 +1591,20 @@ class _CheckoutPageState
                 border:
                     OutlineInputBorder(),
               ),
-              items: _areaCharges
-                  .entries
-                  .map(
+              items:
+                  _areaCharges.entries.map(
                 (
-                  MapEntry<String,
-                          double>
+                  MapEntry<String, double>
                       entry,
                 ) {
                   return DropdownMenuItem<
                       String>(
-                    value: entry.key,
-                    child: Text(
-                      entry.value == 0
+                    value:
+                        entry.key,
+                    child:
+                        Text(
+                      entry.value ==
+                              0
                           ? '${entry.key} — Free'
                           : '${entry.key} — Rs. ${entry.value.toStringAsFixed(0)}',
                     ),
@@ -1420,8 +1612,11 @@ class _CheckoutPageState
                 },
               ).toList(),
               onChanged:
-                  (String? value) {
-                if (value == null) {
+                  (
+                String? value,
+              ) {
+                if (value ==
+                    null) {
                   return;
                 }
 
@@ -1435,34 +1630,39 @@ class _CheckoutPageState
             if (widget
                 .freeDeliveryCoupon) ...<Widget>[
               const SizedBox(
-                height: 8,
+                height:
+                    8,
               ),
               const Text(
                 'FREEDELIVERY coupon applied — delivery is free.',
-                style: TextStyle(
-                  color: Colors.green,
+                style:
+                    TextStyle(
+                  color:
+                      Colors.green,
                 ),
               ),
             ],
 
             const SizedBox(
-              height: 12,
+              height:
+                  12,
             ),
 
             Row(
               mainAxisAlignment:
-                  MainAxisAlignment
-                      .spaceBetween,
-              children: <Widget>[
+                  MainAxisAlignment.spaceBetween,
+              children:
+                  <Widget>[
                 const Expanded(
-                  child: Text(
+                  child:
+                      Text(
                     'Delivery Address',
                     style:
                         TextStyle(
-                      fontSize: 18,
+                      fontSize:
+                          18,
                       fontWeight:
-                          FontWeight
-                              .bold,
+                          FontWeight.bold,
                     ),
                   ),
                 ),
@@ -1474,7 +1674,8 @@ class _CheckoutPageState
                   icon:
                       isLoadingLocation
                           ? const SizedBox(
-                              width: 18,
+                              width:
+                                  18,
                               height:
                                   18,
                               child:
@@ -1484,8 +1685,7 @@ class _CheckoutPageState
                               ),
                             )
                           : const Icon(
-                              Icons
-                                  .my_location,
+                              Icons.my_location,
                             ),
                   label:
                       const Text(
@@ -1504,29 +1704,34 @@ class _CheckoutPageState
               ),
               decoration:
                   BoxDecoration(
-                border: Border.all(
-                  color: Colors
-                      .grey.shade300,
+                border:
+                    Border.all(
+                  color:
+                      Colors.grey.shade300,
                 ),
                 borderRadius:
                     BorderRadius.circular(
                   12,
                 ),
               ),
-              child: Row(
+              child:
+                  Row(
                 crossAxisAlignment:
-                    CrossAxisAlignment
-                        .start,
-                children: <Widget>[
+                    CrossAxisAlignment.start,
+                children:
+                    <Widget>[
                   const Icon(
                     Icons.location_on,
-                    color: Colors.red,
+                    color:
+                        Colors.red,
                   ),
                   const SizedBox(
-                    width: 10,
+                    width:
+                        10,
                   ),
                   Expanded(
-                    child: Text(
+                    child:
+                        Text(
                       deliveryAddress,
                     ),
                   ),
@@ -1535,19 +1740,23 @@ class _CheckoutPageState
             ),
 
             const SizedBox(
-              height: 10,
+              height:
+                  10,
             ),
 
             _locationStatus(),
 
             const SizedBox(
-              height: 25,
+              height:
+                  25,
             ),
 
             const Text(
               'Payment Method',
-              style: TextStyle(
-                fontSize: 18,
+              style:
+                  TextStyle(
+                fontSize:
+                    18,
                 fontWeight:
                     FontWeight.bold,
               ),
@@ -1557,24 +1766,28 @@ class _CheckoutPageState
               groupValue:
                   selectedPayment,
               onChanged:
-                  (String? value) {
-                if (value != null) {
+                  (
+                String? value,
+              ) {
+                if (value !=
+                    null) {
                   setState(() {
                     selectedPayment =
                         value;
                   });
                 }
               },
-              child: Column(
-                children: <Widget>[
+              child:
+                  Column(
+                children:
+                    <Widget>[
                   _paymentOption(
                     'Cash on Delivery',
                     Icons.money,
                   ),
                   _paymentOption(
                     'eSewa',
-                    Icons
-                        .account_balance_wallet,
+                    Icons.account_balance_wallet,
                   ),
                   _paymentOption(
                     'Khalti',
@@ -1582,8 +1795,7 @@ class _CheckoutPageState
                   ),
                   _paymentOption(
                     'Bank / eBanking',
-                    Icons
-                        .account_balance,
+                    Icons.account_balance,
                   ),
                   _paymentOption(
                     'Mobile Banking',
@@ -1602,31 +1814,36 @@ class _CheckoutPageState
             ),
 
             const SizedBox(
-              height: 16,
+              height:
+                  16,
             ),
 
             Card(
-              child: Padding(
+              child:
+                  Padding(
                 padding:
                     const EdgeInsets.all(
                   14,
                 ),
-                child: Column(
+                child:
+                    Column(
                   crossAxisAlignment:
-                      CrossAxisAlignment
-                          .start,
-                  children: <Widget>[
+                      CrossAxisAlignment.start,
+                  children:
+                      <Widget>[
                     const Text(
                       'Order Summary',
                       style:
                           TextStyle(
-                        fontSize: 18,
+                        fontSize:
+                            18,
                         fontWeight:
                             FontWeight.bold,
                       ),
                     ),
                     const SizedBox(
-                      height: 10,
+                      height:
+                          10,
                     ),
                     _totalRow(
                       'Subtotal',
@@ -1648,8 +1865,7 @@ class _CheckoutPageState
                       color:
                           _deliveryCharge ==
                                   0
-                              ? Colors
-                                  .green
+                              ? Colors.green
                               : null,
                     ),
                     const Divider(),
@@ -1658,7 +1874,8 @@ class _CheckoutPageState
                       _finalTotal,
                       color:
                           Colors.green,
-                      bold: true,
+                      bold:
+                          true,
                     ),
                   ],
                 ),
@@ -1666,14 +1883,17 @@ class _CheckoutPageState
             ),
 
             const SizedBox(
-              height: 20,
+              height:
+                  20,
             ),
 
             SizedBox(
               width:
                   double.infinity,
-              height: 55,
-              child: ElevatedButton(
+              height:
+                  55,
+              child:
+                  ElevatedButton(
                 onPressed:
                     _placeOrder,
                 child:
@@ -1681,7 +1901,8 @@ class _CheckoutPageState
                   'Place Order',
                   style:
                       TextStyle(
-                    fontSize: 18,
+                    fontSize:
+                        18,
                     fontWeight:
                         FontWeight.bold,
                   ),

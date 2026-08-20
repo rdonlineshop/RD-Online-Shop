@@ -9,8 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 // ORDER HISTORY
 // ============================================================
 
-List<Map<String, dynamic>> orderHistory =
-    <Map<String, dynamic>>[];
+List<Map<String, dynamic>> orderHistory = <Map<String, dynamic>>[];
 
 // ============================================================
 // CUSTOMER ID
@@ -76,8 +75,8 @@ const List<String> orderStatuses = <String>[
 // ============================================================
 
 CollectionReference<Map<String, dynamic>>
-    get _ordersCollection =>
-        FirebaseFirestore.instance.collection('orders');
+get _ordersCollection =>
+    FirebaseFirestore.instance.collection('orders');
 
 StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
     _ordersSubscription;
@@ -112,11 +111,11 @@ dynamic _safeValue(dynamic value) {
   }
 
   if (value is List) {
-    return value.map(_safeValue).toList();
+    return value.map<dynamic>(_safeValue).toList();
   }
 
   if (value is Map) {
-    return value.map(
+    return value.map<String, dynamic>(
       (
         dynamic key,
         dynamic mapValue,
@@ -135,7 +134,7 @@ dynamic _safeValue(dynamic value) {
 Map<String, dynamic> _safeMap(
   Map<String, dynamic> data,
 ) {
-  return data.map(
+  return data.map<String, dynamic>(
     (
       String key,
       dynamic value,
@@ -192,12 +191,14 @@ Map<String, dynamic> _normalizeOrder(
   order['customerId'] =
       order['customerId']?.toString().trim() ?? '';
 
-  order['status'] =
-      order['status']?.toString().trim() ?? 'Pending';
+  String status =
+      order['status']?.toString().trim() ?? '';
 
-  if (order['status'].toString().isEmpty) {
-    order['status'] = 'Pending';
+  if (status.isEmpty) {
+    status = 'Pending';
   }
+
+  order['status'] = status;
 
   order['trackingEnabled'] =
       order['trackingEnabled'] != false;
@@ -208,24 +209,26 @@ Map<String, dynamic> _normalizeOrder(
   order['trackingStatus'] =
       existingTrackingStatus.isNotEmpty
           ? existingTrackingStatus
-          : _trackingStatusForOrderStatus(
-              order['status'].toString(),
-            );
+          : _trackingStatusForOrderStatus(status);
 
   // ==========================================================
   // SELLER IDS
   // ==========================================================
 
-  if (order['sellerIds'] is List) {
-    order['sellerIds'] = List<String>.from(
-      (order['sellerIds'] as List)
-          .map(
-            (dynamic value) => value.toString().trim(),
-          )
-          .where(
-            (String value) => value.isNotEmpty,
-          ),
-    );
+  final dynamic rawSellerIds =
+      order['sellerIds'];
+
+  if (rawSellerIds is List) {
+    order['sellerIds'] = rawSellerIds
+        .map<String>(
+          (dynamic value) =>
+              value?.toString().trim() ?? '',
+        )
+        .where(
+          (String value) => value.isNotEmpty,
+        )
+        .toSet()
+        .toList();
   } else {
     order['sellerIds'] = <String>[];
   }
@@ -234,17 +237,36 @@ Map<String, dynamic> _normalizeOrder(
   // ITEMS
   // ==========================================================
 
-  if (order['items'] is List) {
-    order['items'] = (order['items'] as List)
-        .whereType<Map>()
-        .map(
-          (Map item) => Map<String, dynamic>.from(
-            item,
-          ),
-        )
-        .toList();
+  final dynamic rawItems =
+      order['items'];
+
+  if (rawItems is List) {
+    final List<Map<String, dynamic>> items =
+        <Map<String, dynamic>>[];
+
+    for (final dynamic rawItem in rawItems) {
+      if (rawItem is Map) {
+        final Map<String, dynamic> item =
+            <String, dynamic>{};
+
+        rawItem.forEach(
+          (
+            dynamic key,
+            dynamic value,
+          ) {
+            item[key.toString()] =
+                _safeValue(value);
+          },
+        );
+
+        items.add(item);
+      }
+    }
+
+    order['items'] = items;
   } else {
-    order['items'] = <Map<String, dynamic>>[];
+    order['items'] =
+        <Map<String, dynamic>>[];
   }
 
   // ==========================================================
@@ -263,8 +285,7 @@ Map<String, dynamic> _normalizeOrder(
 }
 
 // ============================================================
-// SORT ORDERS
-// NEWEST FIRST
+// SORT ORDERS - NEWEST FIRST
 // ============================================================
 
 void _sortOrders() {
@@ -283,7 +304,8 @@ void _sortOrders() {
         second['orderDateTime']?.toString() ?? '',
       );
 
-      if (firstDate == null && secondDate == null) {
+      if (firstDate == null &&
+          secondDate == null) {
         return 0;
       }
 
@@ -323,8 +345,10 @@ Future<void> _loadLocalOrders() async {
   final String? savedOrders =
       prefs.getString('orderHistory');
 
-  if (savedOrders == null || savedOrders.isEmpty) {
-    orderHistory = <Map<String, dynamic>>[];
+  if (savedOrders == null ||
+      savedOrders.trim().isEmpty) {
+    orderHistory =
+        <Map<String, dynamic>>[];
     return;
   }
 
@@ -333,22 +357,40 @@ Future<void> _loadLocalOrders() async {
         jsonDecode(savedOrders);
 
     if (decoded is! List) {
-      orderHistory = <Map<String, dynamic>>[];
+      orderHistory =
+          <Map<String, dynamic>>[];
       return;
     }
 
-    orderHistory = decoded
-        .whereType<Map>()
-        .map(
-          (Map item) => _normalizeOrder(
-            Map<String, dynamic>.from(item),
-          ),
-        )
-        .toList();
+    final List<Map<String, dynamic>> loadedOrders =
+        <Map<String, dynamic>>[];
+
+    for (final dynamic rawOrder in decoded) {
+      if (rawOrder is Map) {
+        final Map<String, dynamic> order =
+            <String, dynamic>{};
+
+        rawOrder.forEach(
+          (
+            dynamic key,
+            dynamic value,
+          ) {
+            order[key.toString()] = value;
+          },
+        );
+
+        loadedOrders.add(
+          _normalizeOrder(order),
+        );
+      }
+    }
+
+    orderHistory = loadedOrders;
 
     _sortOrders();
   } catch (_) {
-    orderHistory = <Map<String, dynamic>>[];
+    orderHistory =
+        <Map<String, dynamic>>[];
   }
 }
 
@@ -362,7 +404,7 @@ Future<void> saveOrders() async {
 
   final List<Map<String, dynamic>> safeOrders =
       orderHistory
-          .map(
+          .map<Map<String, dynamic>>(
             (Map<String, dynamic> order) =>
                 _safeMap(order),
           )
@@ -395,11 +437,11 @@ Future<void> _migrateLocalOrdersToFirestore() async {
     final Map<String, dynamic> uploadData =
         _safeMap(order);
 
-    // Old orders did not have customerId.
-    // Do not overwrite a valid Firestore customerId
-    // with an empty value.
     final String customerId =
-        uploadData['customerId']?.toString().trim() ?? '';
+        uploadData['customerId']
+                ?.toString()
+                .trim() ??
+            '';
 
     if (customerId.isEmpty) {
       uploadData.remove('customerId');
@@ -415,7 +457,7 @@ Future<void> _migrateLocalOrdersToFirestore() async {
         ),
       );
     } catch (_) {
-      // Local backup remains available.
+      // Keep local backup.
     }
   }
 }
@@ -434,10 +476,13 @@ void _startOrdersListener() {
   _ordersSubscription =
       _ordersCollection.snapshots().listen(
     (
-      QuerySnapshot<Map<String, dynamic>> snapshot,
+      QuerySnapshot<Map<String, dynamic>>
+          snapshot,
     ) async {
-      final List<Map<String, dynamic>> cloudOrders =
-          snapshot.docs.map(
+      final List<Map<String, dynamic>>
+          cloudOrders =
+          snapshot.docs.map<
+              Map<String, dynamic>>(
         (
           QueryDocumentSnapshot<
                   Map<String, dynamic>>
@@ -459,7 +504,7 @@ void _startOrdersListener() {
       await saveOrders();
     },
     onError: (Object error) {
-      // Keep local backup if Firestore is unavailable.
+      // Keep local backup.
     },
   );
 }
@@ -480,7 +525,9 @@ Future<void> addOrder(
       order['id']?.toString().trim() ?? '';
 
   if (orderId.isEmpty) {
-    return;
+    throw ArgumentError(
+      'Order ID cannot be empty.',
+    );
   }
 
   // ==========================================================
@@ -491,20 +538,23 @@ Future<void> addOrder(
       order['customerId']?.toString().trim() ?? '';
 
   if (customerId.isEmpty) {
-    customerId = await getOrCreateCustomerId();
+    customerId =
+        await getOrCreateCustomerId();
 
-    order['customerId'] = customerId;
+    order['customerId'] =
+        customerId;
   }
 
   // ==========================================================
   // DEFAULT STATUS
   // ==========================================================
 
-  final String currentStatus =
+  String currentStatus =
       order['status']?.toString().trim() ?? '';
 
   if (currentStatus.isEmpty) {
-    order['status'] = 'Pending';
+    currentStatus = 'Pending';
+    order['status'] = currentStatus;
   }
 
   final String orderDate =
@@ -531,14 +581,16 @@ Future<void> addOrder(
 
   if (trackingStatus.isEmpty) {
     order['trackingStatus'] =
-        'Order Placed';
+        _trackingStatusForOrderStatus(
+      currentStatus,
+    );
   }
 
-  order['createdAt'] ??=
+  final String now =
       DateTime.now().toIso8601String();
 
-  order['updatedAt'] =
-      DateTime.now().toIso8601String();
+  order['createdAt'] ??= now;
+  order['updatedAt'] = now;
 
   // ==========================================================
   // LOCAL UPDATE
@@ -546,16 +598,15 @@ Future<void> addOrder(
 
   final int existingIndex =
       orderHistory.indexWhere(
-    (
-      Map<String, dynamic> oldOrder,
-    ) {
+    (Map<String, dynamic> oldOrder) {
       return oldOrder['id']?.toString() ==
           orderId;
     },
   );
 
   if (existingIndex >= 0) {
-    orderHistory[existingIndex] = order;
+    orderHistory[existingIndex] =
+        order;
   } else {
     orderHistory.insert(
       0,
@@ -571,23 +622,18 @@ Future<void> addOrder(
   // FIRESTORE UPDATE
   // ==========================================================
 
-  try {
-    await _ordersCollection
-        .doc(orderId)
-        .set(
-      _safeMap(order),
-      SetOptions(
-        merge: true,
-      ),
-    );
-  } catch (_) {
-    // Order already exists in local backup.
-  }
+  await _ordersCollection
+      .doc(orderId)
+      .set(
+    _safeMap(order),
+    SetOptions(
+      merge: true,
+    ),
+  );
 }
 
 // ============================================================
 // UPDATE ORDER STATUS
-// SELLER / ADMIN
 // ============================================================
 
 Future<void> updateOrderStatus(
@@ -618,9 +664,7 @@ Future<void> updateOrderStatus(
 
   final int index =
       orderHistory.indexWhere(
-    (
-      Map<String, dynamic> order,
-    ) {
+    (Map<String, dynamic> order) {
       return order['id']?.toString() ==
           cleanOrderId;
     },
@@ -638,11 +682,16 @@ Future<void> updateOrderStatus(
 
     if (cleanStatus == 'Shipped') {
       final dynamic startedAt =
-          orderHistory[index]['deliveryStartedAt'];
+          orderHistory[index]
+              ['deliveryStartedAt'];
 
       if (startedAt == null ||
-          startedAt.toString().trim().isEmpty) {
-        orderHistory[index]['deliveryStartedAt'] =
+          startedAt
+              .toString()
+              .trim()
+              .isEmpty) {
+        orderHistory[index]
+                ['deliveryStartedAt'] =
             now;
       }
     }
@@ -708,9 +757,7 @@ Future<void> updateTrackingStatus(
 
   final int index =
       orderHistory.indexWhere(
-    (
-      Map<String, dynamic> order,
-    ) {
+    (Map<String, dynamic> order) {
       return order['id']?.toString() ==
           cleanOrderId;
     },
@@ -795,9 +842,7 @@ Future<void> updateDriverLocation({
 
   final int index =
       orderHistory.indexWhere(
-    (
-      Map<String, dynamic> order,
-    ) {
+    (Map<String, dynamic> order) {
       return order['id']?.toString() ==
           cleanOrderId;
     },
@@ -862,9 +907,7 @@ Future<void> updateCustomerLocation({
 
   final int index =
       orderHistory.indexWhere(
-    (
-      Map<String, dynamic> order,
-    ) {
+    (Map<String, dynamic> order) {
       return order['id']?.toString() ==
           cleanOrderId;
     },
@@ -917,9 +960,7 @@ Future<void> updateOrderTrackingFields(
 
   final int index =
       orderHistory.indexWhere(
-    (
-      Map<String, dynamic> order,
-    ) {
+    (Map<String, dynamic> order) {
       return order['id']?.toString() ==
           cleanOrderId;
     },
@@ -947,7 +988,6 @@ Future<void> updateOrderTrackingFields(
 
 // ============================================================
 // ONE ORDER REALTIME STREAM
-// TRACK ORDER PAGE
 // ============================================================
 
 Stream<Map<String, dynamic>?> orderStream(
@@ -970,14 +1010,17 @@ Stream<Map<String, dynamic>?> orderStream(
       DocumentSnapshot<Map<String, dynamic>>
           snapshot,
     ) {
+      final Map<String, dynamic>? data =
+          snapshot.data();
+
       if (!snapshot.exists ||
-          snapshot.data() == null) {
+          data == null) {
         return null;
       }
 
       return _normalizeOrder(
         <String, dynamic>{
-          ...snapshot.data()!,
+          ...data,
           'id': snapshot.id,
         },
       );
@@ -987,8 +1030,6 @@ Stream<Map<String, dynamic>?> orderStream(
 
 // ============================================================
 // CUSTOMER OWN ORDERS STREAM
-// IMPORTANT:
-// Customer sees ONLY their own orders.
 // ============================================================
 
 Stream<List<Map<String, dynamic>>>
@@ -1016,7 +1057,8 @@ Stream<List<Map<String, dynamic>>>
           snapshot,
     ) {
       final List<Map<String, dynamic>> orders =
-          snapshot.docs.map(
+          snapshot.docs.map<
+              Map<String, dynamic>>(
         (
           QueryDocumentSnapshot<
                   Map<String, dynamic>>
@@ -1076,8 +1118,6 @@ Stream<List<Map<String, dynamic>>>
 
 // ============================================================
 // SELLER OWN ORDERS STREAM
-// IMPORTANT:
-// Seller sees ONLY orders containing their sellerId.
 // ============================================================
 
 Stream<List<Map<String, dynamic>>>
@@ -1105,7 +1145,8 @@ Stream<List<Map<String, dynamic>>>
           snapshot,
     ) {
       final List<Map<String, dynamic>> orders =
-          snapshot.docs.map(
+          snapshot.docs.map<
+              Map<String, dynamic>>(
         (
           QueryDocumentSnapshot<
                   Map<String, dynamic>>

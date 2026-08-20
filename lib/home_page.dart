@@ -9,6 +9,7 @@ import 'admin_dashboard_page.dart';
 import 'cart_page.dart';
 import 'data/cart_data.dart';
 import 'data/product_data.dart';
+import 'delivery_person_auth_page.dart';
 import 'order_history_page.dart';
 import 'product_card.dart';
 import 'profile_page.dart';
@@ -1053,6 +1054,16 @@ class _HomePageState extends State<HomePage> {
                   ),
                 );
               }
+
+              if (value == 'delivery') {
+                Navigator.push<void>(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        const DeliveryPersonAuthPage(),
+                  ),
+                );
+              }
             },
             itemBuilder:
                 (BuildContext context) {
@@ -1072,6 +1083,22 @@ class _HomePageState extends State<HomePage> {
                   value: 'seller',
                   child: Text(
                     'Seller Dashboard',
+                  ),
+                ),
+                PopupMenuItem<String>(
+                  value: 'delivery',
+                  child: Row(
+                    children: <Widget>[
+                      Icon(
+                        Icons.delivery_dining,
+                      ),
+                      SizedBox(
+                        width: 10,
+                      ),
+                      Text(
+                        'Delivery Person',
+                      ),
+                    ],
                   ),
                 ),
               ];
