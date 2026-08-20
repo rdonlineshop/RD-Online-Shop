@@ -33,6 +33,11 @@ class _DeliveryPersonAuthPageState
   bool _isLoading = false;
   bool _obscurePassword = true;
 
+  Future<void> _restoreCustomerSession() async {
+    await FirebaseAuth.instance.signOut();
+    await FirebaseAuth.instance.signInAnonymously();
+  }
+
   // =========================================================
   // MESSAGE
   // =========================================================
@@ -152,16 +157,15 @@ class _DeliveryPersonAuthPageState
         ),
       );
 
+      await _restoreCustomerSession();
+
       if (!mounted) {
         return;
       }
 
       _showMessage(
-        'Delivery person account created successfully.',
+        'Account created. Please wait for Admin approval before login.',
       );
-
-      // Register गरेपछि सिधै Dashboard खोल्ने.
-      await _openDashboard();
     } on FirebaseAuthException catch (error) {
       String message =
           'Could not create account.';
@@ -255,8 +259,7 @@ class _DeliveryPersonAuthPageState
       // Seller/Customer account बाट Delivery Dashboard
       // खोल्न दिँदैन.
       if (!doc.exists) {
-        await FirebaseAuth.instance
-            .signOut();
+        await _restoreCustomerSession();
 
         if (!mounted) {
           return;
@@ -277,8 +280,7 @@ class _DeliveryPersonAuthPageState
               '';
 
       if (role != 'delivery_person') {
-        await FirebaseAuth.instance
-            .signOut();
+        await _restoreCustomerSession();
 
         if (!mounted) {
           return;
@@ -294,8 +296,7 @@ class _DeliveryPersonAuthPageState
           data['isActive'] != false;
 
       if (!isActive) {
-        await FirebaseAuth.instance
-            .signOut();
+        await _restoreCustomerSession();
 
         if (!mounted) {
           return;
@@ -303,6 +304,22 @@ class _DeliveryPersonAuthPageState
 
         _showMessage(
           'This delivery person account is inactive.',
+        );
+        return;
+      }
+
+      final bool isApproved =
+          data['isApproved'] == true;
+
+      if (!isApproved) {
+        await _restoreCustomerSession();
+
+        if (!mounted) {
+          return;
+        }
+
+        _showMessage(
+          'Your delivery person account is waiting for Admin approval.',
         );
         return;
       }

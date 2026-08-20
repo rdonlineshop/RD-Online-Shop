@@ -394,69 +394,39 @@ class _DeliveryPersonDashboardPageState
   // NEW ORDER:
   // driverId == logged in Firebase UID
   //
-  // OLD ORDER FALLBACK:
-  // driverPhone == current delivery phone
+  // Firestore security requires a server-side UID query.
   // =========================================================
 
   Stream<List<Map<String, dynamic>>>
-      _assignedOrdersStream() async* {
+      _assignedOrdersStream() {
     final String driverId =
         _deliveryPersonId.trim();
 
-    final String phone =
-        _deliveryPersonPhone.trim();
-
     if (driverId.isEmpty) {
-      yield <Map<String, dynamic>>[];
-      return;
+      return Stream<List<Map<String, dynamic>>>.value(
+        <Map<String, dynamic>>[],
+      );
     }
 
-    await for (final QuerySnapshot<Map<String, dynamic>>
-        allOrdersSnapshot
-        in FirebaseFirestore.instance
-            .collection('orders')
-            .snapshots()) {
-      final List<Map<String, dynamic>> orders =
-          <Map<String, dynamic>>[];
-
-      for (final QueryDocumentSnapshot<
-              Map<String, dynamic>>
-          doc in allOrdersSnapshot.docs) {
-        final Map<String, dynamic> data =
-            doc.data();
-
-        final String savedDriverId =
-            data['driverId']
-                    ?.toString()
-                    .trim() ??
-                '';
-
-        final String savedDriverPhone =
-            data['driverPhone']
-                    ?.toString()
-                    .trim() ??
-                '';
-
-        final bool idMatch =
-            savedDriverId.isNotEmpty &&
-                savedDriverId == driverId;
-
-        // Old orders may not have driverId.
-        final bool legacyPhoneMatch =
-            savedDriverId.isEmpty &&
-                phone.isNotEmpty &&
-                savedDriverPhone == phone;
-
-        if (idMatch ||
-            legacyPhoneMatch) {
-          orders.add(
-            <String, dynamic>{
-              ...data,
-              'id': doc.id,
-            },
-          );
-        }
-      }
+    return FirebaseFirestore.instance
+        .collection('orders')
+        .where(
+          'driverId',
+          isEqualTo: driverId,
+        )
+        .snapshots()
+        .map(
+      (QuerySnapshot<Map<String, dynamic>> snapshot) {
+        final List<Map<String, dynamic>> orders =
+            snapshot.docs
+                .map<Map<String, dynamic>>(
+                  (QueryDocumentSnapshot<Map<String, dynamic>> doc) =>
+                      <String, dynamic>{
+                    ...doc.data(),
+                    'id': doc.id,
+                  },
+                )
+                .toList();
 
       orders.sort(
         (
@@ -496,8 +466,9 @@ class _DeliveryPersonDashboardPageState
         },
       );
 
-      yield orders;
-    }
+        return orders;
+      },
+    );
   }
 
   // =========================================================
@@ -1053,6 +1024,7 @@ class _DeliveryPersonDashboardPageState
     }
 
     await FirebaseAuth.instance.signOut();
+    await FirebaseAuth.instance.signInAnonymously();
 
     if (!mounted) {
       return;

@@ -354,7 +354,7 @@ Future<void> loadOrders() async {
 
   await _migrateLocalOrdersToFirestore();
 
-  _startOrdersListener();
+  await _startOrdersListener();
 }
 
 // ============================================================
@@ -448,6 +448,13 @@ Future<void> _migrateLocalOrdersToFirestore() async {
     return;
   }
 
+  final String currentCustomerId =
+      FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+
+  if (currentCustomerId.isEmpty) {
+    return;
+  }
+
   for (final Map<String, dynamic> order
       in orderHistory) {
     final String orderId =
@@ -466,8 +473,9 @@ Future<void> _migrateLocalOrdersToFirestore() async {
                 .trim() ??
             '';
 
-    if (customerId.isEmpty) {
-      uploadData.remove('customerId');
+    // Never upload another customer's old local order.
+    if (customerId != currentCustomerId) {
+      continue;
     }
 
     try {
@@ -489,15 +497,28 @@ Future<void> _migrateLocalOrdersToFirestore() async {
 // FIRESTORE REALTIME LISTENER
 // ============================================================
 
-void _startOrdersListener() {
+Future<void> _startOrdersListener() async {
   if (_ordersListenerStarted) {
+    return;
+  }
+
+  final String customerId =
+      FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+
+  if (customerId.isEmpty) {
     return;
   }
 
   _ordersListenerStarted = true;
 
   _ordersSubscription =
-      _ordersCollection.snapshots().listen(
+      _ordersCollection
+          .where(
+            'customerId',
+            isEqualTo: customerId,
+          )
+          .snapshots()
+          .listen(
     (
       QuerySnapshot<Map<String, dynamic>>
           snapshot,
