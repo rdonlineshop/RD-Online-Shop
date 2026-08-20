@@ -5,6 +5,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../order_data.dart';
 
@@ -677,10 +678,44 @@ class _DeliveryPersonTrackingPageState
   }
 
   // =========================================================
+  // CUSTOMER QR SCANNER
+  // =========================================================
+
+  Future<void> _scanQrAndDeliver() async {
+    if (_isVerifyingOtp ||
+        _orderDelivered) {
+      return;
+    }
+
+    final String? scannedOtp =
+        await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
+        builder: (
+          BuildContext context,
+        ) {
+          return const _DeliveryQrScannerPage();
+        },
+      ),
+    );
+
+    if (!mounted ||
+        scannedOtp == null ||
+        scannedOtp.trim().isEmpty) {
+      return;
+    }
+
+    await _verifyOtpAndDeliver(
+      scannedOtp: scannedOtp.trim(),
+    );
+  }
+
+  // =========================================================
   // VERIFY OTP AND MARK DELIVERED
   // =========================================================
 
-  Future<void> _verifyOtpAndDeliver() async {
+  Future<void> _verifyOtpAndDeliver({
+    String? scannedOtp,
+  }) async {
     if (_isVerifyingOtp ||
         _orderDelivered) {
       return;
@@ -790,7 +825,8 @@ class _DeliveryPersonTrackingPageState
       // =====================================================
 
       final String? enteredOtp =
-          await _askForOtp();
+          scannedOtp ??
+              await _askForOtp();
 
       if (enteredOtp == null) {
         return;
@@ -860,7 +896,9 @@ class _DeliveryPersonTrackingPageState
               now,
 
           'deliveryConfirmationMethod':
-              'OTP',
+              scannedOtp == null
+                  ? 'OTP'
+                  : 'QR',
 
           'deliveredAt':
               now,
@@ -929,7 +967,7 @@ class _DeliveryPersonTrackingPageState
               'Delivery Confirmed',
             ),
             content: const Text(
-              'Customer OTP verified successfully. '
+              'Customer delivery verification succeeded. '
               'This order is now marked as Delivered.',
             ),
             actions: <Widget>[
@@ -1289,6 +1327,27 @@ class _DeliveryPersonTrackingPageState
                   height: 12,
                 ),
 
+                SizedBox(
+                  height: 55,
+                  child: FilledButton.icon(
+                    onPressed:
+                        _orderDelivered ||
+                                _isVerifyingOtp
+                            ? null
+                            : _scanQrAndDeliver,
+                    icon: const Icon(
+                      Icons.qr_code_scanner,
+                    ),
+                    label: const Text(
+                      'Scan Customer QR',
+                    ),
+                  ),
+                ),
+
+                const SizedBox(
+                  height: 12,
+                ),
+
                 // =================================================
                 // OLD DIRECT DELIVERED BUTTON REMOVED
                 // OTP REQUIRED NOW
@@ -1302,7 +1361,9 @@ class _DeliveryPersonTrackingPageState
                         _orderDelivered ||
                                 _isVerifyingOtp
                             ? null
-                            : _verifyOtpAndDeliver,
+                            : () {
+                                _verifyOtpAndDeliver();
+                              },
                     icon: _isVerifyingOtp
                         ? const SizedBox(
                             width: 20,
@@ -1406,6 +1467,119 @@ class _DeliveryPersonTrackingPageState
     _positionSubscription
         ?.cancel();
 
+    super.dispose();
+  }
+}
+
+class _DeliveryQrScannerPage extends StatefulWidget {
+  const _DeliveryQrScannerPage();
+
+  @override
+  State<_DeliveryQrScannerPage> createState() =>
+      _DeliveryQrScannerPageState();
+}
+
+class _DeliveryQrScannerPageState
+    extends State<_DeliveryQrScannerPage> {
+  final MobileScannerController _scannerController =
+      MobileScannerController();
+
+  bool _resultReturned = false;
+
+  void _handleDetection(
+    BarcodeCapture capture,
+  ) {
+    if (_resultReturned ||
+        capture.barcodes.isEmpty) {
+      return;
+    }
+
+    final String value =
+        capture.barcodes.first.rawValue
+                ?.trim() ??
+            '';
+
+    if (value.length != 6 ||
+        int.tryParse(value) == null) {
+      return;
+    }
+
+    _resultReturned = true;
+
+    Navigator.of(context).pop<String>(
+      value,
+    );
+  }
+
+  @override
+  Widget build(
+    BuildContext context,
+  ) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Scan Customer QR',
+        ),
+        actions: <Widget>[
+          IconButton(
+            tooltip: 'Torch',
+            onPressed: () {
+              _scannerController
+                  .toggleTorch();
+            },
+            icon: const Icon(
+              Icons.flashlight_on,
+            ),
+          ),
+        ],
+      ),
+      body: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          MobileScanner(
+            controller: _scannerController,
+            onDetect: _handleDetection,
+          ),
+          Center(
+            child: Container(
+              width: 250,
+              height: 250,
+              decoration: BoxDecoration(
+                borderRadius:
+                    BorderRadius.circular(20),
+                border: Border.all(
+                  color: Colors.white,
+                  width: 4,
+                ),
+              ),
+            ),
+          ),
+          const Positioned(
+            left: 24,
+            right: 24,
+            bottom: 40,
+            child: Card(
+              color: Colors.black87,
+              child: Padding(
+                padding: EdgeInsets.all(14),
+                child: Text(
+                  'Ask the customer to show the Secure Delivery QR, then place it inside the frame.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _scannerController.dispose();
     super.dispose();
   }
 }

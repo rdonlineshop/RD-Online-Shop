@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'order_data.dart';
@@ -1604,6 +1605,39 @@ class _OrderHistoryPageState
                 ),
                 child: Column(
                   children: <Widget>[
+                    const Text(
+                      'SCAN TO CONFIRM DELIVERY',
+                      style: TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 1.2,
+                        color: Colors.deepPurple,
+                      ),
+                    ),
+
+                    const SizedBox(
+                      height: 12,
+                    ),
+
+                    Container(
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        color: Colors.white,
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: QrImageView(
+                        data: deliveryOtp,
+                        version: QrVersions.auto,
+                        size: 190,
+                        backgroundColor: Colors.white,
+                        errorCorrectionLevel: QrErrorCorrectLevel.M,
+                      ),
+                    ),
+
+                    const SizedBox(
+                      height: 16,
+                    ),
+
                     const Text(
                       'DELIVERY CODE',
                       style: TextStyle(
