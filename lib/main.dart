@@ -1,3 +1,4 @@
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:flutter/material.dart';
 
@@ -9,13 +10,18 @@ import 'home_page.dart';
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Firebase initialization
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // Load app data
-  await Future.wait([
+  final FirebaseAuth auth = FirebaseAuth.instance;
+
+  if (auth.currentUser?.isAnonymous != true) {
+    await auth.signOut();
+    await auth.signInAnonymously();
+  }
+
+  await Future.wait(<Future<void>>[
     loadWishlist(),
     loadProducts(),
   ]);

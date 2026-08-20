@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 // ============================================================
@@ -18,6 +19,21 @@ List<Map<String, dynamic>> orderHistory = <Map<String, dynamic>>[];
 const String _customerIdPreferenceKey = 'rd_customer_id';
 
 Future<String> getOrCreateCustomerId() async {
+  final String firebaseUid =
+      FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+
+  if (firebaseUid.isNotEmpty) {
+    final SharedPreferences prefs =
+        await SharedPreferences.getInstance();
+
+    await prefs.setString(
+      _customerIdPreferenceKey,
+      firebaseUid,
+    );
+
+    return firebaseUid;
+  }
+
   final SharedPreferences prefs =
       await SharedPreferences.getInstance();
 
@@ -45,6 +61,13 @@ Future<String> getOrCreateCustomerId() async {
 }
 
 Future<String?> getSavedCustomerId() async {
+  final String firebaseUid =
+      FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+
+  if (firebaseUid.isNotEmpty) {
+    return firebaseUid;
+  }
+
   final SharedPreferences prefs =
       await SharedPreferences.getInstance();
 
