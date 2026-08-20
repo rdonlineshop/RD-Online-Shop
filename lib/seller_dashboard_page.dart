@@ -102,18 +102,15 @@ class SellerDashboardPage extends StatelessWidget {
     }
 
     await FirebaseAuth.instance.signOut();
+    await FirebaseAuth.instance.signInAnonymously();
 
     if (!context.mounted) {
       return;
     }
 
-    Navigator.pushAndRemoveUntil<void>(
+    Navigator.popUntil(
       context,
-      MaterialPageRoute<void>(
-        builder: (_) =>
-            const SellerAuthPage(),
-      ),
-      (Route<dynamic> route) => false,
+      (Route<dynamic> route) => route.isFirst,
     );
   }
 

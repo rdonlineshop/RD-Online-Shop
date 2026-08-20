@@ -50,6 +50,11 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
   CollectionReference<Map<String, dynamic>> get _sellers =>
       FirebaseFirestore.instance.collection('sellers');
 
+  Future<void> _restoreCustomerSession() async {
+    await _auth.signOut();
+    await _auth.signInAnonymously();
+  }
+
   void _message(String message) {
     if (!mounted) {
       return;
@@ -224,7 +229,8 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
           'shopPhotos': <String>[],
           'photoStorage': '',
 
-           'isActive': true,
+          // Admin must approve the seller before login.
+          'isActive': false,
 
 // Seller shop live tracking location
 'shopLatitude': _shopLatitude,
@@ -240,16 +246,14 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
         },
       );
 
+      await _restoreCustomerSession();
+
       if (!mounted) {
         return;
       }
 
-      Navigator.pushReplacement<void, void>(
-        context,
-        MaterialPageRoute<void>(
-          builder: (_) =>
-              const SellerDashboardPage(),
-        ),
+      _message(
+        'Seller account created. Please wait for Admin approval before login.',
       );
     } catch (error) {
       if (createdUser != null) {
@@ -282,7 +286,7 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
         await _sellers.doc(user.uid).get();
 
     if (!sellerDocument.exists) {
-      await _auth.signOut();
+      await _restoreCustomerSession();
 
       throw Exception(
         'This account is not registered as a seller.',
@@ -293,8 +297,16 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
         sellerDocument.data() ??
             <String, dynamic>{};
 
+    if (seller['role']?.toString().trim() != 'seller') {
+      await _restoreCustomerSession();
+
+      throw Exception(
+        'This account is not registered as a seller.',
+      );
+    }
+
     if (seller['isActive'] == false) {
-      await _auth.signOut();
+      await _restoreCustomerSession();
 
       throw Exception(
         'Your seller account is inactive. '
