@@ -729,6 +729,14 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
             .collection(
               'delivery_persons',
             )
+            .where(
+              'isApproved',
+              isEqualTo: true,
+            )
+            .where(
+              'isActive',
+              isEqualTo: true,
+            )
             .get();
 
     final List<Map<String, dynamic>>
@@ -751,8 +759,8 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                 Map<String, dynamic>
                     person,
               ) {
-                return person['isActive'] !=
-                    false;
+                return person['isActive'] == true &&
+                    person['isApproved'] == true;
               },
             )
             .toList();
