@@ -1,0 +1,214 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function adminData() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && adminData().isActive == true
+        && adminData().role in ['admin', 'superAdmin'];
+    }
+
+    function sellerData() {
+      return get(/databases/$(database)/documents/sellers/$(request.auth.uid)).data;
+    }
+
+    function isActiveSeller() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/sellers/$(request.auth.uid))
+        && sellerData().isActive == true
+        && sellerData().role == 'seller';
+    }
+
+    function driverData() {
+      return get(/databases/$(database)/documents/delivery_persons/$(request.auth.uid)).data;
+    }
+
+    function isActiveDriver() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/delivery_persons/$(request.auth.uid))
+        && driverData().isActive == true
+        && driverData().isApproved == true
+        && driverData().role == 'delivery_person';
+    }
+
+    match /admins/{adminId} {
+      allow read: if signedIn() && request.auth.uid == adminId;
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /sellers/{sellerId} {
+      allow read: if isAdmin()
+        || (signedIn() && request.auth.uid == sellerId);
+
+      allow create: if signedIn()
+        && request.auth.uid == sellerId
+        && request.resource.data.sellerId == request.auth.uid
+        && request.resource.data.role == 'seller'
+        && request.resource.data.isActive == false;
+
+      allow update: if isAdmin()
+        || (signedIn()
+          && request.auth.uid == sellerId
+          && request.resource.data.sellerId == resource.data.sellerId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive);
+
+      allow delete: if isAdmin();
+    }
+
+    match /delivery_persons/{driverId} {
+      allow read: if isAdmin()
+        || (signedIn() && request.auth.uid == driverId)
+        || (isActiveSeller()
+          && resource.data.isActive == true
+          && resource.data.isApproved == true);
+
+      allow create: if signedIn()
+        && request.auth.uid == driverId
+        && request.resource.data.deliveryPersonId == request.auth.uid
+        && request.resource.data.role == 'delivery_person'
+        && request.resource.data.isApproved == false;
+
+      allow update: if isAdmin()
+        || (signedIn()
+          && request.auth.uid == driverId
+          && request.resource.data.deliveryPersonId == resource.data.deliveryPersonId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive
+          && request.resource.data.isApproved == resource.data.isApproved
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'isOnline',
+            'updatedAt',
+            'latitude',
+            'longitude',
+            'locationUpdatedAt',
+            'currentOrderId'
+          ]));
+
+      allow delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+
+      allow create: if isAdmin()
+        || (isActiveSeller()
+          && request.resource.data.sellerId == request.auth.uid);
+
+      allow update: if isAdmin()
+        || (isActiveSeller()
+          && resource.data.sellerId == request.auth.uid
+          && request.resource.data.sellerId == request.auth.uid);
+
+      allow delete: if isAdmin()
+        || (isActiveSeller()
+          && resource.data.sellerId == request.auth.uid);
+    }
+
+    match /orders/{orderId} {
+      function customerOwnsOrder() {
+        return signedIn()
+          && resource.data.customerId == request.auth.uid;
+      }
+
+      function sellerOwnsOrder() {
+        return isActiveSeller()
+          && request.auth.uid in resource.data.sellerIds;
+      }
+
+      function driverOwnsOrder() {
+        return isActiveDriver()
+          && resource.data.driverId == request.auth.uid;
+      }
+
+      allow read: if isAdmin()
+        || customerOwnsOrder()
+        || sellerOwnsOrder()
+        || driverOwnsOrder();
+
+      allow create: if isAdmin()
+        || (signedIn()
+          && request.resource.data.customerId == request.auth.uid
+          && request.resource.data.status == 'Pending'
+          && request.resource.data.driverId == '');
+
+      allow update: if isAdmin();
+
+      allow update: if customerOwnsOrder()
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'customerLat',
+          'customerLng',
+          'customerAddress',
+          'address',
+          'customerLocationUpdatedAt',
+          'updatedAt'
+        ]);
+
+      allow update: if sellerOwnsOrder()
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.sellerIds == resource.data.sellerIds
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'trackingStatus',
+          'updatedAt',
+          'deliveryStartedAt',
+          'deliveredAt',
+          'driverId',
+          'driverName',
+          'driverPhone',
+          'driverEmail',
+          'trackingEnabled',
+          'deliveryAssignedAt',
+          'driverLat',
+          'driverLng',
+          'driverLocationUpdatedAt'
+        ]);
+
+      allow update: if driverOwnsOrder()
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.sellerIds == resource.data.sellerIds
+        && request.resource.data.driverId == resource.data.driverId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'trackingStatus',
+          'updatedAt',
+          'deliveryStartedAt',
+          'deliveredAt',
+          'driverLat',
+          'driverLng',
+          'driverLocationUpdatedAt',
+          'trackingEnabled',
+          'deliveryOtp',
+          'deliveryOtpCreatedAt',
+          'deliveryOtpVerified',
+          'deliveryOtpVerifiedAt',
+          'deliveryConfirmationMethod',
+          'deliveredByDriverId',
+          'deliveredByDriverName',
+          'deliveredByDriverPhone',
+          'deliveryConfirmedLat',
+          'deliveryConfirmedLng'
+        ])
+        && (request.resource.data.status != 'Delivered'
+          || (request.resource.data.deliveryOtpVerified == true
+            && request.resource.data.deliveredByDriverId == request.auth.uid));
+
+      allow delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
