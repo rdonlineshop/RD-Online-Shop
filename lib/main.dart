@@ -16,8 +16,14 @@ Future<void> main() async {
 
   final FirebaseAuth auth = FirebaseAuth.instance;
 
-  if (auth.currentUser?.isAnonymous != true) {
+  // Customers use a private anonymous session automatically.
+  // Staff accounts must never remain in the default customer session.
+  if (auth.currentUser != null &&
+      auth.currentUser!.isAnonymous != true) {
     await auth.signOut();
+  }
+
+  if (auth.currentUser == null) {
     await auth.signInAnonymously();
   }
 

@@ -1,1 +1,28 @@
-{"flutter":{"platforms":{"android":{"default":{"projectId":"rd-online-shop-d7c72","appId":"1:993981240325:android:a48be8aab42152df42b86c","fileOutput":"android/app/google-services.json"}},"dart":{"lib/firebase_options.dart":{"projectId":"rd-online-shop-d7c72","configurations":{"android":"1:993981240325:android:a48be8aab42152df42b86c","ios":"1:993981240325:ios:1f06d9539c18db5f42b86c","macos":"1:993981240325:ios:1f06d9539c18db5f42b86c","web":"1:993981240325:web:f1b33b5e273ffbc242b86c","windows":"1:993981240325:web:7a62129eb3e0c4cc42b86c"}}}}}}
+{
+    "flutter":  {
+                    "platforms":  {
+                                      "android":  {
+                                                      "default":  {
+                                                                      "projectId":  "rd-online-shop-d7c72",
+                                                                      "appId":  "1:993981240325:android:a48be8aab42152df42b86c",
+                                                                      "fileOutput":  "android/app/google-services.json"
+                                                                  }
+                                                  },
+                                      "dart":  {
+                                                   "lib/firebase_options.dart":  {
+                                                                                     "projectId":  "rd-online-shop-d7c72",
+                                                                                     "configurations":  {
+                                                                                                            "android":  "1:993981240325:android:a48be8aab42152df42b86c",
+                                                                                                            "ios":  "1:993981240325:ios:1f06d9539c18db5f42b86c",
+                                                                                                            "macos":  "1:993981240325:ios:1f06d9539c18db5f42b86c",
+                                                                                                            "web":  "1:993981240325:web:f1b33b5e273ffbc242b86c",
+                                                                                                            "windows":  "1:993981240325:web:7a62129eb3e0c4cc42b86c"
+                                                                                                        }
+                                                                                 }
+                                               }
+                                  }
+                },
+    "firestore":  {
+                      "rules":  "firestore.rules"
+                  }
+}

@@ -28,6 +28,23 @@ service cloud.firestore {
         && sellerData().role == 'seller';
     }
 
+    function customerData() {
+      return get(/databases/$(database)/documents/customers/$(request.auth.uid)).data;
+    }
+
+    function isActiveCustomer() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/customers/$(request.auth.uid))
+        && customerData().isActive == true
+        && customerData().role == 'customer';
+    }
+
+    function isCustomerSession() {
+      return signedIn()
+        && (request.auth.token.firebase.sign_in_provider == 'anonymous'
+          || isActiveCustomer());
+    }
+
     function driverData() {
       return get(/databases/$(database)/documents/delivery_persons/$(request.auth.uid)).data;
     }
@@ -44,6 +61,26 @@ service cloud.firestore {
       allow read: if signedIn() && request.auth.uid == adminId;
       allow read: if isAdmin();
       allow create, update, delete: if isAdmin();
+    }
+
+    match /customers/{customerId} {
+      allow read: if isAdmin()
+        || (signedIn() && request.auth.uid == customerId);
+
+      allow create: if signedIn()
+        && request.auth.uid == customerId
+        && request.resource.data.customerId == request.auth.uid
+        && request.resource.data.role == 'customer'
+        && request.resource.data.isActive == true;
+
+      allow update: if isAdmin()
+        || (signedIn()
+          && request.auth.uid == customerId
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive);
+
+      allow delete: if isAdmin();
     }
 
     match /sellers/{sellerId} {
@@ -117,7 +154,7 @@ service cloud.firestore {
 
     match /orders/{orderId} {
       function customerOwnsOrder() {
-        return signedIn()
+        return isCustomerSession()
           && resource.data.customerId == request.auth.uid;
       }
 
@@ -137,7 +174,7 @@ service cloud.firestore {
         || driverOwnsOrder();
 
       allow create: if isAdmin()
-        || (signedIn()
+        || (isCustomerSession()
           && request.resource.data.customerId == request.auth.uid
           && request.resource.data.status == 'Pending'
           && request.resource.data.driverId == '');

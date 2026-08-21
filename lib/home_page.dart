@@ -12,7 +12,6 @@ import 'data/product_data.dart';
 import 'delivery_person_auth_page.dart';
 import 'order_history_page.dart';
 import 'product_card.dart';
-import 'profile_page.dart';
 import 'seller_auth_page.dart';
 import 'wishlist_page.dart';
 
@@ -926,7 +925,7 @@ class _HomePageState extends State<HomePage> {
                 const Icon(Icons.favorite),
             onPressed: () {
               Navigator.push<void>(
-                context,
+                this.context,
                 MaterialPageRoute<void>(
                   builder: (_) =>
                       const WishlistPage(),
@@ -1008,7 +1007,7 @@ class _HomePageState extends State<HomePage> {
             ),
             onPressed: () {
               Navigator.push<void>(
-                context,
+                this.context,
                 MaterialPageRoute<void>(
                   builder: (_) =>
                       const OrderHistoryPage(),
@@ -1021,19 +1020,13 @@ class _HomePageState extends State<HomePage> {
             icon:
                 const Icon(Icons.more_vert),
             onSelected: (String value) {
-              if (value == 'profile') {
-                Navigator.push<void>(
-                  context,
-                  MaterialPageRoute<void>(
-                    builder: (_) =>
-                        const ProfilePage(),
-                  ),
-                );
-              }
-
               if (value == 'admin') {
+                if (!mounted) {
+                  return;
+                }
+
                 Navigator.push<void>(
-                  context,
+                  this.context,
                   MaterialPageRoute<void>(
                     builder: (_) =>
                         const AdminAuthPage(),
@@ -1046,8 +1039,12 @@ class _HomePageState extends State<HomePage> {
               }
 
               if (value == 'seller') {
+                if (!mounted) {
+                  return;
+                }
+
                 Navigator.push<void>(
-                  context,
+                  this.context,
                   MaterialPageRoute<void>(
                     builder: (_) =>
                         const SellerAuthPage(),
@@ -1056,8 +1053,12 @@ class _HomePageState extends State<HomePage> {
               }
 
               if (value == 'delivery') {
+                if (!mounted) {
+                  return;
+                }
+
                 Navigator.push<void>(
-                  context,
+                  this.context,
                   MaterialPageRoute<void>(
                     builder: (_) =>
                         const DeliveryPersonAuthPage(),
@@ -1069,10 +1070,6 @@ class _HomePageState extends State<HomePage> {
                 (BuildContext context) {
               return const <
                   PopupMenuEntry<String>>[
-                PopupMenuItem<String>(
-                  value: 'profile',
-                  child: Text('Profile'),
-                ),
                 PopupMenuItem<String>(
                   value: 'admin',
                   child: Text(
