@@ -6,84 +6,21 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
-// ============================================================
-// ORDER HISTORY
-// ============================================================
-
 List<Map<String, dynamic>> orderHistory = <Map<String, dynamic>>[];
-
-// ============================================================
-// CUSTOMER ID
-// ============================================================
 
 const String _customerIdPreferenceKey = 'rd_customer_id';
 
-Future<String> getOrCreateCustomerId() async {
-  final String firebaseUid =
-      FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+String _orderHistoryKey(String customerId) => 'orderHistory_$customerId';
 
-  if (firebaseUid.isNotEmpty) {
-    final SharedPreferences prefs =
-        await SharedPreferences.getInstance();
+CollectionReference<Map<String, dynamic>> get _ordersCollection =>
+    FirebaseFirestore.instance.collection('orders');
 
-    await prefs.setString(
-      _customerIdPreferenceKey,
-      firebaseUid,
-    );
+CollectionReference<Map<String, dynamic>> get _customersCollection =>
+    FirebaseFirestore.instance.collection('customers');
 
-    return firebaseUid;
-  }
-
-  final SharedPreferences prefs =
-      await SharedPreferences.getInstance();
-
-  final String savedId =
-      prefs.getString(_customerIdPreferenceKey)?.trim() ?? '';
-
-  if (savedId.isNotEmpty) {
-    return savedId;
-  }
-
-  final Random random = Random.secure();
-
-  final String randomPart =
-      random.nextInt(1000000).toString().padLeft(6, '0');
-
-  final String customerId =
-      'RDC${DateTime.now().microsecondsSinceEpoch}$randomPart';
-
-  await prefs.setString(
-    _customerIdPreferenceKey,
-    customerId,
-  );
-
-  return customerId;
-}
-
-Future<String?> getSavedCustomerId() async {
-  final String firebaseUid =
-      FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
-
-  if (firebaseUid.isNotEmpty) {
-    return firebaseUid;
-  }
-
-  final SharedPreferences prefs =
-      await SharedPreferences.getInstance();
-
-  final String customerId =
-      prefs.getString(_customerIdPreferenceKey)?.trim() ?? '';
-
-  if (customerId.isEmpty) {
-    return null;
-  }
-
-  return customerId;
-}
-
-// ============================================================
-// ORDER STATUS
-// ============================================================
+StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _ordersSubscription;
+bool _ordersListenerStarted = false;
+String _ordersListenerCustomerId = '';
 
 const List<String> orderStatuses = <String>[
   'Pending',
@@ -93,28 +30,111 @@ const List<String> orderStatuses = <String>[
   'Delivered',
 ];
 
-// ============================================================
-// FIRESTORE
-// ============================================================
+String normalizeOrderRecoveryPhone(String phone) {
+  return phone.replaceAll(RegExp(r'[^0-9]'), '');
+}
 
-CollectionReference<Map<String, dynamic>>
-get _ordersCollection =>
-    FirebaseFirestore.instance.collection('orders');
+Future<void> _ensureCustomerSessionDocument(String customerId) async {
+  final User? user = FirebaseAuth.instance.currentUser;
 
-StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
-    _ordersSubscription;
+  if (user == null || !user.isAnonymous || customerId.trim().isEmpty) {
+    return;
+  }
 
-bool _ordersListenerStarted = false;
+  await _customersCollection.doc(user.uid).set(
+    <String, dynamic>{
+      'authUid': user.uid,
+      'customerId': customerId.trim(),
+      'role': 'customer',
+      'isActive': true,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'createdAt': FieldValue.serverTimestamp(),
+    },
+    SetOptions(merge: true),
+  );
+}
 
-// ============================================================
-// SAFE FIRESTORE / JSON VALUE
-// ============================================================
+Future<String> getOrCreateCustomerId() async {
+  // IMPORTANT: Never sign out an active Admin/Seller/Delivery account here.
+  // The previous version forced every non-anonymous account to sign out, which
+  // caused Admin Order Management to flash the orders and then immediately lose
+  // Firestore permission when a customer helper finished in the background.
+  User? user = FirebaseAuth.instance.currentUser;
+
+  if (user == null) {
+    final UserCredential credential =
+        await FirebaseAuth.instance.signInAnonymously();
+    user = credential.user;
+  }
+
+  if (user == null) {
+    throw StateError('Could not start customer session.');
+  }
+
+  if (!user.isAnonymous) {
+    // Customer action requested while a staff account is active. Switch only
+    // at this explicit customer action point; background listeners never do it.
+    await FirebaseAuth.instance.signOut();
+    final UserCredential credential =
+        await FirebaseAuth.instance.signInAnonymously();
+    user = credential.user;
+
+    if (user == null) {
+      throw StateError('Could not start customer session.');
+    }
+  }
+
+  final SharedPreferences prefs = await SharedPreferences.getInstance();
+
+  // IMPORTANT: Always prefer the already-saved customer ID.
+  // Seller/driver login signs the anonymous customer out and later creates a
+  // new anonymous Firebase UID. Keeping this saved ID stable prevents
+  // "My Orders" from disappearing after role login/logout.
+  final String savedId =
+      prefs.getString(_customerIdPreferenceKey)?.trim() ?? '';
+
+  if (savedId.isNotEmpty) {
+    await _ensureCustomerSessionDocument(savedId);
+    return savedId;
+  }
+
+  String customerId;
+  if (user.isAnonymous) {
+    // First-time customer: using the first anonymous UID keeps old data
+    // compatible while the value remains stable in SharedPreferences.
+    customerId = user.uid;
+  } else {
+    final Random random = Random.secure();
+    final String randomPart =
+        random.nextInt(1000000).toString().padLeft(6, '0');
+    customerId =
+        'RDC${DateTime.now().microsecondsSinceEpoch}$randomPart';
+  }
+
+  await prefs.setString(_customerIdPreferenceKey, customerId);
+  await _ensureCustomerSessionDocument(customerId);
+  return customerId;
+}
+
+Future<String?> getSavedCustomerId() async {
+  final SharedPreferences prefs = await SharedPreferences.getInstance();
+  final String savedId =
+      prefs.getString(_customerIdPreferenceKey)?.trim() ?? '';
+
+  if (savedId.isNotEmpty) {
+    return savedId;
+  }
+
+  final User? user = FirebaseAuth.instance.currentUser;
+  if (user != null && user.isAnonymous) {
+    return user.uid;
+  }
+
+  return null;
+}
 
 dynamic _safeValue(dynamic value) {
-  if (value == null ||
-      value is String ||
-      value is num ||
-      value is bool) {
+  if (value == null || value is String || value is num || value is bool) {
     return value;
   }
 
@@ -139,617 +159,356 @@ dynamic _safeValue(dynamic value) {
 
   if (value is Map) {
     return value.map<String, dynamic>(
-      (
-        dynamic key,
-        dynamic mapValue,
-      ) {
-        return MapEntry<String, dynamic>(
-          key.toString(),
-          _safeValue(mapValue),
-        );
-      },
+      (dynamic key, dynamic mapValue) => MapEntry<String, dynamic>(
+        key.toString(),
+        _safeValue(mapValue),
+      ),
     );
   }
 
   return value.toString();
 }
 
-Map<String, dynamic> _safeMap(
-  Map<String, dynamic> data,
-) {
+Map<String, dynamic> _safeMap(Map<String, dynamic> data) {
   return data.map<String, dynamic>(
-    (
-      String key,
-      dynamic value,
-    ) {
-      return MapEntry<String, dynamic>(
-        key,
-        _safeValue(value),
-      );
-    },
+    (String key, dynamic value) =>
+        MapEntry<String, dynamic>(key, _safeValue(value)),
   );
 }
 
-// ============================================================
-// TRACKING STATUS FROM ORDER STATUS
-// ============================================================
-
-String _trackingStatusForOrderStatus(
-  String status,
-) {
+String _trackingStatusForOrderStatus(String status) {
   switch (status) {
     case 'Pending':
       return 'Order Placed';
-
     case 'Confirmed':
       return 'Order Confirmed';
-
     case 'Processing':
       return 'Preparing Order';
-
     case 'Shipped':
       return 'Out for Delivery';
-
     case 'Delivered':
       return 'Delivered';
-
     default:
       return status;
   }
 }
 
-// ============================================================
-// NORMALIZE ORDER
-// ============================================================
+Map<String, dynamic> _normalizeOrder(Map<String, dynamic> source) {
+  final Map<String, dynamic> order = _safeMap(source);
 
-Map<String, dynamic> _normalizeOrder(
-  Map<String, dynamic> source,
-) {
-  final Map<String, dynamic> order =
-      _safeMap(source);
+  order['id'] = order['id']?.toString().trim() ?? '';
+  order['customerId'] = order['customerId']?.toString().trim() ?? '';
 
-  order['id'] =
-      order['id']?.toString().trim() ?? '';
-
-  order['customerId'] =
-      order['customerId']?.toString().trim() ?? '';
-
-  String status =
-      order['status']?.toString().trim() ?? '';
-
+  String status = order['status']?.toString().trim() ?? '';
   if (status.isEmpty) {
     status = 'Pending';
   }
-
   order['status'] = status;
 
-  order['trackingEnabled'] =
-      order['trackingEnabled'] != false;
+  order['trackingEnabled'] = order['trackingEnabled'] != false;
 
   final String existingTrackingStatus =
       order['trackingStatus']?.toString().trim() ?? '';
+  order['trackingStatus'] = existingTrackingStatus.isNotEmpty
+      ? existingTrackingStatus
+      : _trackingStatusForOrderStatus(status);
 
-  order['trackingStatus'] =
-      existingTrackingStatus.isNotEmpty
-          ? existingTrackingStatus
-          : _trackingStatusForOrderStatus(status);
-
-  // ==========================================================
-  // SELLER IDS
-  // ==========================================================
-
-  final dynamic rawSellerIds =
-      order['sellerIds'];
-
+  final dynamic rawSellerIds = order['sellerIds'];
   if (rawSellerIds is List) {
     order['sellerIds'] = rawSellerIds
-        .map<String>(
-          (dynamic value) =>
-              value?.toString().trim() ?? '',
-        )
-        .where(
-          (String value) => value.isNotEmpty,
-        )
+        .map<String>((dynamic value) => value?.toString().trim() ?? '')
+        .where((String value) => value.isNotEmpty)
         .toSet()
         .toList();
   } else {
     order['sellerIds'] = <String>[];
   }
 
-  // ==========================================================
-  // ITEMS
-  // ==========================================================
-
-  final dynamic rawItems =
-      order['items'];
-
+  final dynamic rawItems = order['items'];
   if (rawItems is List) {
-    final List<Map<String, dynamic>> items =
-        <Map<String, dynamic>>[];
+    final List<Map<String, dynamic>> items = <Map<String, dynamic>>[];
 
     for (final dynamic rawItem in rawItems) {
       if (rawItem is Map) {
-        final Map<String, dynamic> item =
-            <String, dynamic>{};
-
-        rawItem.forEach(
-          (
-            dynamic key,
-            dynamic value,
-          ) {
-            item[key.toString()] =
-                _safeValue(value);
-          },
-        );
-
+        final Map<String, dynamic> item = <String, dynamic>{};
+        rawItem.forEach((dynamic key, dynamic value) {
+          item[key.toString()] = _safeValue(value);
+        });
         items.add(item);
       }
     }
 
     order['items'] = items;
   } else {
-    order['items'] =
-        <Map<String, dynamic>>[];
+    order['items'] = <Map<String, dynamic>>[];
   }
 
-  // ==========================================================
-  // ORDER DATE
-  // ==========================================================
-
-  final String orderDate =
-      order['orderDateTime']?.toString().trim() ?? '';
-
+  final String orderDate = order['orderDateTime']?.toString().trim() ?? '';
   if (orderDate.isEmpty) {
-    order['orderDateTime'] =
-        DateTime.now().toIso8601String();
+    order['orderDateTime'] = DateTime.now().toIso8601String();
   }
 
   return order;
 }
 
-// ============================================================
-// SORT ORDERS - NEWEST FIRST
-// ============================================================
+int _orderSort(Map<String, dynamic> first, Map<String, dynamic> second) {
+  final DateTime? firstDate =
+      DateTime.tryParse(first['orderDateTime']?.toString() ?? '');
+  final DateTime? secondDate =
+      DateTime.tryParse(second['orderDateTime']?.toString() ?? '');
 
-void _sortOrders() {
-  orderHistory.sort(
-    (
-      Map<String, dynamic> first,
-      Map<String, dynamic> second,
-    ) {
-      final DateTime? firstDate =
-          DateTime.tryParse(
-        first['orderDateTime']?.toString() ?? '',
-      );
-
-      final DateTime? secondDate =
-          DateTime.tryParse(
-        second['orderDateTime']?.toString() ?? '',
-      );
-
-      if (firstDate == null &&
-          secondDate == null) {
-        return 0;
-      }
-
-      if (firstDate == null) {
-        return 1;
-      }
-
-      if (secondDate == null) {
-        return -1;
-      }
-
-      return secondDate.compareTo(firstDate);
-    },
-  );
+  if (firstDate == null && secondDate == null) return 0;
+  if (firstDate == null) return 1;
+  if (secondDate == null) return -1;
+  return secondDate.compareTo(firstDate);
 }
 
-// ============================================================
-// LOAD ORDERS
-// ============================================================
+void _sortOrders() {
+  orderHistory.sort(_orderSort);
+}
 
 Future<void> loadOrders() async {
   await _loadLocalOrders();
-
   await _migrateLocalOrdersToFirestore();
-
   await _startOrdersListener();
 }
 
-// ============================================================
-// LOAD LOCAL BACKUP
-// ============================================================
-
 Future<void> _loadLocalOrders() async {
-  final SharedPreferences prefs =
-      await SharedPreferences.getInstance();
+  final SharedPreferences prefs = await SharedPreferences.getInstance();
+  final String? customerId = await getSavedCustomerId();
 
-  final String? savedOrders =
+  if (customerId == null || customerId.isEmpty) {
+    orderHistory = <Map<String, dynamic>>[];
+    return;
+  }
+
+  final String? savedOrders = prefs.getString(_orderHistoryKey(customerId)) ??
       prefs.getString('orderHistory');
 
-  if (savedOrders == null ||
-      savedOrders.trim().isEmpty) {
-    orderHistory =
-        <Map<String, dynamic>>[];
+  if (savedOrders == null || savedOrders.trim().isEmpty) {
+    orderHistory = <Map<String, dynamic>>[];
     return;
   }
 
   try {
-    final dynamic decoded =
-        jsonDecode(savedOrders);
-
+    final dynamic decoded = jsonDecode(savedOrders);
     if (decoded is! List) {
-      orderHistory =
-          <Map<String, dynamic>>[];
+      orderHistory = <Map<String, dynamic>>[];
       return;
     }
 
-    final List<Map<String, dynamic>> loadedOrders =
-        <Map<String, dynamic>>[];
+    final List<Map<String, dynamic>> loadedOrders = <Map<String, dynamic>>[];
 
     for (final dynamic rawOrder in decoded) {
       if (rawOrder is Map) {
-        final Map<String, dynamic> order =
-            <String, dynamic>{};
+        final Map<String, dynamic> order = <String, dynamic>{};
+        rawOrder.forEach((dynamic key, dynamic value) {
+          order[key.toString()] = value;
+        });
 
-        rawOrder.forEach(
-          (
-            dynamic key,
-            dynamic value,
-          ) {
-            order[key.toString()] = value;
-          },
-        );
-
-        loadedOrders.add(
-          _normalizeOrder(order),
-        );
+        final Map<String, dynamic> normalized = _normalizeOrder(order);
+        if (normalized['customerId']?.toString().trim() == customerId) {
+          loadedOrders.add(normalized);
+        }
       }
     }
 
     orderHistory = loadedOrders;
-
     _sortOrders();
   } catch (_) {
-    orderHistory =
-        <Map<String, dynamic>>[];
+    orderHistory = <Map<String, dynamic>>[];
   }
 }
 
-// ============================================================
-// SAVE LOCAL BACKUP
-// ============================================================
-
 Future<void> saveOrders() async {
-  final SharedPreferences prefs =
-      await SharedPreferences.getInstance();
+  final SharedPreferences prefs = await SharedPreferences.getInstance();
+  final String? customerId = await getSavedCustomerId();
 
-  final List<Map<String, dynamic>> safeOrders =
-      orderHistory
-          .map<Map<String, dynamic>>(
-            (Map<String, dynamic> order) =>
-                _safeMap(order),
-          )
-          .toList();
+  if (customerId == null || customerId.isEmpty) {
+    return;
+  }
 
-  await prefs.setString(
-    'orderHistory',
-    jsonEncode(safeOrders),
-  );
+  final List<Map<String, dynamic>> safeOrders = orderHistory
+      .where(
+        (Map<String, dynamic> order) =>
+            order['customerId']?.toString().trim() == customerId,
+      )
+      .map<Map<String, dynamic>>(_safeMap)
+      .toList();
+
+  final String encoded = jsonEncode(safeOrders);
+
+  await prefs.setString(_orderHistoryKey(customerId), encoded);
+
+  // Keep a generic device backup too. This helps migration from older builds.
+  await prefs.setString('orderHistory', encoded);
 }
-
-// ============================================================
-// MIGRATE LOCAL ORDERS TO FIRESTORE
-// ============================================================
 
 Future<void> _migrateLocalOrdersToFirestore() async {
   if (orderHistory.isEmpty) {
     return;
   }
 
-  final String currentCustomerId =
-      FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
-
-  if (currentCustomerId.isEmpty) {
+  final User? user = FirebaseAuth.instance.currentUser;
+  if (user == null || !user.isAnonymous) {
     return;
   }
 
-  for (final Map<String, dynamic> order
-      in orderHistory) {
-    final String orderId =
-        order['id']?.toString().trim() ?? '';
+  final String customerId = await getOrCreateCustomerId();
 
-    if (orderId.isEmpty) {
-      continue;
-    }
+  for (final Map<String, dynamic> order in orderHistory) {
+    final String orderId = order['id']?.toString().trim() ?? '';
+    if (orderId.isEmpty) continue;
 
-    final Map<String, dynamic> uploadData =
-        _safeMap(order);
-
-    final String customerId =
-        uploadData['customerId']
-                ?.toString()
-                .trim() ??
-            '';
-
-    // Never upload another customer's old local order.
-    if (customerId != currentCustomerId) {
+    final Map<String, dynamic> uploadData = _safeMap(order);
+    if (uploadData['customerId']?.toString().trim() != customerId) {
       continue;
     }
 
     try {
-      await _ordersCollection
-          .doc(orderId)
-          .set(
-        uploadData,
-        SetOptions(
-          merge: true,
-        ),
-      );
+      await _ordersCollection.doc(orderId).set(
+            uploadData,
+            SetOptions(merge: true),
+          );
     } catch (_) {
-      // Keep local backup.
+      // Local backup remains available.
     }
   }
 }
 
-// ============================================================
-// FIRESTORE REALTIME LISTENER
-// ============================================================
-
 Future<void> _startOrdersListener() async {
-  if (_ordersListenerStarted) {
+  final User? user = FirebaseAuth.instance.currentUser;
+
+  // Customer realtime listener should only run in the anonymous customer
+  // session. Seller/driver/admin pages use their own streams.
+  if (user == null || !user.isAnonymous) {
     return;
   }
 
-  final String customerId =
-      FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+  final String customerId = await getOrCreateCustomerId();
 
-  if (customerId.isEmpty) {
+  if (_ordersListenerStarted && _ordersListenerCustomerId == customerId) {
     return;
   }
 
+  await _ordersSubscription?.cancel();
+  _ordersSubscription = null;
   _ordersListenerStarted = true;
+  _ordersListenerCustomerId = customerId;
 
-  _ordersSubscription =
-      _ordersCollection
-          .where(
-            'customerId',
-            isEqualTo: customerId,
-          )
-          .snapshots()
-          .listen(
-    (
-      QuerySnapshot<Map<String, dynamic>>
-          snapshot,
-    ) async {
-      final List<Map<String, dynamic>>
-          cloudOrders =
-          snapshot.docs.map<
-              Map<String, dynamic>>(
-        (
-          QueryDocumentSnapshot<
-                  Map<String, dynamic>>
-              document,
-        ) {
-          return _normalizeOrder(
-            <String, dynamic>{
+  _ordersSubscription = _ordersCollection
+      .where('customerId', isEqualTo: customerId)
+      .snapshots()
+      .listen(
+    (QuerySnapshot<Map<String, dynamic>> snapshot) async {
+      final List<Map<String, dynamic>> cloudOrders = snapshot.docs
+          .map<Map<String, dynamic>>(
+            (QueryDocumentSnapshot<Map<String, dynamic>> document) =>
+                _normalizeOrder(<String, dynamic>{
               ...document.data(),
               'id': document.id,
-            },
-          );
-        },
-      ).toList();
+            }),
+          )
+          .toList();
 
       orderHistory = cloudOrders;
-
       _sortOrders();
-
       await saveOrders();
     },
     onError: (Object error) {
-      // Keep local backup.
+      // Keep local backup visible if Firestore is temporarily unavailable.
     },
   );
 }
 
-// ============================================================
-// ADD ORDER
-// ============================================================
+Future<void> reloadOrdersForCurrentCustomer() async {
+  await _ordersSubscription?.cancel();
+  _ordersSubscription = null;
+  _ordersListenerStarted = false;
+  _ordersListenerCustomerId = '';
+  orderHistory = <Map<String, dynamic>>[];
+  await loadOrders();
+}
 
-Future<void> addOrder(
-  Map<String, dynamic> newOrder,
-) async {
+Future<void> addOrder(Map<String, dynamic> newOrder) async {
   final Map<String, dynamic> order =
-      _normalizeOrder(
-    Map<String, dynamic>.from(newOrder),
-  );
+      _normalizeOrder(Map<String, dynamic>.from(newOrder));
 
-  final String orderId =
-      order['id']?.toString().trim() ?? '';
-
+  final String orderId = order['id']?.toString().trim() ?? '';
   if (orderId.isEmpty) {
-    throw ArgumentError(
-      'Order ID cannot be empty.',
-    );
+    throw ArgumentError('Order ID cannot be empty.');
   }
 
-  // ==========================================================
-  // CUSTOMER ID
-  // ==========================================================
-
-  String customerId =
-      order['customerId']?.toString().trim() ?? '';
-
+  String customerId = order['customerId']?.toString().trim() ?? '';
   if (customerId.isEmpty) {
-    customerId =
-        await getOrCreateCustomerId();
-
-    order['customerId'] =
-        customerId;
+    customerId = await getOrCreateCustomerId();
+    order['customerId'] = customerId;
+  } else {
+    await _ensureCustomerSessionDocument(customerId);
   }
 
-  // ==========================================================
-  // DEFAULT STATUS
-  // ==========================================================
-
-  String currentStatus =
-      order['status']?.toString().trim() ?? '';
-
+  String currentStatus = order['status']?.toString().trim() ?? '';
   if (currentStatus.isEmpty) {
     currentStatus = 'Pending';
     order['status'] = currentStatus;
   }
 
-  final String orderDate =
-      order['orderDateTime']?.toString().trim() ?? '';
-
-  if (orderDate.isEmpty) {
-    order['orderDateTime'] =
-        DateTime.now().toIso8601String();
+  if ((order['orderDateTime']?.toString().trim() ?? '').isEmpty) {
+    order['orderDateTime'] = DateTime.now().toIso8601String();
   }
 
-  final String address =
-      order['address']?.toString().trim() ?? '';
-
-  if (address.isEmpty) {
-    order['address'] =
-        'Address not available';
+  if ((order['address']?.toString().trim() ?? '').isEmpty) {
+    order['address'] = 'Address not available';
   }
 
-  order['trackingEnabled'] =
-      order['trackingEnabled'] != false;
+  order['trackingEnabled'] = order['trackingEnabled'] != false;
 
-  final String trackingStatus =
-      order['trackingStatus']?.toString().trim() ?? '';
-
-  if (trackingStatus.isEmpty) {
-    order['trackingStatus'] =
-        _trackingStatusForOrderStatus(
-      currentStatus,
-    );
+  if ((order['trackingStatus']?.toString().trim() ?? '').isEmpty) {
+    order['trackingStatus'] = _trackingStatusForOrderStatus(currentStatus);
   }
 
-  final String now =
-      DateTime.now().toIso8601String();
-
+  final String now = DateTime.now().toIso8601String();
   order['createdAt'] ??= now;
   order['updatedAt'] = now;
 
-  // ==========================================================
-  // LOCAL UPDATE
-  // ==========================================================
+  final String recoveryPhoneKey =
+      normalizeOrderRecoveryPhone(order['phone']?.toString() ?? '');
+  if (recoveryPhoneKey.isNotEmpty) {
+    order['recoveryPhoneKey'] = recoveryPhoneKey;
+  }
 
-  final int existingIndex =
-      orderHistory.indexWhere(
-    (Map<String, dynamic> oldOrder) {
-      return oldOrder['id']?.toString() ==
-          orderId;
-    },
+  final int existingIndex = orderHistory.indexWhere(
+    (Map<String, dynamic> oldOrder) =>
+        oldOrder['id']?.toString() == orderId,
   );
 
   if (existingIndex >= 0) {
-    orderHistory[existingIndex] =
-        order;
+    orderHistory[existingIndex] = order;
   } else {
-    orderHistory.insert(
-      0,
-      order,
-    );
+    orderHistory.insert(0, order);
   }
 
   _sortOrders();
-
   await saveOrders();
 
-  // ==========================================================
-  // FIRESTORE UPDATE
-  // ==========================================================
-
-  await _ordersCollection
-      .doc(orderId)
-      .set(
-    _safeMap(order),
-    SetOptions(
-      merge: true,
-    ),
-  );
+  await _ordersCollection.doc(orderId).set(
+        _safeMap(order),
+        SetOptions(merge: true),
+      );
 }
 
-// ============================================================
-// UPDATE ORDER STATUS
-// ============================================================
+Future<void> updateOrderStatus(String orderId, String newStatus) async {
+  final String cleanOrderId = orderId.trim();
+  final String cleanStatus = newStatus.trim();
 
-Future<void> updateOrderStatus(
-  String orderId,
-  String newStatus,
-) async {
-  final String cleanOrderId =
-      orderId.trim();
-
-  final String cleanStatus =
-      newStatus.trim();
-
-  if (cleanOrderId.isEmpty) {
+  if (cleanOrderId.isEmpty || !orderStatuses.contains(cleanStatus)) {
     return;
   }
 
-  if (!orderStatuses.contains(cleanStatus)) {
-    return;
-  }
+  final String trackingStatus = _trackingStatusForOrderStatus(cleanStatus);
+  final String now = DateTime.now().toIso8601String();
 
-  final String trackingStatus =
-      _trackingStatusForOrderStatus(
-    cleanStatus,
-  );
-
-  final String now =
-      DateTime.now().toIso8601String();
-
-  final int index =
-      orderHistory.indexWhere(
-    (Map<String, dynamic> order) {
-      return order['id']?.toString() ==
-          cleanOrderId;
-    },
-  );
-
-  if (index >= 0) {
-    orderHistory[index]['status'] =
-        cleanStatus;
-
-    orderHistory[index]['trackingStatus'] =
-        trackingStatus;
-
-    orderHistory[index]['updatedAt'] =
-        now;
-
-    if (cleanStatus == 'Shipped') {
-      final dynamic startedAt =
-          orderHistory[index]
-              ['deliveryStartedAt'];
-
-      if (startedAt == null ||
-          startedAt
-              .toString()
-              .trim()
-              .isEmpty) {
-        orderHistory[index]
-                ['deliveryStartedAt'] =
-            now;
-      }
-    }
-
-    if (cleanStatus == 'Delivered') {
-      orderHistory[index]['deliveredAt'] =
-          now;
-    }
-
-    await saveOrders();
-  }
-
-  final Map<String, dynamic> update =
-      <String, dynamic>{
+  final Map<String, dynamic> update = <String, dynamic>{
     'status': cleanStatus,
     'trackingStatus': trackingStatus,
     'updatedAt': now,
@@ -758,86 +517,52 @@ Future<void> updateOrderStatus(
   if (cleanStatus == 'Shipped') {
     update['deliveryStartedAt'] = now;
   }
-
   if (cleanStatus == 'Delivered') {
     update['deliveredAt'] = now;
   }
 
-  try {
-    await _ordersCollection
-        .doc(cleanOrderId)
-        .set(
-      update,
-      SetOptions(
-        merge: true,
-      ),
-    );
-  } catch (_) {
-    // Local status remains saved.
+  await _ordersCollection.doc(cleanOrderId).set(
+        update,
+        SetOptions(merge: true),
+      );
+
+  final int index = orderHistory.indexWhere(
+    (Map<String, dynamic> order) => order['id']?.toString() == cleanOrderId,
+  );
+
+  if (index >= 0) {
+    orderHistory[index].addAll(update);
+    await saveOrders();
   }
 }
-
-// ============================================================
-// UPDATE TRACKING STATUS
-// ============================================================
 
 Future<void> updateTrackingStatus(
   String orderId,
   String trackingStatus,
 ) async {
-  final String cleanOrderId =
-      orderId.trim();
+  final String cleanOrderId = orderId.trim();
+  final String cleanTrackingStatus = trackingStatus.trim();
 
-  final String cleanTrackingStatus =
-      trackingStatus.trim();
+  if (cleanOrderId.isEmpty || cleanTrackingStatus.isEmpty) return;
 
-  if (cleanOrderId.isEmpty ||
-      cleanTrackingStatus.isEmpty) {
-    return;
-  }
+  final Map<String, dynamic> update = <String, dynamic>{
+    'trackingStatus': cleanTrackingStatus,
+    'updatedAt': DateTime.now().toIso8601String(),
+  };
 
-  final String now =
-      DateTime.now().toIso8601String();
+  await _ordersCollection.doc(cleanOrderId).set(
+        update,
+        SetOptions(merge: true),
+      );
 
-  final int index =
-      orderHistory.indexWhere(
-    (Map<String, dynamic> order) {
-      return order['id']?.toString() ==
-          cleanOrderId;
-    },
+  final int index = orderHistory.indexWhere(
+    (Map<String, dynamic> order) => order['id']?.toString() == cleanOrderId,
   );
-
   if (index >= 0) {
-    orderHistory[index]['trackingStatus'] =
-        cleanTrackingStatus;
-
-    orderHistory[index]['updatedAt'] =
-        now;
-
+    orderHistory[index].addAll(update);
     await saveOrders();
   }
-
-  try {
-    await _ordersCollection
-        .doc(cleanOrderId)
-        .set(
-      <String, dynamic>{
-        'trackingStatus':
-            cleanTrackingStatus,
-        'updatedAt': now,
-      },
-      SetOptions(
-        merge: true,
-      ),
-    );
-  } catch (_) {
-    // Keep local tracking data.
-  }
 }
-
-// ============================================================
-// DELIVERY PERSON LIVE LOCATION
-// ============================================================
 
 Future<void> updateDriverLocation({
   required String orderId,
@@ -847,18 +572,11 @@ Future<void> updateDriverLocation({
   String? driverName,
   String? driverPhone,
 }) async {
-  final String cleanOrderId =
-      orderId.trim();
+  final String cleanOrderId = orderId.trim();
+  if (cleanOrderId.isEmpty) return;
 
-  if (cleanOrderId.isEmpty) {
-    return;
-  }
-
-  final String now =
-      DateTime.now().toIso8601String();
-
-  final Map<String, dynamic> update =
-      <String, dynamic>{
+  final String now = DateTime.now().toIso8601String();
+  final Map<String, dynamic> update = <String, dynamic>{
     'driverLat': latitude,
     'driverLng': longitude,
     'driverLocationUpdatedAt': now,
@@ -866,55 +584,29 @@ Future<void> updateDriverLocation({
     'updatedAt': now,
   };
 
-  if (driverId != null &&
-      driverId.trim().isNotEmpty) {
-    update['driverId'] =
-        driverId.trim();
+  if (driverId != null && driverId.trim().isNotEmpty) {
+    update['driverId'] = driverId.trim();
+  }
+  if (driverName != null && driverName.trim().isNotEmpty) {
+    update['driverName'] = driverName.trim();
+  }
+  if (driverPhone != null && driverPhone.trim().isNotEmpty) {
+    update['driverPhone'] = driverPhone.trim();
   }
 
-  if (driverName != null &&
-      driverName.trim().isNotEmpty) {
-    update['driverName'] =
-        driverName.trim();
-  }
+  await _ordersCollection.doc(cleanOrderId).set(
+        update,
+        SetOptions(merge: true),
+      );
 
-  if (driverPhone != null &&
-      driverPhone.trim().isNotEmpty) {
-    update['driverPhone'] =
-        driverPhone.trim();
-  }
-
-  final int index =
-      orderHistory.indexWhere(
-    (Map<String, dynamic> order) {
-      return order['id']?.toString() ==
-          cleanOrderId;
-    },
+  final int index = orderHistory.indexWhere(
+    (Map<String, dynamic> order) => order['id']?.toString() == cleanOrderId,
   );
-
   if (index >= 0) {
     orderHistory[index].addAll(update);
-
     await saveOrders();
   }
-
-  try {
-    await _ordersCollection
-        .doc(cleanOrderId)
-        .set(
-      update,
-      SetOptions(
-        merge: true,
-      ),
-    );
-  } catch (_) {
-    // Local location remains saved.
-  }
 }
-
-// ============================================================
-// CUSTOMER LOCATION UPDATE
-// ============================================================
 
 Future<void> updateCustomerLocation({
   required String orderId,
@@ -922,167 +614,82 @@ Future<void> updateCustomerLocation({
   required double longitude,
   String? address,
 }) async {
-  final String cleanOrderId =
-      orderId.trim();
+  final String cleanOrderId = orderId.trim();
+  if (cleanOrderId.isEmpty) return;
 
-  if (cleanOrderId.isEmpty) {
-    return;
-  }
-
-  final String now =
-      DateTime.now().toIso8601String();
-
-  final Map<String, dynamic> update =
-      <String, dynamic>{
+  final String now = DateTime.now().toIso8601String();
+  final Map<String, dynamic> update = <String, dynamic>{
     'customerLat': latitude,
     'customerLng': longitude,
     'customerLocationUpdatedAt': now,
     'updatedAt': now,
   };
 
-  if (address != null &&
-      address.trim().isNotEmpty) {
-    update['customerAddress'] =
-        address.trim();
-
-    update['address'] =
-        address.trim();
+  if (address != null && address.trim().isNotEmpty) {
+    update['customerAddress'] = address.trim();
+    update['address'] = address.trim();
   }
 
-  final int index =
-      orderHistory.indexWhere(
-    (Map<String, dynamic> order) {
-      return order['id']?.toString() ==
-          cleanOrderId;
-    },
-  );
+  await _ordersCollection.doc(cleanOrderId).set(
+        update,
+        SetOptions(merge: true),
+      );
 
+  final int index = orderHistory.indexWhere(
+    (Map<String, dynamic> order) => order['id']?.toString() == cleanOrderId,
+  );
   if (index >= 0) {
     orderHistory[index].addAll(update);
-
     await saveOrders();
   }
-
-  try {
-    await _ordersCollection
-        .doc(cleanOrderId)
-        .set(
-      update,
-      SetOptions(
-        merge: true,
-      ),
-    );
-  } catch (_) {
-    // Local location remains saved.
-  }
 }
-
-// ============================================================
-// GENERIC TRACKING UPDATE
-// ============================================================
 
 Future<void> updateOrderTrackingFields(
   String orderId,
   Map<String, dynamic> fields,
 ) async {
-  final String cleanOrderId =
-      orderId.trim();
+  final String cleanOrderId = orderId.trim();
+  if (cleanOrderId.isEmpty || fields.isEmpty) return;
 
-  if (cleanOrderId.isEmpty ||
-      fields.isEmpty) {
-    return;
-  }
+  final Map<String, dynamic> update = _safeMap(<String, dynamic>{
+    ...fields,
+    'updatedAt': DateTime.now().toIso8601String(),
+  });
 
-  final Map<String, dynamic> update =
-      _safeMap(
-    <String, dynamic>{
-      ...fields,
-      'updatedAt':
-          DateTime.now().toIso8601String(),
-    },
+  await _ordersCollection.doc(cleanOrderId).set(
+        update,
+        SetOptions(merge: true),
+      );
+
+  final int index = orderHistory.indexWhere(
+    (Map<String, dynamic> order) => order['id']?.toString() == cleanOrderId,
   );
-
-  final int index =
-      orderHistory.indexWhere(
-    (Map<String, dynamic> order) {
-      return order['id']?.toString() ==
-          cleanOrderId;
-    },
-  );
-
   if (index >= 0) {
     orderHistory[index].addAll(update);
-
     await saveOrders();
-  }
-
-  try {
-    await _ordersCollection
-        .doc(cleanOrderId)
-        .set(
-      update,
-      SetOptions(
-        merge: true,
-      ),
-    );
-  } catch (_) {
-    // Keep local backup.
   }
 }
 
-// ============================================================
-// ONE ORDER REALTIME STREAM
-// ============================================================
-
-Stream<Map<String, dynamic>?> orderStream(
-  String orderId,
-) {
-  final String cleanOrderId =
-      orderId.trim();
-
+Stream<Map<String, dynamic>?> orderStream(String orderId) {
+  final String cleanOrderId = orderId.trim();
   if (cleanOrderId.isEmpty) {
-    return Stream<Map<String, dynamic>?>.value(
-      null,
-    );
+    return Stream<Map<String, dynamic>?>.value(null);
   }
 
-  return _ordersCollection
-      .doc(cleanOrderId)
-      .snapshots()
-      .map(
-    (
-      DocumentSnapshot<Map<String, dynamic>>
-          snapshot,
-    ) {
-      final Map<String, dynamic>? data =
-          snapshot.data();
-
-      if (!snapshot.exists ||
-          data == null) {
-        return null;
-      }
-
-      return _normalizeOrder(
-        <String, dynamic>{
-          ...data,
-          'id': snapshot.id,
-        },
-      );
+  return _ordersCollection.doc(cleanOrderId).snapshots().map(
+    (DocumentSnapshot<Map<String, dynamic>> snapshot) {
+      final Map<String, dynamic>? data = snapshot.data();
+      if (!snapshot.exists || data == null) return null;
+      return _normalizeOrder(<String, dynamic>{
+        ...data,
+        'id': snapshot.id,
+      });
     },
   );
 }
 
-// ============================================================
-// CUSTOMER OWN ORDERS STREAM
-// ============================================================
-
-Stream<List<Map<String, dynamic>>>
-    customerOrdersStream(
-  String customerId,
-) {
-  final String cleanCustomerId =
-      customerId.trim();
-
+Stream<List<Map<String, dynamic>>> customerOrdersStream(String customerId) {
+  final String cleanCustomerId = customerId.trim();
   if (cleanCustomerId.isEmpty) {
     return Stream<List<Map<String, dynamic>>>.value(
       <Map<String, dynamic>>[],
@@ -1090,87 +697,25 @@ Stream<List<Map<String, dynamic>>>
   }
 
   return _ordersCollection
-      .where(
-        'customerId',
-        isEqualTo: cleanCustomerId,
-      )
+      .where('customerId', isEqualTo: cleanCustomerId)
       .snapshots()
-      .map(
-    (
-      QuerySnapshot<Map<String, dynamic>>
-          snapshot,
-    ) {
-      final List<Map<String, dynamic>> orders =
-          snapshot.docs.map<
-              Map<String, dynamic>>(
-        (
-          QueryDocumentSnapshot<
-                  Map<String, dynamic>>
-              document,
-        ) {
-          return _normalizeOrder(
-            <String, dynamic>{
-              ...document.data(),
-              'id': document.id,
-            },
-          );
-        },
-      ).toList();
-
-      orders.sort(
-        (
-          Map<String, dynamic> first,
-          Map<String, dynamic> second,
-        ) {
-          final DateTime? firstDate =
-              DateTime.tryParse(
-            first['orderDateTime']
-                    ?.toString() ??
-                '',
-          );
-
-          final DateTime? secondDate =
-              DateTime.tryParse(
-            second['orderDateTime']
-                    ?.toString() ??
-                '',
-          );
-
-          if (firstDate == null &&
-              secondDate == null) {
-            return 0;
-          }
-
-          if (firstDate == null) {
-            return 1;
-          }
-
-          if (secondDate == null) {
-            return -1;
-          }
-
-          return secondDate.compareTo(
-            firstDate,
-          );
-        },
-      );
-
-      return orders;
-    },
-  );
+      .map((QuerySnapshot<Map<String, dynamic>> snapshot) {
+    final List<Map<String, dynamic>> orders = snapshot.docs
+        .map<Map<String, dynamic>>(
+          (QueryDocumentSnapshot<Map<String, dynamic>> document) =>
+              _normalizeOrder(<String, dynamic>{
+            ...document.data(),
+            'id': document.id,
+          }),
+        )
+        .toList();
+    orders.sort(_orderSort);
+    return orders;
+  });
 }
 
-// ============================================================
-// SELLER OWN ORDERS STREAM
-// ============================================================
-
-Stream<List<Map<String, dynamic>>>
-    sellerOrdersStream(
-  String sellerId,
-) {
-  final String cleanSellerId =
-      sellerId.trim();
-
+Stream<List<Map<String, dynamic>>> sellerOrdersStream(String sellerId) {
+  final String cleanSellerId = sellerId.trim();
   if (cleanSellerId.isEmpty) {
     return Stream<List<Map<String, dynamic>>>.value(
       <Map<String, dynamic>>[],
@@ -1178,84 +723,70 @@ Stream<List<Map<String, dynamic>>>
   }
 
   return _ordersCollection
-      .where(
-        'sellerIds',
-        arrayContains: cleanSellerId,
-      )
+      .where('sellerIds', arrayContains: cleanSellerId)
       .snapshots()
-      .map(
-    (
-      QuerySnapshot<Map<String, dynamic>>
-          snapshot,
-    ) {
-      final List<Map<String, dynamic>> orders =
-          snapshot.docs.map<
-              Map<String, dynamic>>(
-        (
-          QueryDocumentSnapshot<
-                  Map<String, dynamic>>
-              document,
-        ) {
-          return _normalizeOrder(
-            <String, dynamic>{
+      .map((QuerySnapshot<Map<String, dynamic>> snapshot) {
+    final List<Map<String, dynamic>> orders = snapshot.docs
+        .map<Map<String, dynamic>>(
+          (QueryDocumentSnapshot<Map<String, dynamic>> document) =>
+              _normalizeOrder(<String, dynamic>{
+            ...document.data(),
+            'id': document.id,
+          }),
+        )
+        .toList();
+    orders.sort(_orderSort);
+    return orders;
+  });
+}
+
+// Admin must read ALL orders directly from Firestore, not customer orderHistory.
+Stream<List<Map<String, dynamic>>> adminOrdersStream() {
+  return _ordersCollection.snapshots().map(
+    (QuerySnapshot<Map<String, dynamic>> snapshot) {
+      final List<Map<String, dynamic>> orders = snapshot.docs
+          .map<Map<String, dynamic>>(
+            (QueryDocumentSnapshot<Map<String, dynamic>> document) =>
+                _normalizeOrder(<String, dynamic>{
               ...document.data(),
               'id': document.id,
-            },
-          );
-        },
-      ).toList();
-
-      orders.sort(
-        (
-          Map<String, dynamic> first,
-          Map<String, dynamic> second,
-        ) {
-          final DateTime? firstDate =
-              DateTime.tryParse(
-            first['orderDateTime']
-                    ?.toString() ??
-                '',
-          );
-
-          final DateTime? secondDate =
-              DateTime.tryParse(
-            second['orderDateTime']
-                    ?.toString() ??
-                '',
-          );
-
-          if (firstDate == null &&
-              secondDate == null) {
-            return 0;
-          }
-
-          if (firstDate == null) {
-            return 1;
-          }
-
-          if (secondDate == null) {
-            return -1;
-          }
-
-          return secondDate.compareTo(
-            firstDate,
-          );
-        },
-      );
-
+            }),
+          )
+          .toList();
+      orders.sort(_orderSort);
       return orders;
     },
   );
 }
 
-// ============================================================
-// DISPOSE FIRESTORE LISTENER
-// ============================================================
-
 Future<void> disposeOrderListener() async {
   await _ordersSubscription?.cancel();
-
   _ordersSubscription = null;
-
   _ordersListenerStarted = false;
+  _ordersListenerCustomerId = '';
+}
+
+Future<void> recoverCustomerOrder({
+  required String orderId,
+  required String phone,
+}) async {
+  final String cleanOrderId = orderId.trim().toUpperCase();
+  final String recoveryProof = normalizeOrderRecoveryPhone(phone);
+
+  if (cleanOrderId.isEmpty) {
+    throw ArgumentError('Please enter the Order ID.');
+  }
+  if (recoveryProof.length < 6) {
+    throw ArgumentError('Please enter the phone number used for this order.');
+  }
+
+  final String customerId = await getOrCreateCustomerId();
+
+  await _ordersCollection.doc(cleanOrderId).update(
+    <String, dynamic>{
+      'customerId': customerId,
+      'recoveryProof': recoveryProof,
+      'recoveredAt': FieldValue.serverTimestamp(),
+    },
+  );
 }

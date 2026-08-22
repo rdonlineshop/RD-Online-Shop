@@ -32,17 +32,35 @@ class _OrderHistoryPageState
   // =========================================================
 
   Future<void> _loadCustomerId() async {
-    final String id =
-        await getOrCreateCustomerId();
+    try {
+      final String id = await getOrCreateCustomerId();
 
-    if (!mounted) {
-      return;
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        customerId = id;
+        isLoadingCustomer = false;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        customerId = '';
+        isLoadingCustomer = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not start customer session: $error',
+          ),
+        ),
+      );
     }
-
-    setState(() {
-      customerId = id;
-      isLoadingCustomer = false;
-    });
   }
 
   // =========================================================
@@ -2184,6 +2202,192 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
+  // RECOVER ORDER ON A NEW DEVICE
+  // =========================================================
+
+  Future<void> _showRecoverOrderDialog() async {
+    final TextEditingController orderIdController =
+        TextEditingController();
+
+    final TextEditingController phoneController =
+        TextEditingController();
+
+    bool isRecovering = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext context,
+            void Function(void Function()) setDialogState,
+          ) {
+            Future<void> recover() async {
+              if (isRecovering) {
+                return;
+              }
+
+              final String orderId =
+                  orderIdController.text.trim();
+
+              final String phone =
+                  phoneController.text.trim();
+
+              if (orderId.isEmpty || phone.isEmpty) {
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Please enter the Order ID and phone number.',
+                    ),
+                  ),
+                );
+
+                return;
+              }
+
+              setDialogState(() {
+                isRecovering = true;
+              });
+
+              try {
+                await recoverCustomerOrder(
+                  orderId: orderId,
+                  phone: phone,
+                );
+
+                if (!mounted || !dialogContext.mounted) {
+                  return;
+                }
+
+                Navigator.pop(dialogContext);
+
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Order recovered successfully.',
+                    ),
+                  ),
+                );
+              } on FirebaseException catch (error) {
+                if (!mounted) {
+                  return;
+                }
+
+                final String message =
+                    error.code == 'not-found'
+                        ? 'Order not found. Please check the Order ID.'
+                        : 'Order ID or phone number did not match.';
+
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  SnackBar(
+                    content: Text(message),
+                  ),
+                );
+              } on ArgumentError catch (error) {
+                if (!mounted) {
+                  return;
+                }
+
+                ScaffoldMessenger.of(this.context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      error.message?.toString() ??
+                          'Please check the entered details.',
+                    ),
+                  ),
+                );
+              } finally {
+                if (dialogContext.mounted) {
+                  setDialogState(() {
+                    isRecovering = false;
+                  });
+                }
+              }
+            }
+
+            return AlertDialog(
+              title: const Text(
+                'Recover My Order',
+              ),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    const Text(
+                      'Enter the Order ID and the phone number used when placing the order.',
+                    ),
+
+                    const SizedBox(height: 16),
+
+                    TextField(
+                      controller: orderIdController,
+                      enabled: !isRecovering,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: const InputDecoration(
+                        labelText: 'Order ID',
+                        hintText: 'RD123456789',
+                        prefixIcon: Icon(Icons.receipt_long),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+
+                    const SizedBox(height: 12),
+
+                    TextField(
+                      controller: phoneController,
+                      enabled: !isRecovering,
+                      keyboardType: TextInputType.phone,
+                      onSubmitted: (_) {
+                        recover();
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Phone Number',
+                        prefixIcon: Icon(Icons.phone),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: isRecovering
+                      ? null
+                      : () {
+                          Navigator.pop(dialogContext);
+                        },
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  onPressed: isRecovering ? null : recover,
+                  icon: isRecovering
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(Icons.restore),
+                  label: Text(
+                    isRecovering ? 'Checking...' : 'Recover Order',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    orderIdController.dispose();
+    phoneController.dispose();
+  }
+
+  // =========================================================
   // EMPTY PAGE
   // =========================================================
 
@@ -2243,6 +2447,14 @@ class _OrderHistoryPageState
           ),
         ),
         centerTitle: true,
+      ),
+
+      floatingActionButton: FloatingActionButton.extended(
+        onPressed: _showRecoverOrderDialog,
+        icon: const Icon(Icons.restore),
+        label: const Text(
+          'Recover Order',
+        ),
       ),
 
       body: isLoadingCustomer
