@@ -2135,6 +2135,201 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
   }
 
   // =========================================================
+  // SELLER SETTLEMENT
+  // =========================================================
+
+  Map<String, dynamic> _currentSellerSettlement(
+    Map<String, dynamic> order,
+  ) {
+    final String sellerId =
+        FirebaseAuth.instance.currentUser?.uid ?? '';
+
+    if (sellerId.trim().isEmpty) {
+      return <String, dynamic>{};
+    }
+
+    final dynamic rawSettlements = order['sellerSettlements'];
+
+    if (rawSettlements is Map) {
+      final dynamic rawSettlement = rawSettlements[sellerId];
+
+      if (rawSettlement is Map) {
+        return rawSettlement.map<String, dynamic>(
+          (dynamic key, dynamic value) =>
+              MapEntry<String, dynamic>(
+            key.toString(),
+            value,
+          ),
+        );
+      }
+    }
+
+    return <String, dynamic>{};
+  }
+
+  String _formatSettlementDate(dynamic value) {
+    if (value == null) {
+      return '';
+    }
+
+    DateTime? dateTime;
+
+    if (value is Timestamp) {
+      dateTime = value.toDate();
+    } else if (value is DateTime) {
+      dateTime = value;
+    } else {
+      final String text = value.toString().trim();
+
+      if (text.isNotEmpty) {
+        dateTime = DateTime.tryParse(text);
+      }
+    }
+
+    if (dateTime == null) {
+      return value.toString().trim();
+    }
+
+    final DateTime local = dateTime.toLocal();
+    final String day = local.day.toString().padLeft(2, '0');
+    final String month = local.month.toString().padLeft(2, '0');
+    final String year = local.year.toString();
+    final String hour = local.hour.toString().padLeft(2, '0');
+    final String minute = local.minute.toString().padLeft(2, '0');
+
+    return '$day/$month/$year $hour:$minute';
+  }
+
+  Color _settlementStatusColor(String status) {
+    switch (status) {
+      case 'Paid':
+        return Colors.green;
+      case 'Ready to Pay':
+        return Colors.blue;
+      case 'On Hold':
+        return Colors.redAccent;
+      case 'Pending':
+      default:
+        return Colors.orange;
+    }
+  }
+
+  Widget _sellerSettlementCard(
+    Map<String, dynamic> order,
+  ) {
+    final Map<String, dynamic> settlement =
+        _currentSellerSettlement(order);
+
+    final String status =
+        settlement['status']?.toString().trim().isNotEmpty == true
+            ? settlement['status'].toString().trim()
+            : 'Pending';
+
+    final String amount =
+        settlement['amount']?.toString().trim() ?? '';
+
+    final String paymentMethod =
+        settlement['paymentMethod']?.toString().trim() ?? '';
+
+    final String referenceId =
+        settlement['referenceId']?.toString().trim() ?? '';
+
+    final String note =
+        settlement['note']?.toString().trim() ?? '';
+
+    final dynamic dateValue =
+        settlement['paidAt'] ??
+        settlement['updatedAt'] ??
+        settlement['settledAt'] ??
+        settlement['createdAt'];
+
+    final String dateText = _formatSettlementDate(dateValue);
+    final Color statusColor = _settlementStatusColor(status);
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const Icon(
+                  Icons.account_balance_wallet_outlined,
+                  color: Colors.green,
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'RD Seller Settlement',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 10,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: statusColor.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(20),
+                    border: Border.all(color: statusColor),
+                  ),
+                  child: Text(
+                    status,
+                    style: TextStyle(
+                      color: statusColor,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            if (amount.isNotEmpty)
+              Text(
+                'Settlement Amount: Rs. $amount',
+                style: const TextStyle(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            if (paymentMethod.isNotEmpty)
+              Text('RD Paid Via: $paymentMethod'),
+            if (referenceId.isNotEmpty)
+              SelectableText(
+                'Transaction / Reference ID: $referenceId',
+              ),
+            if (dateText.isNotEmpty)
+              Text('Settlement Date: $dateText'),
+            if (note.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 6),
+              Text(
+                'Admin Note: $note',
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                ),
+              ),
+            ],
+            if (settlement.isEmpty) ...<Widget>[
+              const SizedBox(height: 4),
+              const Text(
+                'RD has not completed this seller settlement yet.',
+                style: TextStyle(
+                  color: Colors.orange,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================================================
   // ORDER CARD
   // =========================================================
 
@@ -2173,6 +2368,32 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
         order['payment']
                 ?.toString()
                 .trim() ??
+            '';
+
+    final String paymentStatus =
+        order['paymentStatus']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String paymentDestination =
+        (order['paymentReceiverName'] ??
+                order['paymentDestination'] ??
+                order['paymentReceiverId'])
+            ?.toString()
+            .trim() ??
+            '';
+
+    final String paymentReference =
+        (order['paymentReferenceId'] ??
+                order['paymentTransactionCode'] ??
+                order['paymentTransactionUuid'] ??
+                order['transactionId'] ??
+                order['transactionUuid'] ??
+                order['paymentReference'] ??
+                order['referenceId'])
+            ?.toString()
+            .trim() ??
             '';
 
     return Card(
@@ -2297,6 +2518,27 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                 'Payment: $payment',
               ),
 
+            if (paymentStatus.isNotEmpty)
+              Text(
+                'Payment Status: $paymentStatus',
+                style: TextStyle(
+                  color: paymentStatus.toLowerCase() == 'paid'
+                      ? Colors.green
+                      : null,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+
+            if (paymentDestination.isNotEmpty)
+              Text(
+                'Payment Destination: $paymentDestination',
+              ),
+
+            if (paymentReference.isNotEmpty)
+              Text(
+                'Transaction / Reference ID: $paymentReference',
+              ),
+
             const SizedBox(
               height:
                   12,
@@ -2347,6 +2589,15 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
 
             _productDetails(
               order['items'],
+            ),
+
+            const SizedBox(
+              height:
+                  16,
+            ),
+
+            _sellerSettlementCard(
+              order,
             ),
 
             const SizedBox(

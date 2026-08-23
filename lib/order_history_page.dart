@@ -4,6 +4,7 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'order_data.dart';
+import 'order_details_page.dart';
 import 'tracking/order_tracking_page.dart';
 
 class OrderHistoryPage extends StatefulWidget {
@@ -1788,6 +1789,23 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
+  // ORDER DETAILS
+  // =========================================================
+
+  void _openOrderDetails(
+    Map<String, dynamic> order,
+  ) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => OrderDetailsPage(
+          order: Map<String, dynamic>.from(order),
+        ),
+      ),
+    );
+  }
+
+  // =========================================================
   // TRACK ORDER
   // =========================================================
 
@@ -1922,14 +1940,22 @@ class _OrderHistoryPageState
           ),
         ),
 
-        title: Text(
-          'Order #$orderId',
-          maxLines: 1,
-          overflow:
-              TextOverflow.ellipsis,
-          style: const TextStyle(
-            fontWeight:
-                FontWeight.bold,
+        title: InkWell(
+          onTap: () {
+            _openOrderDetails(order);
+          },
+          child: Padding(
+            padding: const EdgeInsets.symmetric(
+              vertical: 8,
+            ),
+            child: Text(
+              'Order #$orderId',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
           ),
         ),
 
@@ -2027,6 +2053,61 @@ class _OrderHistoryPageState
             order['payment']
                     ?.toString() ??
                 '-',
+          ),
+
+          _detailRow(
+            'Payment Status',
+            order['paymentStatus']
+                    ?.toString()
+                    .trim()
+                    .isNotEmpty ==
+                true
+                ? order['paymentStatus']
+                    .toString()
+                    .trim()
+                : 'Not available',
+            valueColor:
+                order['paymentStatus']
+                            ?.toString()
+                            .trim()
+                            .toLowerCase() ==
+                        'paid'
+                    ? Colors.green
+                    : null,
+          ),
+
+          _detailRow(
+            'Payment Destination',
+            order['paymentReceiverName']
+                        ?.toString()
+                        .trim()
+                        .isNotEmpty ==
+                    true
+                ? order['paymentReceiverName']
+                    .toString()
+                    .trim()
+                : 'Not available',
+          ),
+
+          _detailRow(
+            'Transaction / Ref ID',
+            order['paymentReferenceId']
+                        ?.toString()
+                        .trim()
+                        .isNotEmpty ==
+                    true
+                ? order['paymentReferenceId']
+                    .toString()
+                    .trim()
+                : (order['paymentTransactionCode']
+                            ?.toString()
+                            .trim()
+                            .isNotEmpty ==
+                        true
+                    ? order['paymentTransactionCode']
+                        .toString()
+                        .trim()
+                    : 'Not available'),
           ),
 
           const Divider(),
@@ -2129,6 +2210,33 @@ class _OrderHistoryPageState
 
           const SizedBox(
             height: 12,
+          ),
+
+          // ==============================================
+          // VIEW ORDER DETAILS
+          // ==============================================
+
+          SizedBox(
+            width: double.infinity,
+            height: 52,
+            child: OutlinedButton.icon(
+              onPressed: () {
+                _openOrderDetails(order);
+              },
+              icon: const Icon(
+                Icons.receipt_long,
+              ),
+              label: const Text(
+                'View Order Details',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+          ),
+
+          const SizedBox(
+            height: 10,
           ),
 
           // ==============================================

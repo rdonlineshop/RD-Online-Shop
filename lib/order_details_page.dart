@@ -644,7 +644,42 @@ class _OrderDetailsPageState
               Icons.credit_card,
               'Payment Method',
               (order['payment'] ??
+                      order['paymentMethod'] ??
                       'Cash on Delivery')
+                  .toString(),
+            ),
+
+            _infoCard(
+              Icons.verified,
+              'Payment Status',
+              (order['paymentStatus'] ??
+                      ((order['payment'] ?? '').toString() ==
+                              'Cash on Delivery'
+                          ? 'Pending'
+                          : 'Paid'))
+                  .toString(),
+            ),
+
+            _infoCard(
+              Icons.account_balance_wallet,
+              'Payment Destination',
+              (order['paymentDestinationLabel'] ??
+                      order['paymentDestination'] ??
+                      'RD Online Shop')
+                  .toString(),
+            ),
+
+            _infoCard(
+              Icons.receipt_long,
+              'Transaction / Reference ID',
+              (order['paymentReferenceId'] ??
+                      order['paymentTransactionCode'] ??
+                      order['paymentTransactionUuid'] ??
+                      order['transactionId'] ??
+                      order['transactionUuid'] ??
+                      order['paymentReference'] ??
+                      order['referenceId'] ??
+                      'Not available')
                   .toString(),
             ),
 

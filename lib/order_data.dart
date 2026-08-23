@@ -759,6 +759,218 @@ Stream<List<Map<String, dynamic>>> adminOrdersStream() {
   );
 }
 
+
+/// Saves or updates one seller's settlement record inside an order.
+///
+/// Settlement data is stored seller-wise in:
+/// orders/{orderId}.sellerSettlements.{sellerId}
+///
+/// This supports multi-seller orders because every seller has an independent
+/// settlement status, amount, method, reference ID, and timestamps.
+Future<void> updateSellerSettlement({
+  required String orderId,
+  required String sellerId,
+  required String sellerName,
+  required double amount,
+  required String status,
+  double grossAmount = 0,
+  double commissionPercent = 0,
+  double commissionAmount = 0,
+  double sellerPayable = 0,
+  String paymentMethod = '',
+  String referenceId = '',
+  String note = '',
+}) async {
+  final String cleanOrderId = orderId.trim();
+  final String cleanSellerId = sellerId.trim();
+  final String cleanSellerName = sellerName.trim();
+  final String cleanStatus = status.trim();
+  final String cleanPaymentMethod = paymentMethod.trim();
+  final String cleanReferenceId = referenceId.trim();
+  final String cleanNote = note.trim();
+
+  if (cleanOrderId.isEmpty) {
+    throw ArgumentError('Order ID cannot be empty.');
+  }
+
+  if (cleanSellerId.isEmpty) {
+    throw ArgumentError('Seller ID cannot be empty.');
+  }
+
+  if (amount < 0) {
+    throw ArgumentError('Settlement amount cannot be negative.');
+  }
+
+  if (grossAmount < 0 ||
+      commissionPercent < 0 ||
+      commissionPercent > 100 ||
+      commissionAmount < 0 ||
+      sellerPayable < 0) {
+    throw ArgumentError('Invalid seller commission values.');
+  }
+
+  const List<String> allowedStatuses = <String>[
+    'Pending',
+    'Ready to Pay',
+    'Paid',
+    'On Hold',
+  ];
+
+  if (!allowedStatuses.contains(cleanStatus)) {
+    throw ArgumentError('Invalid seller settlement status.');
+  }
+
+  final String now = DateTime.now().toIso8601String();
+  final User? adminUser = FirebaseAuth.instance.currentUser;
+
+  final Map<String, dynamic> settlement = <String, dynamic>{
+    'sellerId': cleanSellerId,
+    'sellerName': cleanSellerName,
+    'amount': amount,
+    'grossAmount': grossAmount,
+    'commissionPercent': commissionPercent,
+    'commissionAmount': commissionAmount,
+    'sellerPayable': sellerPayable,
+    'status': cleanStatus,
+    'paymentMethod': cleanPaymentMethod,
+    'referenceId': cleanReferenceId,
+    'note': cleanNote,
+    'updatedAt': now,
+    'updatedBy': adminUser?.uid ?? '',
+  };
+
+  if (cleanStatus == 'Paid') {
+    if (cleanPaymentMethod.isEmpty) {
+      throw ArgumentError(
+        'Payment method is required before marking seller as Paid.',
+      );
+    }
+
+    if (cleanReferenceId.isEmpty) {
+      throw ArgumentError(
+        'Transaction / Reference ID is required before marking seller as Paid.',
+      );
+    }
+
+    settlement['paidAt'] = now;
+    settlement['paidBy'] = adminUser?.uid ?? '';
+  }
+
+  final DocumentReference<Map<String, dynamic>> orderRef =
+      _ordersCollection.doc(cleanOrderId);
+
+  await FirebaseFirestore.instance.runTransaction(
+    (Transaction transaction) async {
+      final DocumentSnapshot<Map<String, dynamic>> snapshot =
+          await transaction.get(orderRef);
+
+      if (!snapshot.exists) {
+        throw StateError('Order was not found.');
+      }
+
+      final Map<String, dynamic> orderData =
+          snapshot.data() ?? <String, dynamic>{};
+
+      final Map<String, dynamic> sellerSettlements =
+          <String, dynamic>{};
+
+      final dynamic existingSettlements =
+          orderData['sellerSettlements'];
+
+      if (existingSettlements is Map) {
+        existingSettlements.forEach(
+          (dynamic key, dynamic value) {
+            sellerSettlements[key.toString()] = _safeValue(value);
+          },
+        );
+      }
+
+      final dynamic existingSellerSettlement =
+          sellerSettlements[cleanSellerId];
+
+      if (existingSellerSettlement is Map) {
+        final String createdAt =
+            existingSellerSettlement['createdAt']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        if (createdAt.isNotEmpty) {
+          settlement['createdAt'] = createdAt;
+        }
+      }
+
+      settlement['createdAt'] ??= now;
+      sellerSettlements[cleanSellerId] = settlement;
+
+      bool allPaid = sellerSettlements.isNotEmpty;
+
+      for (final dynamic value in sellerSettlements.values) {
+        if (value is! Map ||
+            value['status']?.toString().trim() != 'Paid') {
+          allPaid = false;
+          break;
+        }
+      }
+
+      transaction.set(
+        orderRef,
+        <String, dynamic>{
+          'sellerSettlements': sellerSettlements,
+          'sellerSettlementUpdatedAt': now,
+          'sellerSettlementAllPaid': allPaid,
+          'updatedAt': now,
+        },
+        SetOptions(merge: true),
+      );
+    },
+  );
+
+  final int index = orderHistory.indexWhere(
+    (Map<String, dynamic> order) =>
+        order['id']?.toString() == cleanOrderId,
+  );
+
+  if (index >= 0) {
+    final Map<String, dynamic> localSettlements =
+        <String, dynamic>{};
+
+    final dynamic existing =
+        orderHistory[index]['sellerSettlements'];
+
+    if (existing is Map) {
+      existing.forEach(
+        (dynamic key, dynamic value) {
+          localSettlements[key.toString()] = _safeValue(value);
+        },
+      );
+    }
+
+    localSettlements[cleanSellerId] =
+        _safeMap(settlement);
+
+    orderHistory[index]['sellerSettlements'] =
+        localSettlements;
+    orderHistory[index]['sellerSettlementUpdatedAt'] =
+        now;
+
+    bool allPaid = localSettlements.isNotEmpty;
+    for (final dynamic value in localSettlements.values) {
+      if (value is! Map ||
+          value['status']?.toString().trim() != 'Paid') {
+        allPaid = false;
+        break;
+      }
+    }
+
+    orderHistory[index]['sellerSettlementAllPaid'] =
+        allPaid;
+    orderHistory[index]['updatedAt'] = now;
+
+    await saveOrders();
+  }
+}
+
 Future<void> disposeOrderListener() async {
   await _ordersSubscription?.cancel();
   _ordersSubscription = null;

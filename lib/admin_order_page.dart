@@ -103,6 +103,732 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
     }
   }
 
+
+  double _parseMoney(dynamic value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    final String cleaned = value
+            ?.toString()
+            .replaceAll('Rs.', '')
+            .replaceAll('Rs', '')
+            .replaceAll(',', '')
+            .trim() ??
+        '';
+
+    return double.tryParse(cleaned) ?? 0;
+  }
+
+  Map<String, double> _sellerOrderAmounts(
+    Map<String, dynamic> order,
+  ) {
+    final Map<String, double> totals = <String, double>{};
+    final dynamic rawItems = order['items'];
+
+    if (rawItems is! List) {
+      return totals;
+    }
+
+    for (final dynamic rawItem in rawItems) {
+      if (rawItem is! Map) {
+        continue;
+      }
+
+      final String sellerId =
+          rawItem['sellerId']?.toString().trim() ?? '';
+
+      if (sellerId.isEmpty) {
+        continue;
+      }
+
+      final double price = _parseMoney(rawItem['price']);
+      final int quantity =
+          int.tryParse(rawItem['quantity']?.toString() ?? '1') ?? 1;
+
+      totals[sellerId] =
+          (totals[sellerId] ?? 0) + (price * quantity);
+    }
+
+    return totals;
+  }
+
+  Map<String, dynamic> _sellerSettlement(
+    Map<String, dynamic> order,
+    String sellerId,
+  ) {
+    final dynamic rawSettlements =
+        order['sellerSettlements'];
+
+    if (rawSettlements is Map) {
+      final dynamic raw = rawSettlements[sellerId];
+
+      if (raw is Map) {
+        return raw.map<String, dynamic>(
+          (dynamic key, dynamic value) =>
+              MapEntry<String, dynamic>(
+            key.toString(),
+            value,
+          ),
+        );
+      }
+    }
+
+    return <String, dynamic>{};
+  }
+
+  Future<void> _openSellerSettlement(
+    Map<String, dynamic> order,
+  ) async {
+    final String orderId =
+        order['id']?.toString().trim() ?? '';
+
+    if (orderId.isEmpty) {
+      return;
+    }
+
+    final Map<String, double> sellerAmounts =
+        _sellerOrderAmounts(order);
+
+    if (sellerAmounts.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Seller information is missing from this order.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final List<Map<String, dynamic>> sellers =
+        <Map<String, dynamic>>[];
+
+    for (final MapEntry<String, double> entry
+        in sellerAmounts.entries) {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> sellerDoc =
+            await FirebaseFirestore.instance
+                .collection('sellers')
+                .doc(entry.key)
+                .get();
+
+        sellers.add(
+          <String, dynamic>{
+            'sellerId': entry.key,
+            'grossAmount': entry.value,
+            ...?sellerDoc.data(),
+          },
+        );
+      } catch (_) {
+        sellers.add(
+          <String, dynamic>{
+            'sellerId': entry.key,
+            'grossAmount': entry.value,
+          },
+        );
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          child: SizedBox(
+            height: MediaQuery.of(sheetContext).size.height * 0.88,
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(
+                16,
+                4,
+                16,
+                24,
+              ),
+              children: <Widget>[
+                const Text(
+                  'Seller Settlement',
+                  style: TextStyle(
+                    fontSize: 22,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                Text(
+                  'Order ID: $orderId',
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'This records RD → Seller payout. It does not automatically transfer money through eSewa, Khalti, or a bank.',
+                  style: TextStyle(
+                    color: Colors.orange,
+                  ),
+                ),
+                const SizedBox(height: 16),
+                ...sellers.map<Widget>(
+                  (Map<String, dynamic> seller) {
+                    return _sellerSettlementCard(
+                      sheetContext: sheetContext,
+                      order: order,
+                      seller: seller,
+                    );
+                  },
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _sellerSettlementCard({
+    required BuildContext sheetContext,
+    required Map<String, dynamic> order,
+    required Map<String, dynamic> seller,
+  }) {
+    final String sellerId =
+        seller['sellerId']?.toString().trim() ?? '';
+
+    final String shopName =
+        seller['shopName']?.toString().trim().isNotEmpty == true
+            ? seller['shopName'].toString().trim()
+            : 'Seller';
+
+    final double grossAmount =
+        _parseMoney(seller['grossAmount']);
+
+    final double commissionPercent =
+        _parseMoney(seller['commissionPercent']);
+    final double commissionAmount =
+        grossAmount * commissionPercent / 100;
+    final double sellerPayable =
+        grossAmount - commissionAmount;
+
+    final bool paymentVerified =
+        seller['paymentVerified'] == true;
+
+    final String esewa =
+        seller['esewaNumber']?.toString().trim() ?? '';
+    final String khalti =
+        seller['khaltiNumber']?.toString().trim() ?? '';
+    final String bankName =
+        seller['bankName']?.toString().trim() ?? '';
+    final String accountHolder =
+        seller['bankAccountHolder']?.toString().trim() ?? '';
+    final String accountNumber =
+        seller['bankAccountNumber']?.toString().trim() ?? '';
+    final String qrUrl =
+        seller['paymentQrUrl']?.toString().trim() ?? '';
+
+    final Map<String, dynamic> settlement =
+        _sellerSettlement(order, sellerId);
+
+    final String settlementStatus =
+        settlement['status']?.toString().trim().isNotEmpty == true
+            ? settlement['status'].toString().trim()
+            : 'Pending';
+
+    final String reference =
+        settlement['referenceId']?.toString().trim() ?? '';
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 14),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    shopName,
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Chip(
+                  label: Text(settlementStatus),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Seller ID: $sellerId',
+              style: TextStyle(
+                fontSize: 11,
+                color: Colors.grey.shade600,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Seller product total: Rs. ${grossAmount.toStringAsFixed(0)}',
+              style: const TextStyle(
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            Text(
+              'RD Commission (${commissionPercent.toStringAsFixed(commissionPercent == commissionPercent.roundToDouble() ? 0 : 2)}%): '
+              'Rs. ${commissionAmount.toStringAsFixed(0)}',
+              style: const TextStyle(
+                color: Colors.deepOrange,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+            Text(
+              'Seller Payable: Rs. ${sellerPayable.toStringAsFixed(0)}',
+              style: const TextStyle(
+                color: Colors.green,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 8),
+            Row(
+              children: <Widget>[
+                Icon(
+                  paymentVerified
+                      ? Icons.verified
+                      : Icons.gpp_maybe_outlined,
+                  color: paymentVerified
+                      ? Colors.green
+                      : Colors.orange,
+                  size: 20,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    paymentVerified
+                        ? 'Seller payment details verified'
+                        : 'Seller payment details not verified',
+                  ),
+                ),
+              ],
+            ),
+            if (esewa.isNotEmpty)
+              Text('eSewa: $esewa'),
+            if (khalti.isNotEmpty)
+              Text('Khalti: $khalti'),
+            if (bankName.isNotEmpty)
+              Text('Bank: $bankName'),
+            if (accountHolder.isNotEmpty)
+              Text('Account Holder: $accountHolder'),
+            if (accountNumber.isNotEmpty)
+              Text('Account Number: $accountNumber'),
+            if (qrUrl.startsWith('http://') ||
+                qrUrl.startsWith('https://')) ...<Widget>[
+              const SizedBox(height: 10),
+              Center(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(10),
+                  child: Image.network(
+                    qrUrl,
+                    height: 150,
+                    fit: BoxFit.contain,
+                    errorBuilder: (
+                      BuildContext context,
+                      Object error,
+                      StackTrace? stackTrace,
+                    ) {
+                      return const SizedBox.shrink();
+                    },
+                  ),
+                ),
+              ),
+            ],
+            if (reference.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 8),
+              Text(
+                'Reference ID: $reference',
+                style: const TextStyle(
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+            const SizedBox(height: 12),
+            SizedBox(
+              width: double.infinity,
+              child: FilledButton.icon(
+                onPressed: () {
+                  _showSettlementEditor(
+                    sheetContext: sheetContext,
+                    order: order,
+                    seller: seller,
+                  );
+                },
+                icon: const Icon(Icons.payments_outlined),
+                label: Text(
+                  settlementStatus == 'Paid'
+                      ? 'View / Update Settlement'
+                      : 'Settle Seller',
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showSettlementEditor({
+    required BuildContext sheetContext,
+    required Map<String, dynamic> order,
+    required Map<String, dynamic> seller,
+  }) async {
+    final String orderId =
+        order['id']?.toString().trim() ?? '';
+    final String sellerId =
+        seller['sellerId']?.toString().trim() ?? '';
+    final String shopName =
+        seller['shopName']?.toString().trim().isNotEmpty == true
+            ? seller['shopName'].toString().trim()
+            : 'Seller';
+
+    final double grossAmount =
+        _parseMoney(seller['grossAmount']);
+
+    final double commissionPercent =
+        _parseMoney(seller['commissionPercent']);
+    final double commissionAmount =
+        grossAmount * commissionPercent / 100;
+    final double sellerPayable =
+        grossAmount - commissionAmount;
+
+    final Map<String, dynamic> existing =
+        _sellerSettlement(order, sellerId);
+
+    final TextEditingController amountController =
+        TextEditingController(
+      text: existing['amount'] != null
+          ? _parseMoney(existing['amount']).toStringAsFixed(0)
+          : sellerPayable.toStringAsFixed(0),
+    );
+
+    final TextEditingController referenceController =
+        TextEditingController(
+      text: existing['referenceId']?.toString() ?? '',
+    );
+
+    final TextEditingController noteController =
+        TextEditingController(
+      text: existing['note']?.toString() ?? '',
+    );
+
+    String status =
+        existing['status']?.toString().trim().isNotEmpty == true
+            ? existing['status'].toString().trim()
+            : 'Ready to Pay';
+
+    String paymentMethod =
+        existing['paymentMethod']?.toString().trim().isNotEmpty == true
+            ? existing['paymentMethod'].toString().trim()
+            : '';
+
+    bool saving = false;
+
+    try {
+      await showDialog<void>(
+        context: sheetContext,
+        barrierDismissible: false,
+        builder: (BuildContext dialogContext) {
+          return StatefulBuilder(
+            builder: (
+              BuildContext context,
+              StateSetter setDialogState,
+            ) {
+              Future<void> save() async {
+                if (saving) {
+                  return;
+                }
+
+                final double? amount =
+                    double.tryParse(
+                  amountController.text.trim(),
+                );
+
+                if (amount == null || amount < 0) {
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Please enter a valid settlement amount.',
+                      ),
+                    ),
+                  );
+                  return;
+                }
+
+                if (status == 'Paid' &&
+                    paymentMethod.trim().isEmpty) {
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Select how RD paid the seller.',
+                      ),
+                    ),
+                  );
+                  return;
+                }
+
+                if (status == 'Paid' &&
+                    referenceController.text.trim().isEmpty) {
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Transaction / Reference ID is required for Paid status.',
+                      ),
+                    ),
+                  );
+                  return;
+                }
+
+                setDialogState(() {
+                  saving = true;
+                });
+
+                try {
+                  await updateSellerSettlement(
+                    orderId: orderId,
+                    sellerId: sellerId,
+                    sellerName: shopName,
+                    amount: amount,
+                    status: status,
+                    grossAmount: grossAmount,
+                    commissionPercent: commissionPercent,
+                    commissionAmount: commissionAmount,
+                    sellerPayable: sellerPayable,
+                    paymentMethod: paymentMethod,
+                    referenceId:
+                        referenceController.text.trim(),
+                    note: noteController.text.trim(),
+                  );
+
+                  if (!mounted || !dialogContext.mounted) {
+                    return;
+                  }
+
+                  Navigator.pop(dialogContext);
+                  Navigator.pop(sheetContext);
+
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        status == 'Paid'
+                            ? '$shopName marked as paid.'
+                            : '$shopName settlement updated.',
+                      ),
+                    ),
+                  );
+                } catch (error) {
+                  if (!mounted) {
+                    return;
+                  }
+
+                  ScaffoldMessenger.of(this.context).showSnackBar(
+                    SnackBar(
+                      content: Text(
+                        'Could not save settlement: '
+                        '${error.toString().replaceFirst('Exception: ', '')}',
+                      ),
+                    ),
+                  );
+
+                  if (dialogContext.mounted) {
+                    setDialogState(() {
+                      saving = false;
+                    });
+                  }
+                }
+              }
+
+              return AlertDialog(
+                title: Text(
+                  'Seller Settlement - $shopName',
+                ),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(10),
+                          border: Border.all(
+                            color: Colors.green.withValues(alpha: 0.35),
+                          ),
+                        ),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: <Widget>[
+                            Text(
+                              'Seller Product Total: Rs. ${grossAmount.toStringAsFixed(0)}',
+                            ),
+                            Text(
+                              'RD Commission (${commissionPercent.toStringAsFixed(commissionPercent == commissionPercent.roundToDouble() ? 0 : 2)}%): '
+                              'Rs. ${commissionAmount.toStringAsFixed(0)}',
+                              style: const TextStyle(
+                                color: Colors.deepOrange,
+                              ),
+                            ),
+                            const Divider(),
+                            Text(
+                              'Seller Payable: Rs. ${sellerPayable.toStringAsFixed(0)}',
+                              style: const TextStyle(
+                                color: Colors.green,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: amountController,
+                        keyboardType:
+                            const TextInputType.numberWithOptions(
+                          decimal: true,
+                        ),
+                        decoration: const InputDecoration(
+                          labelText: 'Settlement Amount',
+                          prefixText: 'Rs. ',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue: status,
+                        decoration: const InputDecoration(
+                          labelText: 'Settlement Status',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: const <String>[
+                          'Pending',
+                          'Ready to Pay',
+                          'Paid',
+                          'On Hold',
+                        ].map(
+                          (String value) {
+                            return DropdownMenuItem<String>(
+                              value: value,
+                              child: Text(value),
+                            );
+                          },
+                        ).toList(),
+                        onChanged: saving
+                            ? null
+                            : (String? value) {
+                                if (value == null) {
+                                  return;
+                                }
+
+                                setDialogState(() {
+                                  status = value;
+                                });
+                              },
+                      ),
+                      const SizedBox(height: 12),
+                      DropdownButtonFormField<String>(
+                        initialValue:
+                            paymentMethod.isEmpty
+                                ? null
+                                : paymentMethod,
+                        decoration: const InputDecoration(
+                          labelText: 'RD Paid Via',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: const <String>[
+                          'eSewa',
+                          'Khalti',
+                          'Bank Transfer',
+                          'Cash',
+                          'Other',
+                        ].map(
+                          (String value) {
+                            return DropdownMenuItem<String>(
+                              value: value,
+                              child: Text(value),
+                            );
+                          },
+                        ).toList(),
+                        onChanged: saving
+                            ? null
+                            : (String? value) {
+                                setDialogState(() {
+                                  paymentMethod = value ?? '';
+                                });
+                              },
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: referenceController,
+                        enabled: !saving,
+                        decoration: const InputDecoration(
+                          labelText:
+                              'Transaction / Reference ID',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      TextField(
+                        controller: noteController,
+                        enabled: !saving,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          labelText: 'Admin Note (optional)',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: <Widget>[
+                  TextButton(
+                    onPressed: saving
+                        ? null
+                        : () {
+                            Navigator.pop(dialogContext);
+                          },
+                    child: const Text('Cancel'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: saving ? null : save,
+                    icon: saving
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Icon(Icons.save),
+                    label: Text(
+                      saving ? 'Saving...' : 'Save Settlement',
+                    ),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      amountController.dispose();
+      referenceController.dispose();
+      noteController.dispose();
+    }
+  }
+
   Widget _statusChip(
     List<Map<String, dynamic>> orders,
     String status,
@@ -401,6 +1127,23 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                             value,
                                           );
                                         },
+                                      ),
+                                      const SizedBox(height: 10),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: OutlinedButton.icon(
+                                          onPressed: () {
+                                            _openSellerSettlement(
+                                              order,
+                                            );
+                                          },
+                                          icon: const Icon(
+                                            Icons.account_balance_wallet_outlined,
+                                          ),
+                                          label: const Text(
+                                            'Seller Settlement',
+                                          ),
+                                        ),
                                       ),
                                       const SizedBox(height: 10),
                                       SizedBox(

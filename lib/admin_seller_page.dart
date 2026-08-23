@@ -391,6 +391,53 @@ class AdminSellerPage extends StatelessWidget {
                   'Description',
                   description,
                 ),
+                _detail(
+                  Icons.percent,
+                  'RD Commission',
+                  '${seller['commissionPercent'] ?? 10}%',
+                ),
+                _detail(
+                  Icons.account_balance_wallet_outlined,
+                  'eSewa',
+                  seller['esewaNumber']?.toString() ?? '',
+                ),
+                _detail(
+                  Icons.account_balance_wallet,
+                  'Khalti',
+                  seller['khaltiNumber']?.toString() ?? '',
+                ),
+                _detail(
+                  Icons.account_balance,
+                  'Bank',
+                  seller['bankName']?.toString() ?? '',
+                ),
+                _detail(
+                  Icons.person_outline,
+                  'Account Holder',
+                  seller['bankAccountHolder']?.toString() ?? '',
+                ),
+                _detail(
+                  Icons.numbers,
+                  'Account Number',
+                  seller['bankAccountNumber']?.toString() ?? '',
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    seller['paymentVerified'] == true
+                        ? Icons.verified
+                        : Icons.gpp_maybe_outlined,
+                    color: seller['paymentVerified'] == true
+                        ? Colors.green
+                        : Colors.orange,
+                  ),
+                  title: const Text('Payment Verification'),
+                  subtitle: Text(
+                    seller['paymentVerified'] == true
+                        ? 'Verified by Admin'
+                        : 'Not verified',
+                  ),
+                ),
                 const SizedBox(height: 8),
                 Row(
                   children: <Widget>[
@@ -711,10 +758,20 @@ class _SellerFormPageState
   late final TextEditingController _email;
   late final TextEditingController _address;
   late final TextEditingController _description;
+  late final TextEditingController _commissionPercent;
+
+  // Seller payout/payment details
+  late final TextEditingController _esewaNumber;
+  late final TextEditingController _khaltiNumber;
+  late final TextEditingController _bankName;
+  late final TextEditingController _bankAccountHolder;
+  late final TextEditingController _bankAccountNumber;
 
   String _photoUrl = '';
+  String _paymentQrUrl = '';
 
   bool _isActive = true;
+  bool _paymentVerified = false;
   bool _uploading = false;
   bool _saving = false;
 
@@ -754,6 +811,31 @@ class _SellerFormPageState
     _description = TextEditingController(
       text: seller?['description']?.toString() ?? '',
     );
+
+    _commissionPercent = TextEditingController(
+      text: seller?['commissionPercent']?.toString() ?? '10',
+    );
+
+    _esewaNumber = TextEditingController(
+      text: seller?['esewaNumber']?.toString() ?? '',
+    );
+    _khaltiNumber = TextEditingController(
+      text: seller?['khaltiNumber']?.toString() ?? '',
+    );
+    _bankName = TextEditingController(
+      text: seller?['bankName']?.toString() ?? '',
+    );
+    _bankAccountHolder = TextEditingController(
+      text: seller?['bankAccountHolder']?.toString() ?? '',
+    );
+    _bankAccountNumber = TextEditingController(
+      text: seller?['bankAccountNumber']?.toString() ?? '',
+    );
+
+    _paymentQrUrl =
+        seller?['paymentQrUrl']?.toString() ?? '';
+    _paymentVerified =
+        seller?['paymentVerified'] == true;
 
     _isActive =
         seller?['isActive'] != false;
@@ -814,6 +896,12 @@ class _SellerFormPageState
     _email.dispose();
     _address.dispose();
     _description.dispose();
+    _commissionPercent.dispose();
+    _esewaNumber.dispose();
+    _khaltiNumber.dispose();
+    _bankName.dispose();
+    _bankAccountHolder.dispose();
+    _bankAccountNumber.dispose();
 
     super.dispose();
   }
@@ -869,6 +957,61 @@ class _SellerFormPageState
     }
 
     return url;
+  }
+
+  Future<void> _choosePaymentQr() async {
+    final XFile? image = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 90,
+    );
+
+    if (image == null) {
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _uploading = true;
+    });
+
+    try {
+      final String url = await _uploadToCloudinary(image);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _paymentQrUrl = url;
+        // Any changed payout detail must be re-verified by Admin.
+        _paymentVerified = false;
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Payment QR uploaded. Verify details before enabling direct payment.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Payment QR upload failed: $error'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploading = false;
+        });
+      }
+    }
   }
 
   Future<void> _choosePhoto() async {
@@ -940,6 +1083,21 @@ class _SellerFormPageState
         _uploading) {
       return;
     }
+    final double? commissionPercent =
+        double.tryParse(_commissionPercent.text.trim());
+
+    if (commissionPercent == null ||
+        commissionPercent < 0 ||
+        commissionPercent > 100) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'RD Commission must be between 0 and 100.',
+          ),
+        ),
+      );
+      return;
+    }
 
     setState(() {
       _saving = true;
@@ -960,6 +1118,22 @@ class _SellerFormPageState
             _address.text.trim(),
         'description':
             _description.text.trim(),
+        'commissionPercent': commissionPercent,
+
+        // Seller payout/payment profile
+        'esewaNumber': _esewaNumber.text.trim(),
+        'khaltiNumber': _khaltiNumber.text.trim(),
+        'bankName': _bankName.text.trim(),
+        'bankAccountHolder':
+            _bankAccountHolder.text.trim(),
+        'bankAccountNumber':
+            _bankAccountNumber.text.trim(),
+        'paymentQrUrl': _paymentQrUrl,
+        'paymentVerified': _paymentVerified,
+        'paymentVerifiedAt': _paymentVerified
+            ? FieldValue.serverTimestamp()
+            : null,
+
         'photoUrl': _photoUrl,
         'shopPhotoUrl': _photoUrl,
         'shopImageUrl': _photoUrl,
@@ -1151,6 +1325,111 @@ class _SellerFormPageState
               'Description',
               maxLines: 3,
             ),
+            _field(
+              _commissionPercent,
+              'RD Commission (%)',
+              keyboardType:
+                  const TextInputType.numberWithOptions(
+                decimal: true,
+              ),
+              requiredField: true,
+            ),
+
+            const SizedBox(height: 8),
+            const Divider(),
+            const SizedBox(height: 8),
+            const Text(
+              'Seller Payment Information',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Used for RD settlement and eligible single-seller direct payments.',
+            ),
+            const SizedBox(height: 14),
+
+            _field(
+              _esewaNumber,
+              'eSewa Number / Merchant ID',
+              keyboardType: TextInputType.phone,
+            ),
+            _field(
+              _khaltiNumber,
+              'Khalti Number / Merchant ID',
+              keyboardType: TextInputType.phone,
+            ),
+            _field(
+              _bankName,
+              'Bank Name',
+            ),
+            _field(
+              _bankAccountHolder,
+              'Bank Account Holder Name',
+            ),
+            _field(
+              _bankAccountNumber,
+              'Bank Account Number',
+            ),
+
+            if (_paymentQrUrl.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 4),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(12),
+                child: Image.network(
+                  _paymentQrUrl,
+                  height: 180,
+                  fit: BoxFit.contain,
+                  errorBuilder: (
+                    BuildContext context,
+                    Object error,
+                    StackTrace? stackTrace,
+                  ) {
+                    return const SizedBox(
+                      height: 100,
+                      child: Center(
+                        child: Text('Could not load payment QR.'),
+                      ),
+                    );
+                  },
+                ),
+              ),
+              const SizedBox(height: 8),
+            ],
+
+            OutlinedButton.icon(
+              onPressed: _uploading
+                  ? null
+                  : _choosePaymentQr,
+              icon: const Icon(Icons.qr_code_2),
+              label: Text(
+                _paymentQrUrl.isEmpty
+                    ? 'Upload Payment QR'
+                    : 'Change Payment QR',
+              ),
+            ),
+
+            SwitchListTile(
+              contentPadding: EdgeInsets.zero,
+              title: const Text(
+                'Payment Details Verified by Admin',
+              ),
+              subtitle: Text(
+                _paymentVerified
+                    ? 'Verified — direct seller payment may be enabled for eligible orders.'
+                    : 'Not verified — direct seller payment must remain disabled.',
+              ),
+              value: _paymentVerified,
+              onChanged: (bool value) {
+                setState(() {
+                  _paymentVerified = value;
+                });
+              },
+            ),
+
+            const Divider(),
             SwitchListTile(
               contentPadding:
                   EdgeInsets.zero,

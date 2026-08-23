@@ -51,8 +51,23 @@ class _SellerShopProfilePageState
   final TextEditingController _longitudeController =
       TextEditingController();
 
+  // Seller payout/payment details
+  final TextEditingController _esewaNumber =
+      TextEditingController();
+  final TextEditingController _khaltiNumber =
+      TextEditingController();
+  final TextEditingController _bankName =
+      TextEditingController();
+  final TextEditingController _bankAccountHolder =
+      TextEditingController();
+  final TextEditingController _bankAccountNumber =
+      TextEditingController();
+
   String _photoUrl = '';
+  String _paymentQrUrl = '';
   String _locationSource = '';
+
+  bool _paymentVerified = false;
 
   double? _shopLatitude;
   double? _shopLongitude;
@@ -206,6 +221,21 @@ class _SellerShopProfilePageState
 
       _description.text =
           data['description']?.toString() ?? '';
+
+      _esewaNumber.text =
+          data['esewaNumber']?.toString() ?? '';
+      _khaltiNumber.text =
+          data['khaltiNumber']?.toString() ?? '';
+      _bankName.text =
+          data['bankName']?.toString() ?? '';
+      _bankAccountHolder.text =
+          data['bankAccountHolder']?.toString() ?? '';
+      _bankAccountNumber.text =
+          data['bankAccountNumber']?.toString() ?? '';
+      _paymentQrUrl =
+          data['paymentQrUrl']?.toString() ?? '';
+      _paymentVerified =
+          data['paymentVerified'] == true;
 
       _locationSource =
           data['shopLocationSource']
@@ -431,6 +461,73 @@ class _SellerShopProfilePageState
       if (mounted) {
         setState(() {
           _migratingOldPhoto = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _pickPaymentQr() async {
+    if (_uploadingPhoto) {
+      return;
+    }
+
+    final XFile? image = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 90,
+    );
+
+    if (image == null) {
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _uploadingPhoto = true;
+    });
+
+    try {
+      final String url =
+          await _uploadPathToCloudinary(image.path);
+
+      final DocumentReference<Map<String, dynamic>>?
+          document = _sellerDocument;
+
+      if (document == null) {
+        throw Exception('Please login as a seller first.');
+      }
+
+      await document.set(
+        <String, dynamic>{
+          'paymentQrUrl': url,
+          // Seller changes require a fresh Admin verification.
+          'paymentVerified': false,
+          'paymentVerifiedAt': null,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _paymentQrUrl = url;
+        _paymentVerified = false;
+      });
+
+      _message(
+        'Payment QR saved. Admin verification is required before direct payment is enabled.',
+      );
+    } catch (error) {
+      _message('Payment QR upload failed: $error');
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploadingPhoto = false;
         });
       }
     }
@@ -842,6 +939,26 @@ class _SellerShopProfilePageState
               _description.text.trim(),
 
           // ================================================
+          // SELLER PAYMENT / PAYOUT PROFILE
+          // Admin must verify after seller changes details.
+          // ================================================
+
+          'esewaNumber':
+              _esewaNumber.text.trim(),
+          'khaltiNumber':
+              _khaltiNumber.text.trim(),
+          'bankName':
+              _bankName.text.trim(),
+          'bankAccountHolder':
+              _bankAccountHolder.text.trim(),
+          'bankAccountNumber':
+              _bankAccountNumber.text.trim(),
+          'paymentQrUrl':
+              _paymentQrUrl,
+          'paymentVerified': false,
+          'paymentVerifiedAt': null,
+
+          // ================================================
           // SHOP TRACKING LOCATION
           // ================================================
 
@@ -906,8 +1023,14 @@ class _SellerShopProfilePageState
         ),
       );
 
+      if (mounted) {
+        setState(() {
+          _paymentVerified = false;
+        });
+      }
+
       _message(
-        'Shop profile and map location saved successfully.',
+        'Shop profile saved. Payment details require Admin verification.',
       );
     } catch (error) {
       _message(
@@ -1133,6 +1256,11 @@ class _SellerShopProfilePageState
     _description.dispose();
     _latitudeController.dispose();
     _longitudeController.dispose();
+    _esewaNumber.dispose();
+    _khaltiNumber.dispose();
+    _bankName.dispose();
+    _bankAccountHolder.dispose();
+    _bankAccountNumber.dispose();
 
     super.dispose();
   }
@@ -1525,6 +1653,141 @@ class _SellerShopProfilePageState
                     'Shop Description (optional)',
                     Icons.description,
                     lines: 4,
+                  ),
+
+                  const SizedBox(height: 20),
+                  const Divider(),
+                  const SizedBox(height: 12),
+
+                  const Text(
+                    'Payment / Payout Details',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  const Text(
+                    'RD can use these verified details for seller settlement. Direct seller payment is allowed only for eligible single-seller orders.',
+                  ),
+                  const SizedBox(height: 12),
+
+                  _field(
+                    _esewaNumber,
+                    'eSewa Number / Merchant ID',
+                    Icons.account_balance_wallet_outlined,
+                    type: TextInputType.phone,
+                  ),
+                  const SizedBox(height: 12),
+
+                  _field(
+                    _khaltiNumber,
+                    'Khalti Number / Merchant ID',
+                    Icons.account_balance_wallet,
+                    type: TextInputType.phone,
+                  ),
+                  const SizedBox(height: 12),
+
+                  _field(
+                    _bankName,
+                    'Bank Name',
+                    Icons.account_balance,
+                  ),
+                  const SizedBox(height: 12),
+
+                  _field(
+                    _bankAccountHolder,
+                    'Bank Account Holder Name',
+                    Icons.person_outline,
+                  ),
+                  const SizedBox(height: 12),
+
+                  _field(
+                    _bankAccountNumber,
+                    'Bank Account Number',
+                    Icons.numbers,
+                  ),
+                  const SizedBox(height: 12),
+
+                  Card(
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Row(
+                            children: <Widget>[
+                              Icon(
+                                _paymentVerified
+                                    ? Icons.verified
+                                    : Icons.pending_actions,
+                                color: _paymentVerified
+                                    ? Colors.green
+                                    : Colors.orange,
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: Text(
+                                  _paymentVerified
+                                      ? 'Payment details verified by Admin'
+                                      : 'Payment details not verified yet',
+                                  style: const TextStyle(
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ],
+                          ),
+                          const SizedBox(height: 10),
+                          if (_paymentQrUrl.isNotEmpty)
+                            Center(
+                              child: ClipRRect(
+                                borderRadius:
+                                    BorderRadius.circular(12),
+                                child: Image.network(
+                                  _paymentQrUrl,
+                                  height: 180,
+                                  fit: BoxFit.contain,
+                                  errorBuilder: (
+                                    BuildContext context,
+                                    Object error,
+                                    StackTrace? stackTrace,
+                                  ) {
+                                    return const SizedBox(
+                                      height: 100,
+                                      child: Center(
+                                        child: Text(
+                                          'Could not load payment QR.',
+                                        ),
+                                      ),
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                          const SizedBox(height: 8),
+                          SizedBox(
+                            width: double.infinity,
+                            child: OutlinedButton.icon(
+                              onPressed: _uploadingPhoto
+                                  ? null
+                                  : _pickPaymentQr,
+                              icon: const Icon(Icons.qr_code_2),
+                              label: Text(
+                                _paymentQrUrl.isEmpty
+                                    ? 'Upload Payment QR'
+                                    : 'Change Payment QR',
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 6),
+                          const Text(
+                            'Changing payout details or QR requires Admin verification again.',
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
 
                   const SizedBox(

@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_order_page.dart';
+import 'admin_earnings_page.dart';
 import 'admin_product_page.dart';
 import 'admin_seller_page.dart';
 
@@ -148,9 +149,14 @@ class AdminDashboardPage extends StatelessWidget {
             onTap: () => _comingSoon(context, 'Customer Management'),
           ),
           _dashboardCard(
-            icon: Icons.payment,
-            title: 'Payments',
-            onTap: () => _comingSoon(context, 'Payment Management'),
+            icon: Icons.account_balance_wallet,
+            title: 'Earnings',
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminEarningsPage(),
+              ),
+            ),
           ),
           _dashboardCard(
             icon: Icons.settings,

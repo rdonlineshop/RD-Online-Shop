@@ -1,5 +1,6 @@
 import 'dart:math';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
@@ -8,6 +9,8 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'data/cart_data.dart';
 import 'order_data.dart';
 import 'order_history_page.dart';
+import 'payments/esewa_payment_page.dart';
+import 'payments/esewa_payment_service.dart';
 
 class CheckoutPage extends StatefulWidget {
   final double cartSubtotal;
@@ -51,6 +54,15 @@ class _CheckoutPageState
   String selectedPayment =
       'Cash on Delivery';
 
+  String selectedPaymentRoute =
+      'RD Online Shop';
+
+  bool isCheckingSellerPayment = false;
+  bool directSellerEligible = false;
+  String directSellerMessage =
+      'Direct seller payment is available only for one verified seller.';
+  String directSellerId = '';
+
   String selectedDeliveryArea =
       'Kathmandu Valley';
 
@@ -61,6 +73,7 @@ class _CheckoutPageState
   bool isLoadingLocation = false;
   bool isLoadingSavedAddress = true;
   bool isGeocodingManualAddress = false;
+  bool isPlacingOrder = false;
 
   double? latitude;
   double? longitude;
@@ -117,6 +130,7 @@ class _CheckoutPageState
         .addPostFrameCallback(
       (_) {
         _getCurrentLocation();
+        _checkDirectSellerEligibility();
       },
     );
   }
@@ -616,10 +630,237 @@ class _CheckoutPageState
   }
 
   // =========================================================
+  // PAYMENT ROUTING
+  // =========================================================
+
+  Set<String> _cartSellerIds() {
+    return cartItems
+        .map(
+          (Map<String, dynamic> item) =>
+              item['sellerId']?.toString().trim() ?? '',
+        )
+        .where((String sellerId) => sellerId.isNotEmpty)
+        .toSet();
+  }
+
+  Future<void> _checkDirectSellerEligibility() async {
+    final Set<String> sellerIds = _cartSellerIds();
+
+    if (!mounted) {
+      return;
+    }
+
+    if (sellerIds.length != 1) {
+      setState(() {
+        directSellerEligible = false;
+        directSellerId = '';
+        directSellerMessage = sellerIds.isEmpty
+            ? 'Seller information is missing, so direct seller payment is unavailable.'
+            : 'This cart contains products from ${sellerIds.length} sellers. Pay Direct to Seller is disabled.';
+        if (selectedPaymentRoute == 'Direct to Seller') {
+          selectedPaymentRoute = 'RD Online Shop';
+        }
+      });
+      return;
+    }
+
+    final String sellerId = sellerIds.first;
+
+    setState(() {
+      isCheckingSellerPayment = true;
+      directSellerEligible = false;
+      directSellerId = sellerId;
+      directSellerMessage = 'Checking seller payment verification...';
+    });
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snapshot =
+          await FirebaseFirestore.instance
+              .collection('sellers')
+              .doc(sellerId)
+              .get();
+
+      final Map<String, dynamic>? data = snapshot.data();
+
+      final bool active = data?['isActive'] != false;
+      final bool verified = data?['paymentVerified'] == true;
+
+      final bool hasPaymentDestination =
+          (data?['esewaNumber']?.toString().trim().isNotEmpty ?? false) ||
+          (data?['khaltiNumber']?.toString().trim().isNotEmpty ?? false) ||
+          (data?['bankAccountNumber']?.toString().trim().isNotEmpty ?? false) ||
+          (data?['paymentQrUrl']?.toString().trim().isNotEmpty ?? false);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        directSellerEligible =
+            snapshot.exists && active && verified && hasPaymentDestination;
+
+        if (!snapshot.exists) {
+          directSellerMessage =
+              'Seller profile was not found. Pay to RD Online Shop instead.';
+        } else if (!active) {
+          directSellerMessage =
+              'This seller is inactive. Direct seller payment is unavailable.';
+        } else if (!verified) {
+          directSellerMessage =
+              'Seller payment details are not verified by Admin yet.';
+        } else if (!hasPaymentDestination) {
+          directSellerMessage =
+              'Seller has no verified payout destination.';
+        } else {
+          directSellerMessage =
+              'Single verified seller detected. Direct seller payment is eligible.';
+        }
+
+        if (!directSellerEligible &&
+            selectedPaymentRoute == 'Direct to Seller') {
+          selectedPaymentRoute = 'RD Online Shop';
+        }
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        directSellerEligible = false;
+        selectedPaymentRoute = 'RD Online Shop';
+        directSellerMessage =
+            'Could not verify seller payment details. Pay to RD Online Shop instead.';
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          isCheckingSellerPayment = false;
+        });
+      }
+    }
+  }
+
+  Widget _paymentRouteCard({
+    required String title,
+    required String subtitle,
+    required String value,
+    required IconData icon,
+    required bool enabled,
+  }) {
+    final bool selected = selectedPaymentRoute == value;
+
+    return Card(
+      margin: const EdgeInsets.only(top: 8),
+      child: ListTile(
+        enabled: enabled,
+        onTap: enabled
+            ? () {
+                setState(() {
+                  selectedPaymentRoute = value;
+                });
+              }
+            : null,
+        leading: Icon(
+          enabled
+              ? (selected
+                  ? Icons.radio_button_checked
+                  : Icons.radio_button_off)
+              : Icons.radio_button_off,
+          color: enabled
+              ? (selected ? Colors.green : Colors.grey)
+              : Colors.grey.shade400,
+        ),
+        title: Text(
+          title,
+          style: TextStyle(
+            fontWeight: FontWeight.w600,
+            color: enabled ? null : Colors.grey,
+          ),
+        ),
+        subtitle: Text(subtitle),
+        trailing: Icon(
+          enabled
+              ? (selected
+                  ? Icons.check_circle
+                  : icon)
+              : Icons.lock_outline,
+          color: enabled
+              ? (selected ? Colors.green : null)
+              : Colors.grey,
+        ),
+      ),
+    );
+  }
+
+  // =========================================================
+  // ESEWA UAT PAYMENT
+  // =========================================================
+
+  Future<EsewaResult?> _payWithEsewa({
+    required String orderId,
+  }) async {
+    if (selectedPaymentRoute != 'RD Online Shop') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'eSewa automatic payment is currently enabled only for Pay to RD Online Shop.',
+          ),
+        ),
+      );
+      return null;
+    }
+
+    final EsewaResult? result =
+        await Navigator.push<EsewaResult>(
+      context,
+      MaterialPageRoute<EsewaResult>(
+        builder: (_) => EsewaPaymentPage(
+          transactionUuid: orderId,
+          totalAmount: _finalTotal,
+        ),
+      ),
+    );
+
+    if (!mounted) {
+      return null;
+    }
+
+    if (result == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'eSewa payment was not completed. Order was not placed.',
+          ),
+        ),
+      );
+      return null;
+    }
+
+    if (!result.success) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.cancelled
+                ? 'eSewa payment cancelled. Order was not placed.'
+                : '${result.message} Order was not placed.',
+          ),
+        ),
+      );
+      return null;
+    }
+
+    return result;
+  }
+
+  // =========================================================
   // PLACE ORDER
   // =========================================================
 
   Future<void> _placeOrder() async {
+    if (isPlacingOrder) {
+      return;
+    }
     if (nameController.text
             .trim()
             .isEmpty ||
@@ -668,8 +909,54 @@ class _CheckoutPageState
       }
     }
 
+    if (selectedPaymentRoute == 'Direct to Seller' &&
+        !directSellerEligible) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(directSellerMessage),
+        ),
+      );
+      return;
+    }
+
+    if (selectedPayment == 'International Payment') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'International Payment is prepared for future integration but is not active yet.',
+          ),
+        ),
+      );
+      return;
+    }
+
     final String orderId =
         'RD${DateTime.now().millisecondsSinceEpoch}';
+
+    EsewaResult? esewaResult;
+
+    if (selectedPayment == 'eSewa') {
+      setState(() {
+        isPlacingOrder = true;
+      });
+
+      try {
+        esewaResult = await _payWithEsewa(
+          orderId: orderId,
+        );
+      } finally {
+        if (mounted) {
+          setState(() {
+            isPlacingOrder = false;
+          });
+        }
+      }
+
+      if (esewaResult == null ||
+          !esewaResult.success) {
+        return;
+      }
+    }
 
     final List<Map<String, dynamic>>
         orderedItems =
@@ -862,6 +1149,64 @@ class _CheckoutPageState
 
         'payment':
             selectedPayment,
+
+        'paymentRoute':
+            selectedPayment == 'Cash on Delivery'
+                ? 'cod'
+                : selectedPaymentRoute == 'Direct to Seller'
+                    ? 'seller'
+                    : 'rd',
+
+        'paymentReceiverId':
+            selectedPayment == 'Cash on Delivery'
+                ? ''
+                : selectedPaymentRoute == 'Direct to Seller'
+                    ? directSellerId
+                    : 'RD_ONLINE_SHOP',
+
+        'paymentReceiverName':
+            selectedPayment == 'Cash on Delivery'
+                ? 'Cash on Delivery'
+                : selectedPaymentRoute,
+
+        'paymentScope':
+            selectedPayment == 'International Payment'
+                ? 'international'
+                : 'local',
+
+        'paymentCurrency':
+            'NPR',
+
+        'paymentStatus':
+            selectedPayment == 'Cash on Delivery'
+                ? 'Pending COD'
+                : selectedPayment == 'eSewa' &&
+                        esewaResult != null &&
+                        esewaResult.success
+                    ? 'Paid'
+                    : 'Pending Payment',
+
+        'paymentGateway':
+            selectedPayment == 'eSewa'
+                ? 'eSewa'
+                : '',
+
+        'paymentTransactionUuid':
+            esewaResult?.transactionUuid ?? '',
+
+        'paymentTransactionCode':
+            esewaResult?.transactionCode ?? '',
+
+        'paymentReferenceId':
+            esewaResult?.referenceId ?? '',
+
+        'paymentVerified':
+            esewaResult?.success ?? false,
+
+        'paymentVerifiedAt':
+            esewaResult?.success == true
+                ? DateTime.now().toIso8601String()
+                : null,
 
         // =====================================================
         // PRICE
@@ -1752,6 +2097,36 @@ class _CheckoutPageState
             ),
 
             const Text(
+              'Payment Destination',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+
+            _paymentRouteCard(
+              title: 'Pay to RD Online Shop',
+              subtitle:
+                  'Available for every order. RD can manage verification, refund and seller settlement.',
+              value: 'RD Online Shop',
+              icon: Icons.storefront,
+              enabled: true,
+            ),
+
+            _paymentRouteCard(
+              title: 'Pay Direct to Seller',
+              subtitle: isCheckingSellerPayment
+                  ? 'Checking seller...'
+                  : directSellerMessage,
+              value: 'Direct to Seller',
+              icon: Icons.person_pin_circle_outlined,
+              enabled: directSellerEligible &&
+                  selectedPayment != 'Cash on Delivery',
+            ),
+
+            const SizedBox(height: 24),
+
+            const Text(
               'Payment Method',
               style:
                   TextStyle(
@@ -1774,6 +2149,11 @@ class _CheckoutPageState
                   setState(() {
                     selectedPayment =
                         value;
+
+                    if (value == 'Cash on Delivery') {
+                      selectedPaymentRoute =
+                          'RD Online Shop';
+                    }
                   });
                 }
               },
@@ -1808,6 +2188,10 @@ class _CheckoutPageState
                   _paymentOption(
                     'connectIPS',
                     Icons.payment,
+                  ),
+                  _paymentOption(
+                    'International Payment',
+                    Icons.public,
                   ),
                 ],
               ),
@@ -1895,18 +2279,25 @@ class _CheckoutPageState
               child:
                   ElevatedButton(
                 onPressed:
-                    _placeOrder,
+                    isPlacingOrder
+                        ? null
+                        : _placeOrder,
                 child:
-                    const Text(
-                  'Place Order',
-                  style:
-                      TextStyle(
-                    fontSize:
-                        18,
-                    fontWeight:
-                        FontWeight.bold,
-                  ),
-                ),
+                    isPlacingOrder
+                        ? const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Text(
+                            'Place Order',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
               ),
             ),
           ],
