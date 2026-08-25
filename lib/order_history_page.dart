@@ -36,6 +36,10 @@ class _OrderHistoryPageState
     try {
       final String id = await getOrCreateCustomerId();
 
+      // Load customer-specific local backup, recover legacy device orders,
+      // migrate what can be migrated, and start the realtime listener.
+      await loadOrders();
+
       if (!mounted) {
         return;
       }
@@ -2055,61 +2059,6 @@ class _OrderHistoryPageState
                 '-',
           ),
 
-          _detailRow(
-            'Payment Status',
-            order['paymentStatus']
-                    ?.toString()
-                    .trim()
-                    .isNotEmpty ==
-                true
-                ? order['paymentStatus']
-                    .toString()
-                    .trim()
-                : 'Not available',
-            valueColor:
-                order['paymentStatus']
-                            ?.toString()
-                            .trim()
-                            .toLowerCase() ==
-                        'paid'
-                    ? Colors.green
-                    : null,
-          ),
-
-          _detailRow(
-            'Payment Destination',
-            order['paymentReceiverName']
-                        ?.toString()
-                        .trim()
-                        .isNotEmpty ==
-                    true
-                ? order['paymentReceiverName']
-                    .toString()
-                    .trim()
-                : 'Not available',
-          ),
-
-          _detailRow(
-            'Transaction / Ref ID',
-            order['paymentReferenceId']
-                        ?.toString()
-                        .trim()
-                        .isNotEmpty ==
-                    true
-                ? order['paymentReferenceId']
-                    .toString()
-                    .trim()
-                : (order['paymentTransactionCode']
-                            ?.toString()
-                            .trim()
-                            .isNotEmpty ==
-                        true
-                    ? order['paymentTransactionCode']
-                        .toString()
-                        .trim()
-                    : 'Not available'),
-          ),
-
           const Divider(),
 
           // ==============================================
@@ -2372,6 +2321,14 @@ class _OrderHistoryPageState
 
                 Navigator.pop(dialogContext);
 
+                await reloadOrdersForCurrentCustomer();
+
+                if (!mounted) {
+                  return;
+                }
+
+                setState(() {});
+
                 ScaffoldMessenger.of(this.context).showSnackBar(
                   const SnackBar(
                     content: Text(
@@ -2495,6 +2452,79 @@ class _OrderHistoryPageState
     phoneController.dispose();
   }
 
+  List<Map<String, dynamic>> _mergeVisibleOrders(
+    List<Map<String, dynamic>> cloudOrders,
+  ) {
+    final Map<String, Map<String, dynamic>> mergedById =
+        <String, Map<String, dynamic>>{};
+
+    for (final Map<String, dynamic> localOrder in orderHistory) {
+      if (localOrder['customerId']?.toString().trim() != customerId) {
+        continue;
+      }
+
+      final String id = localOrder['id']?.toString().trim() ?? '';
+      if (id.isNotEmpty) {
+        mergedById[id] = Map<String, dynamic>.from(localOrder);
+      }
+    }
+
+    // Cloud data wins when the same order exists locally and in Firestore.
+    for (final Map<String, dynamic> cloudOrder in cloudOrders) {
+      final String id = cloudOrder['id']?.toString().trim() ?? '';
+      if (id.isNotEmpty) {
+        mergedById[id] = Map<String, dynamic>.from(cloudOrder);
+      }
+    }
+
+    final List<Map<String, dynamic>> orders =
+        mergedById.values.toList();
+
+    orders.sort(
+      (Map<String, dynamic> first, Map<String, dynamic> second) {
+        final DateTime? firstDate = DateTime.tryParse(
+          first['orderDateTime']?.toString() ?? '',
+        );
+        final DateTime? secondDate = DateTime.tryParse(
+          second['orderDateTime']?.toString() ?? '',
+        );
+
+        if (firstDate == null && secondDate == null) return 0;
+        if (firstDate == null) return 1;
+        if (secondDate == null) return -1;
+        return secondDate.compareTo(firstDate);
+      },
+    );
+
+    return orders;
+  }
+
+  Widget _ordersList(List<Map<String, dynamic>> orders) {
+    if (orders.isEmpty) {
+      return _emptyOrders();
+    }
+
+    return RefreshIndicator(
+      onRefresh: () async {
+        await reloadOrdersForCurrentCustomer();
+        if (mounted) {
+          setState(() {});
+        }
+      },
+      child: ListView.builder(
+        physics: const AlwaysScrollableScrollPhysics(),
+        padding: const EdgeInsets.all(12),
+        itemCount: orders.length,
+        itemBuilder: (
+          BuildContext context,
+          int index,
+        ) {
+          return _orderCard(orders[index]);
+        },
+      ),
+    );
+  }
+
   // =========================================================
   // EMPTY PAGE
   // =========================================================
@@ -2590,62 +2620,49 @@ class _OrderHistoryPageState
                                     dynamic>>>
                         snapshot,
                   ) {
-                    if (snapshot
-                            .connectionState ==
-                        ConnectionState
-                            .waiting) {
+                    final List<Map<String, dynamic>> cloudOrders =
+                        snapshot.data ?? <Map<String, dynamic>>[];
+
+                    final List<Map<String, dynamic>> visibleOrders =
+                        _mergeVisibleOrders(cloudOrders);
+
+                    // Do not hide recovered local orders while Firestore is
+                    // still connecting.
+                    if (snapshot.connectionState ==
+                            ConnectionState.waiting &&
+                        visibleOrders.isEmpty) {
                       return const Center(
-                        child:
-                            CircularProgressIndicator(),
+                        child: CircularProgressIndicator(),
                       );
                     }
 
-                    if (snapshot.hasError) {
+                    // If Firestore temporarily fails but local orders exist,
+                    // keep showing the local backup instead of an empty/error
+                    // page.
+                    if (snapshot.hasError && visibleOrders.isEmpty) {
                       return Center(
                         child: Padding(
-                          padding:
-                              const EdgeInsets
-                                  .all(20),
+                          padding: const EdgeInsets.all(20),
                           child: Column(
-                            mainAxisAlignment:
-                                MainAxisAlignment
-                                    .center,
-                            children:
-                                <Widget>[
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: <Widget>[
                               const Icon(
-                                Icons
-                                    .error_outline,
+                                Icons.error_outline,
                                 size: 60,
-                                color:
-                                    Colors.red,
+                                color: Colors.red,
                               ),
-
-                              const SizedBox(
-                                height: 10,
-                              ),
-
+                              const SizedBox(height: 10),
                               const Text(
                                 'Could not load your orders.',
-                                style:
-                                    TextStyle(
-                                  fontSize:
-                                      17,
-                                  fontWeight:
-                                      FontWeight
-                                          .bold,
+                                style: TextStyle(
+                                  fontSize: 17,
+                                  fontWeight: FontWeight.bold,
                                 ),
                               ),
-
-                              const SizedBox(
-                                height: 6,
-                              ),
-
+                              const SizedBox(height: 6),
                               Text(
-                                snapshot.error
-                                    .toString(),
-                                textAlign:
-                                    TextAlign
-                                        .center,
+                                snapshot.error.toString(),
+                                textAlign: TextAlign.center,
                               ),
                             ],
                           ),
@@ -2653,42 +2670,7 @@ class _OrderHistoryPageState
                       );
                     }
 
-                    final List<
-                            Map<String,
-                                dynamic>>
-                        orders =
-                        snapshot.data ??
-                            <Map<String,
-                                dynamic>>[];
-
-                    if (orders.isEmpty) {
-                      return _emptyOrders();
-                    }
-
-                    return RefreshIndicator(
-                      onRefresh: () async {
-                        setState(() {});
-                      },
-                      child:
-                          ListView.builder(
-                        physics:
-                            const AlwaysScrollableScrollPhysics(),
-                        padding:
-                            const EdgeInsets
-                                .all(12),
-                        itemCount:
-                            orders.length,
-                        itemBuilder: (
-                          BuildContext
-                              context,
-                          int index,
-                        ) {
-                          return _orderCard(
-                            orders[index],
-                          );
-                        },
-                      ),
-                    );
+                    return _ordersList(visibleOrders);
                   },
                 ),
     );

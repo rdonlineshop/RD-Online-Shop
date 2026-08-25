@@ -4,6 +4,7 @@ import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 List<Map<String, dynamic>> orderHistory = <Map<String, dynamic>>[];
@@ -275,48 +276,104 @@ Future<void> loadOrders() async {
 
 Future<void> _loadLocalOrders() async {
   final SharedPreferences prefs = await SharedPreferences.getInstance();
-  final String? customerId = await getSavedCustomerId();
 
-  if (customerId == null || customerId.isEmpty) {
+  String? customerId = await getSavedCustomerId();
+  if (customerId == null || customerId.trim().isEmpty) {
+    customerId = await getOrCreateCustomerId();
+  }
+
+  final String cleanCustomerId = customerId.trim();
+  if (cleanCustomerId.isEmpty) {
     orderHistory = <Map<String, dynamic>>[];
     return;
   }
 
-  final String? savedOrders = prefs.getString(_orderHistoryKey(customerId)) ??
-      prefs.getString('orderHistory');
+  final String scopedKey = _orderHistoryKey(cleanCustomerId);
+  final String scopedRaw = prefs.getString(scopedKey)?.trim() ?? '';
+  final String legacyRaw = prefs.getString('orderHistory')?.trim() ?? '';
 
-  if (savedOrders == null || savedOrders.trim().isEmpty) {
-    orderHistory = <Map<String, dynamic>>[];
-    return;
-  }
+  final Map<String, Map<String, dynamic>> mergedById =
+      <String, Map<String, dynamic>>{};
 
-  try {
-    final dynamic decoded = jsonDecode(savedOrders);
-    if (decoded is! List) {
-      orderHistory = <Map<String, dynamic>>[];
+  bool recoveredLegacyData = false;
+
+  void decodeAndMerge(
+    String raw, {
+    required bool isLegacyBackup,
+  }) {
+    if (raw.isEmpty) {
       return;
     }
 
-    final List<Map<String, dynamic>> loadedOrders = <Map<String, dynamic>>[];
+    try {
+      final dynamic decoded = jsonDecode(raw);
+      if (decoded is! List) {
+        return;
+      }
 
-    for (final dynamic rawOrder in decoded) {
-      if (rawOrder is Map) {
-        final Map<String, dynamic> order = <String, dynamic>{};
+      for (final dynamic rawOrder in decoded) {
+        if (rawOrder is! Map) {
+          continue;
+        }
+
+        final Map<String, dynamic> copied = <String, dynamic>{};
         rawOrder.forEach((dynamic key, dynamic value) {
-          order[key.toString()] = value;
+          copied[key.toString()] = value;
         });
 
-        final Map<String, dynamic> normalized = _normalizeOrder(order);
-        if (normalized['customerId']?.toString().trim() == customerId) {
-          loadedOrders.add(normalized);
+        final Map<String, dynamic> normalized = _normalizeOrder(copied);
+
+        final String orderId = normalized['id']?.toString().trim() ?? '';
+        if (orderId.isEmpty) {
+          continue;
+        }
+
+        String orderCustomerId =
+            normalized['customerId']?.toString().trim() ?? '';
+
+        // Legacy RD builds used a single device-wide "orderHistory" key and
+        // some builds either had no customerId or used an older anonymous UID.
+        // When reading that legacy device backup, attach the order to the
+        // stable customer ID used by this device now.
+        if (isLegacyBackup && orderCustomerId != cleanCustomerId) {
+          normalized['customerId'] = cleanCustomerId;
+          orderCustomerId = cleanCustomerId;
+          recoveredLegacyData = true;
+        } else if (orderCustomerId.isEmpty) {
+          normalized['customerId'] = cleanCustomerId;
+          orderCustomerId = cleanCustomerId;
+          recoveredLegacyData = true;
+        }
+
+        if (orderCustomerId != cleanCustomerId) {
+          continue;
+        }
+
+        // Scoped/current data wins over the legacy copy when IDs match.
+        if (!mergedById.containsKey(orderId) || !isLegacyBackup) {
+          mergedById[orderId] = normalized;
         }
       }
+    } catch (error) {
+      // A broken legacy backup must never hide valid scoped orders.
+      debugPrint('Could not decode saved orders: $error');
     }
+  }
 
-    orderHistory = loadedOrders;
-    _sortOrders();
-  } catch (_) {
-    orderHistory = <Map<String, dynamic>>[];
+  // Read legacy first, then the current customer-specific backup so the
+  // current copy wins if the same order exists in both.
+  decodeAndMerge(legacyRaw, isLegacyBackup: true);
+  decodeAndMerge(scopedRaw, isLegacyBackup: false);
+
+  orderHistory = mergedById.values.toList();
+  _sortOrders();
+
+  if (orderHistory.isNotEmpty &&
+      (recoveredLegacyData || scopedRaw.isEmpty)) {
+    final String encoded = jsonEncode(
+      orderHistory.map<Map<String, dynamic>>(_safeMap).toList(),
+    );
+    await prefs.setString(scopedKey, encoded);
   }
 }
 
@@ -324,24 +381,27 @@ Future<void> saveOrders() async {
   final SharedPreferences prefs = await SharedPreferences.getInstance();
   final String? customerId = await getSavedCustomerId();
 
-  if (customerId == null || customerId.isEmpty) {
+  if (customerId == null || customerId.trim().isEmpty) {
     return;
   }
+
+  final String cleanCustomerId = customerId.trim();
 
   final List<Map<String, dynamic>> safeOrders = orderHistory
       .where(
         (Map<String, dynamic> order) =>
-            order['customerId']?.toString().trim() == customerId,
+            order['customerId']?.toString().trim() == cleanCustomerId,
       )
       .map<Map<String, dynamic>>(_safeMap)
       .toList();
 
   final String encoded = jsonEncode(safeOrders);
 
-  await prefs.setString(_orderHistoryKey(customerId), encoded);
+  // Main/current backup: customer-specific and safe across role logins.
+  await prefs.setString(_orderHistoryKey(cleanCustomerId), encoded);
 
-  // Keep a generic device backup too. This helps migration from older builds.
-  await prefs.setString('orderHistory', encoded);
+  // Do NOT overwrite the old device-wide "orderHistory" key here.
+  // Older RD builds may still have recoverable orders in that legacy backup.
 }
 
 Future<void> _migrateLocalOrdersToFirestore() async {
@@ -411,7 +471,30 @@ Future<void> _startOrdersListener() async {
           )
           .toList();
 
-      orderHistory = cloudOrders;
+      final Map<String, Map<String, dynamic>> mergedById =
+          <String, Map<String, dynamic>>{};
+
+      // Keep local/recovered orders first.
+      for (final Map<String, dynamic> localOrder in orderHistory) {
+        if (localOrder['customerId']?.toString().trim() != customerId) {
+          continue;
+        }
+
+        final String id = localOrder['id']?.toString().trim() ?? '';
+        if (id.isNotEmpty) {
+          mergedById[id] = _normalizeOrder(localOrder);
+        }
+      }
+
+      // Firestore is authoritative for an order that exists in both places.
+      for (final Map<String, dynamic> cloudOrder in cloudOrders) {
+        final String id = cloudOrder['id']?.toString().trim() ?? '';
+        if (id.isNotEmpty) {
+          mergedById[id] = cloudOrder;
+        }
+      }
+
+      orderHistory = mergedById.values.toList();
       _sortOrders();
       await saveOrders();
     },
@@ -988,17 +1071,53 @@ Future<void> recoverCustomerOrder({
   if (cleanOrderId.isEmpty) {
     throw ArgumentError('Please enter the Order ID.');
   }
+
   if (recoveryProof.length < 6) {
     throw ArgumentError('Please enter the phone number used for this order.');
   }
 
+  final DocumentReference<Map<String, dynamic>> orderRef =
+      _ordersCollection.doc(cleanOrderId);
+
+  final DocumentSnapshot<Map<String, dynamic>> snapshot =
+      await orderRef.get();
+
+  if (!snapshot.exists) {
+    throw FirebaseException(
+      plugin: 'cloud_firestore',
+      code: 'not-found',
+      message: 'Order not found.',
+    );
+  }
+
+  final Map<String, dynamic> data =
+      snapshot.data() ?? <String, dynamic>{};
+
+  final String savedRecoveryKey = normalizeOrderRecoveryPhone(
+    data['recoveryPhoneKey']?.toString() ??
+        data['recoveryProof']?.toString() ??
+        data['phone']?.toString() ??
+        '',
+  );
+
+  if (savedRecoveryKey.isEmpty || savedRecoveryKey != recoveryProof) {
+    throw FirebaseException(
+      plugin: 'cloud_firestore',
+      code: 'permission-denied',
+      message: 'Order ID or phone number did not match.',
+    );
+  }
+
   final String customerId = await getOrCreateCustomerId();
 
-  await _ordersCollection.doc(cleanOrderId).update(
+  await orderRef.update(
     <String, dynamic>{
       'customerId': customerId,
-      'recoveryProof': recoveryProof,
+      'recoveryPhoneKey': savedRecoveryKey,
       'recoveredAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
     },
   );
+
+  await reloadOrdersForCurrentCustomer();
 }
