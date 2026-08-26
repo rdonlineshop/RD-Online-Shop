@@ -1097,7 +1097,26 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                     order,
                   );
 
-                  if (paidSellerAmount > 0) {
+                  final String existingAdjustmentStatus =
+                      _refundText(
+                    order,
+                    'sellerAdjustmentStatus',
+                  );
+
+                  final String existingResolvedAt =
+                      _refundText(
+                    order,
+                    'sellerAdjustmentResolvedAt',
+                  );
+
+                  final bool adjustmentAlreadyResolved =
+                      existingAdjustmentStatus == 'Recovered' ||
+                          existingAdjustmentStatus ==
+                              'Deducted from Next Settlement' ||
+                          existingResolvedAt.isNotEmpty;
+
+                  if (paidSellerAmount > 0 &&
+                      !adjustmentAlreadyResolved) {
                     update.addAll(
                       <String, dynamic>{
                         'sellerAdjustmentRequired':
@@ -1634,6 +1653,43 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
     );
   }
 
+  String _effectiveSellerAdjustmentStatus(
+    Map<String, dynamic> order,
+  ) {
+    final String savedStatus =
+        _refundText(
+      order,
+      'sellerAdjustmentStatus',
+    );
+
+    if (savedStatus == 'Recovered' ||
+        savedStatus == 'Deducted from Next Settlement') {
+      return savedStatus;
+    }
+
+    final String resolvedAt =
+        _refundText(
+      order,
+      'sellerAdjustmentResolvedAt',
+    );
+
+    if (resolvedAt.isNotEmpty) {
+      final String method =
+          _refundText(
+        order,
+        'sellerAdjustmentMethod',
+      );
+
+      if (method == 'Deducted from Seller Payout') {
+        return 'Deducted from Next Settlement';
+      }
+
+      return 'Recovered';
+    }
+
+    return savedStatus.isEmpty ? 'Pending' : savedStatus;
+  }
+
   Future<void> _showSellerAdjustmentEditor(
     Map<String, dynamic> order,
   ) async {
@@ -1658,14 +1714,9 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
             : paidSellerAmount;
 
     String status =
-        _refundText(
+        _effectiveSellerAdjustmentStatus(
       order,
-      'sellerAdjustmentStatus',
     );
-
-    if (status.isEmpty) {
-      status = 'Pending';
-    }
 
     String method =
         _refundText(
@@ -2199,9 +2250,8 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
     }
 
     final String adjustmentStatus =
-        _refundText(
+        _effectiveSellerAdjustmentStatus(
       order,
-      'sellerAdjustmentStatus',
     );
 
     final double storedAmount =
@@ -2254,23 +2304,27 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
           crossAxisAlignment:
               CrossAxisAlignment.start,
           children: <Widget>[
-            const Row(
+            Row(
               children: <Widget>[
                 Icon(
-                  Icons
-                      .sync_problem_outlined,
-                  color:
-                      Colors.red,
+                  adjustmentResolved
+                      ? Icons.check_circle_outline
+                      : Icons.sync_problem_outlined,
+                  color: adjustmentResolved
+                      ? Colors.green
+                      : Colors.red,
                 ),
-                SizedBox(
+                const SizedBox(
                   width:
                       8,
                 ),
                 Expanded(
                   child: Text(
-                    'Seller Adjustment Required',
+                    adjustmentResolved
+                        ? 'Seller Adjustment Resolved'
+                        : 'Seller Adjustment Required',
                     style:
-                        TextStyle(
+                        const TextStyle(
                       fontSize:
                           16,
                       fontWeight:
@@ -2285,11 +2339,14 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                   8,
             ),
             Text(
-              'Seller was already paid before this cancellation / return.',
+              adjustmentResolved
+                  ? 'Seller adjustment has already been completed.'
+                  : 'Seller was already paid before this cancellation / return.',
               style:
-                  const TextStyle(
-                color:
-                    Colors.red,
+                  TextStyle(
+                color: adjustmentResolved
+                    ? Colors.green
+                    : Colors.red,
                 fontWeight:
                     FontWeight.w600,
               ),
