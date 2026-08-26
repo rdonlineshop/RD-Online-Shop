@@ -36,10 +36,6 @@ class _OrderHistoryPageState
     try {
       final String id = await getOrCreateCustomerId();
 
-      // Load customer-specific local backup, recover legacy device orders,
-      // migrate what can be migrated, and start the realtime listener.
-      await loadOrders();
-
       if (!mounted) {
         return;
       }
@@ -1514,6 +1510,14 @@ class _OrderHistoryPageState
                 .trim() ??
             '';
 
+    final String normalizedStatus =
+        status.toLowerCase();
+
+    if (normalizedStatus == 'cancelled' ||
+        normalizedStatus == 'returned') {
+      return const SizedBox.shrink();
+    }
+
     // Old orders without OTP should not show an empty card.
     if (deliveryOtp.isEmpty &&
         !verified &&
@@ -1864,25 +1868,16 @@ class _OrderHistoryPageState
       case 'Delivered':
         return Colors.teal;
 
-      case 'Cancelled':
-        return Colors.red;
-
-      case 'Returned':
-        return Colors.brown;
-
-      case 'Refunded':
-        return Colors.green;
-
       default:
         return Colors.grey;
     }
   }
 
   // =========================================================
-  // CUSTOMER CANCEL / RETURN / REFUND REQUESTS
+  // CUSTOMER CANCEL / RETURN / REFUND
   // =========================================================
 
-  String _requestStatus(
+  String _requestText(
     Map<String, dynamic> order,
     String key,
   ) {
@@ -1898,15 +1893,19 @@ class _OrderHistoryPageState
     switch (status.toLowerCase()) {
       case 'pending':
       case 'pending review':
+      case 'processing':
         return Colors.orange;
+
       case 'approved':
       case 'accepted':
       case 'refunded':
       case 'completed':
         return Colors.green;
+
       case 'rejected':
       case 'declined':
         return Colors.red;
+
       default:
         return Colors.blueGrey;
     }
@@ -1924,11 +1923,12 @@ class _OrderHistoryPageState
     final String trackingStatus =
         order['trackingStatus']
                 ?.toString()
-                .trim() ??
+                .trim()
+                .toLowerCase() ??
             '';
 
     final String requestStatus =
-        _requestStatus(
+        _requestText(
       order,
       'cancelRequestStatus',
     );
@@ -1939,16 +1939,20 @@ class _OrderHistoryPageState
 
     if (status == 'Delivered' ||
         status == 'Cancelled' ||
+        status == 'Returned' ||
         status == 'Shipped') {
       return false;
     }
 
-    final String tracking =
-        trackingStatus.toLowerCase();
-
-    if (tracking.contains('picked up') ||
-        tracking.contains('out for delivery') ||
-        tracking.contains('delivered')) {
+    if (trackingStatus.contains(
+          'picked up',
+        ) ||
+        trackingStatus.contains(
+          'out for delivery',
+        ) ||
+        trackingStatus.contains(
+          'delivered',
+        )) {
       return false;
     }
 
@@ -1965,7 +1969,7 @@ class _OrderHistoryPageState
             '';
 
     final String requestStatus =
-        _requestStatus(
+        _requestText(
       order,
       'returnRequestStatus',
     );
@@ -2103,13 +2107,9 @@ class _OrderHistoryPageState
                   dialogContext,
                 );
 
-                await reloadOrdersForCurrentCustomer();
-
                 if (!mounted) {
                   return;
                 }
-
-                setState(() {});
 
                 _showMessage(
                   isReturn
@@ -2152,9 +2152,11 @@ class _OrderHistoryPageState
                           ? 'Tell us why you want to return this delivered order.'
                           : 'Tell us why you want to cancel this order.',
                     ),
+
                     const SizedBox(
                       height: 16,
                     ),
+
                     DropdownButtonFormField<
                         String>(
                       initialValue:
@@ -2200,9 +2202,11 @@ class _OrderHistoryPageState
                                   );
                                 },
                     ),
+
                     const SizedBox(
                       height: 14,
                     ),
+
                     TextField(
                       controller:
                           noteController,
@@ -2214,19 +2218,19 @@ class _OrderHistoryPageState
                           const InputDecoration(
                         labelText:
                             'Additional details (optional)',
-                        hintText:
-                            'Write any useful details here.',
                         border:
                             OutlineInputBorder(),
                       ),
                     ),
+
                     const SizedBox(
                       height: 12,
                     ),
+
                     Text(
                       isReturn
                           ? 'Your return request will be reviewed before any refund is processed.'
-                          : 'Submitting this request does not instantly cancel the order. Seller/Admin approval may be required.',
+                          : 'Seller/Admin approval may be required before the order is cancelled.',
                       style: TextStyle(
                         fontSize: 12,
                         color: Colors
@@ -2290,39 +2294,63 @@ class _OrderHistoryPageState
     Map<String, dynamic> order,
   ) {
     final String cancelStatus =
-        _requestStatus(
+        _requestText(
       order,
       'cancelRequestStatus',
     );
 
     final String cancelReason =
-        _requestStatus(
+        _requestText(
       order,
       'cancelRequestReason',
     );
 
     final String returnStatus =
-        _requestStatus(
+        _requestText(
       order,
       'returnRequestStatus',
     );
 
     final String returnReason =
-        _requestStatus(
+        _requestText(
       order,
       'returnRequestReason',
     );
 
     final String refundStatus =
-        _requestStatus(
+        _requestText(
       order,
       'refundStatus',
     );
 
+    final String refundSource =
+        _requestText(
+      order,
+      'refundSource',
+    );
+
+    final String refundReason =
+        _requestText(
+      order,
+      'refundReason',
+    );
+
+    final String refundMethod =
+        _requestText(
+      order,
+      'refundMethod',
+    );
+
     final String refundReference =
-        _requestStatus(
+        _requestText(
       order,
       'refundReference',
+    );
+
+    final double refundAmount =
+        _amount(
+      order,
+      'refundAmount',
     );
 
     final bool canCancel =
@@ -2343,15 +2371,17 @@ class _OrderHistoryPageState
     if (!canCancel &&
         !canReturn &&
         !hasRequest) {
-      return const SizedBox
-          .shrink();
+      return const SizedBox.shrink();
     }
 
     Widget requestRow(
       String title,
       String status, {
       String reason = '',
+      String source = '',
+      String method = '',
       String reference = '',
+      double amount = 0,
     }) {
       final Color color =
           _requestStatusColor(
@@ -2411,13 +2441,35 @@ class _OrderHistoryPageState
                 ),
               ],
             ),
+
+            if (source.isNotEmpty)
+              Text(
+                'Source: $source',
+              ),
+
             if (reason.isNotEmpty)
               Text(
                 'Reason: $reason',
               ),
+
+            if (amount > 0)
+              Text(
+                'Refund Amount: Rs. ${amount.toStringAsFixed(0)}',
+                style:
+                    const TextStyle(
+                  fontWeight:
+                      FontWeight.bold,
+                ),
+              ),
+
+            if (method.isNotEmpty)
+              Text(
+                'Refund Via: $method',
+              ),
+
             if (reference.isNotEmpty)
               Text(
-                'Reference: $reference',
+                'Transaction / Reference ID: $reference',
               ),
           ],
         ),
@@ -2453,9 +2505,11 @@ class _OrderHistoryPageState
                 ),
               ],
             ),
+
             const SizedBox(
               height: 12,
             ),
+
             if (cancelStatus
                 .isNotEmpty)
               requestRow(
@@ -2464,6 +2518,7 @@ class _OrderHistoryPageState
                 reason:
                     cancelReason,
               ),
+
             if (returnStatus
                 .isNotEmpty)
               requestRow(
@@ -2472,14 +2527,24 @@ class _OrderHistoryPageState
                 reason:
                     returnReason,
               ),
+
             if (refundStatus
                 .isNotEmpty)
               requestRow(
                 'Refund',
                 refundStatus,
+                source:
+                    refundSource,
+                reason:
+                    refundReason,
+                amount:
+                    refundAmount,
+                method:
+                    refundMethod,
                 reference:
                     refundReference,
               ),
+
             if (canCancel)
               SizedBox(
                 width:
@@ -2507,11 +2572,13 @@ class _OrderHistoryPageState
                   ),
                 ),
               ),
+
             if (canCancel &&
                 canReturn)
               const SizedBox(
                 height: 10,
               ),
+
             if (canReturn)
               SizedBox(
                 width:
@@ -2538,6 +2605,7 @@ class _OrderHistoryPageState
                   ),
                 ),
               ),
+
             if (hasRequest) ...<Widget>[
               const SizedBox(
                 height: 4,
@@ -2554,6 +2622,68 @@ class _OrderHistoryPageState
           ],
         ),
       ),
+    );
+  }
+
+  Widget _liveCustomerRequestSection(
+    Map<String, dynamic> order,
+  ) {
+    final String orderId =
+        order['id']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (orderId.isEmpty) {
+      return _customerRequestSection(
+        order,
+      );
+    }
+
+    return StreamBuilder<
+        DocumentSnapshot<
+            Map<String, dynamic>>>(
+      stream: FirebaseFirestore
+          .instance
+          .collection('orders')
+          .doc(orderId)
+          .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<
+                DocumentSnapshot<
+                    Map<String, dynamic>>>
+            snapshot,
+      ) {
+        final DocumentSnapshot<
+                Map<String, dynamic>>?
+            document =
+            snapshot.data;
+
+        if (document == null ||
+            !document.exists) {
+          return _customerRequestSection(
+            order,
+          );
+        }
+
+        final Map<String, dynamic>
+            cloudOrder =
+            document.data() ??
+                <String, dynamic>{};
+
+        final Map<String, dynamic>
+            mergedOrder =
+            <String, dynamic>{
+          ...order,
+          ...cloudOrder,
+          'id': document.id,
+        };
+
+        return _customerRequestSection(
+          mergedOrder,
+        );
+      },
     );
   }
 
@@ -2747,6 +2877,61 @@ class _OrderHistoryPageState
                 '-',
           ),
 
+          _detailRow(
+            'Payment Status',
+            order['paymentStatus']
+                    ?.toString()
+                    .trim()
+                    .isNotEmpty ==
+                true
+                ? order['paymentStatus']
+                    .toString()
+                    .trim()
+                : 'Not available',
+            valueColor:
+                order['paymentStatus']
+                            ?.toString()
+                            .trim()
+                            .toLowerCase() ==
+                        'paid'
+                    ? Colors.green
+                    : null,
+          ),
+
+          _detailRow(
+            'Payment Destination',
+            order['paymentReceiverName']
+                        ?.toString()
+                        .trim()
+                        .isNotEmpty ==
+                    true
+                ? order['paymentReceiverName']
+                    .toString()
+                    .trim()
+                : 'Not available',
+          ),
+
+          _detailRow(
+            'Transaction / Ref ID',
+            order['paymentReferenceId']
+                        ?.toString()
+                        .trim()
+                        .isNotEmpty ==
+                    true
+                ? order['paymentReferenceId']
+                    .toString()
+                    .trim()
+                : (order['paymentTransactionCode']
+                            ?.toString()
+                            .trim()
+                            .isNotEmpty ==
+                        true
+                    ? order['paymentTransactionCode']
+                        .toString()
+                        .trim()
+                    : 'Not available'),
+          ),
+
           const Divider(),
 
           // ==============================================
@@ -2802,6 +2987,14 @@ class _OrderHistoryPageState
           // ==============================================
 
           _deliveryVerificationSection(
+            order,
+          ),
+
+          const SizedBox(
+            height: 10,
+          ),
+
+          _liveCustomerRequestSection(
             order,
           ),
 
@@ -2902,18 +3095,6 @@ class _OrderHistoryPageState
                 ),
               ),
             ),
-          ),
-
-          const SizedBox(
-            height: 12,
-          ),
-
-          // ==============================================
-          // CANCEL / RETURN / REFUND REQUEST
-          // ==============================================
-
-          _customerRequestSection(
-            order,
           ),
 
           const SizedBox(
@@ -3020,14 +3201,6 @@ class _OrderHistoryPageState
                 }
 
                 Navigator.pop(dialogContext);
-
-                await reloadOrdersForCurrentCustomer();
-
-                if (!mounted) {
-                  return;
-                }
-
-                setState(() {});
 
                 ScaffoldMessenger.of(this.context).showSnackBar(
                   const SnackBar(
@@ -3152,79 +3325,6 @@ class _OrderHistoryPageState
     phoneController.dispose();
   }
 
-  List<Map<String, dynamic>> _mergeVisibleOrders(
-    List<Map<String, dynamic>> cloudOrders,
-  ) {
-    final Map<String, Map<String, dynamic>> mergedById =
-        <String, Map<String, dynamic>>{};
-
-    for (final Map<String, dynamic> localOrder in orderHistory) {
-      if (localOrder['customerId']?.toString().trim() != customerId) {
-        continue;
-      }
-
-      final String id = localOrder['id']?.toString().trim() ?? '';
-      if (id.isNotEmpty) {
-        mergedById[id] = Map<String, dynamic>.from(localOrder);
-      }
-    }
-
-    // Cloud data wins when the same order exists locally and in Firestore.
-    for (final Map<String, dynamic> cloudOrder in cloudOrders) {
-      final String id = cloudOrder['id']?.toString().trim() ?? '';
-      if (id.isNotEmpty) {
-        mergedById[id] = Map<String, dynamic>.from(cloudOrder);
-      }
-    }
-
-    final List<Map<String, dynamic>> orders =
-        mergedById.values.toList();
-
-    orders.sort(
-      (Map<String, dynamic> first, Map<String, dynamic> second) {
-        final DateTime? firstDate = DateTime.tryParse(
-          first['orderDateTime']?.toString() ?? '',
-        );
-        final DateTime? secondDate = DateTime.tryParse(
-          second['orderDateTime']?.toString() ?? '',
-        );
-
-        if (firstDate == null && secondDate == null) return 0;
-        if (firstDate == null) return 1;
-        if (secondDate == null) return -1;
-        return secondDate.compareTo(firstDate);
-      },
-    );
-
-    return orders;
-  }
-
-  Widget _ordersList(List<Map<String, dynamic>> orders) {
-    if (orders.isEmpty) {
-      return _emptyOrders();
-    }
-
-    return RefreshIndicator(
-      onRefresh: () async {
-        await reloadOrdersForCurrentCustomer();
-        if (mounted) {
-          setState(() {});
-        }
-      },
-      child: ListView.builder(
-        physics: const AlwaysScrollableScrollPhysics(),
-        padding: const EdgeInsets.all(12),
-        itemCount: orders.length,
-        itemBuilder: (
-          BuildContext context,
-          int index,
-        ) {
-          return _orderCard(orders[index]);
-        },
-      ),
-    );
-  }
-
   // =========================================================
   // EMPTY PAGE
   // =========================================================
@@ -3320,49 +3420,62 @@ class _OrderHistoryPageState
                                     dynamic>>>
                         snapshot,
                   ) {
-                    final List<Map<String, dynamic>> cloudOrders =
-                        snapshot.data ?? <Map<String, dynamic>>[];
-
-                    final List<Map<String, dynamic>> visibleOrders =
-                        _mergeVisibleOrders(cloudOrders);
-
-                    // Do not hide recovered local orders while Firestore is
-                    // still connecting.
-                    if (snapshot.connectionState ==
-                            ConnectionState.waiting &&
-                        visibleOrders.isEmpty) {
+                    if (snapshot
+                            .connectionState ==
+                        ConnectionState
+                            .waiting) {
                       return const Center(
-                        child: CircularProgressIndicator(),
+                        child:
+                            CircularProgressIndicator(),
                       );
                     }
 
-                    // If Firestore temporarily fails but local orders exist,
-                    // keep showing the local backup instead of an empty/error
-                    // page.
-                    if (snapshot.hasError && visibleOrders.isEmpty) {
+                    if (snapshot.hasError) {
                       return Center(
                         child: Padding(
-                          padding: const EdgeInsets.all(20),
+                          padding:
+                              const EdgeInsets
+                                  .all(20),
                           child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: <Widget>[
+                            mainAxisAlignment:
+                                MainAxisAlignment
+                                    .center,
+                            children:
+                                <Widget>[
                               const Icon(
-                                Icons.error_outline,
+                                Icons
+                                    .error_outline,
                                 size: 60,
-                                color: Colors.red,
+                                color:
+                                    Colors.red,
                               ),
-                              const SizedBox(height: 10),
+
+                              const SizedBox(
+                                height: 10,
+                              ),
+
                               const Text(
                                 'Could not load your orders.',
-                                style: TextStyle(
-                                  fontSize: 17,
-                                  fontWeight: FontWeight.bold,
+                                style:
+                                    TextStyle(
+                                  fontSize:
+                                      17,
+                                  fontWeight:
+                                      FontWeight
+                                          .bold,
                                 ),
                               ),
-                              const SizedBox(height: 6),
+
+                              const SizedBox(
+                                height: 6,
+                              ),
+
                               Text(
-                                snapshot.error.toString(),
-                                textAlign: TextAlign.center,
+                                snapshot.error
+                                    .toString(),
+                                textAlign:
+                                    TextAlign
+                                        .center,
                               ),
                             ],
                           ),
@@ -3370,7 +3483,42 @@ class _OrderHistoryPageState
                       );
                     }
 
-                    return _ordersList(visibleOrders);
+                    final List<
+                            Map<String,
+                                dynamic>>
+                        orders =
+                        snapshot.data ??
+                            <Map<String,
+                                dynamic>>[];
+
+                    if (orders.isEmpty) {
+                      return _emptyOrders();
+                    }
+
+                    return RefreshIndicator(
+                      onRefresh: () async {
+                        setState(() {});
+                      },
+                      child:
+                          ListView.builder(
+                        physics:
+                            const AlwaysScrollableScrollPhysics(),
+                        padding:
+                            const EdgeInsets
+                                .all(12),
+                        itemCount:
+                            orders.length,
+                        itemBuilder: (
+                          BuildContext
+                              context,
+                          int index,
+                        ) {
+                          return _orderCard(
+                            orders[index],
+                          );
+                        },
+                      ),
+                    );
                   },
                 ),
     );
