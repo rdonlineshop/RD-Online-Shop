@@ -1864,9 +1864,697 @@ class _OrderHistoryPageState
       case 'Delivered':
         return Colors.teal;
 
+      case 'Cancelled':
+        return Colors.red;
+
+      case 'Returned':
+        return Colors.brown;
+
+      case 'Refunded':
+        return Colors.green;
+
       default:
         return Colors.grey;
     }
+  }
+
+  // =========================================================
+  // CUSTOMER CANCEL / RETURN / REFUND REQUESTS
+  // =========================================================
+
+  String _requestStatus(
+    Map<String, dynamic> order,
+    String key,
+  ) {
+    return order[key]
+            ?.toString()
+            .trim() ??
+        '';
+  }
+
+  Color _requestStatusColor(
+    String status,
+  ) {
+    switch (status.toLowerCase()) {
+      case 'pending':
+      case 'pending review':
+        return Colors.orange;
+      case 'approved':
+      case 'accepted':
+      case 'refunded':
+      case 'completed':
+        return Colors.green;
+      case 'rejected':
+      case 'declined':
+        return Colors.red;
+      default:
+        return Colors.blueGrey;
+    }
+  }
+
+  bool _canRequestCancellation(
+    Map<String, dynamic> order,
+  ) {
+    final String status =
+        order['status']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String trackingStatus =
+        order['trackingStatus']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String requestStatus =
+        _requestStatus(
+      order,
+      'cancelRequestStatus',
+    );
+
+    if (requestStatus.isNotEmpty) {
+      return false;
+    }
+
+    if (status == 'Delivered' ||
+        status == 'Cancelled' ||
+        status == 'Shipped') {
+      return false;
+    }
+
+    final String tracking =
+        trackingStatus.toLowerCase();
+
+    if (tracking.contains('picked up') ||
+        tracking.contains('out for delivery') ||
+        tracking.contains('delivered')) {
+      return false;
+    }
+
+    return true;
+  }
+
+  bool _canRequestReturn(
+    Map<String, dynamic> order,
+  ) {
+    final String status =
+        order['status']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String requestStatus =
+        _requestStatus(
+      order,
+      'returnRequestStatus',
+    );
+
+    return status == 'Delivered' &&
+        requestStatus.isEmpty;
+  }
+
+  Future<void> _showCustomerRequestDialog({
+    required Map<String, dynamic> order,
+    required bool isReturn,
+  }) async {
+    final String orderId =
+        order['id']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (orderId.isEmpty) {
+      _showMessage(
+        'Order ID is not available.',
+      );
+      return;
+    }
+
+    final List<String> reasons =
+        isReturn
+            ? <String>[
+                'Damaged product',
+                'Wrong product received',
+                'Product not as described',
+                'Product not working',
+                'Missing item / accessory',
+                'Changed my mind',
+                'Other',
+              ]
+            : <String>[
+                'Ordered by mistake',
+                'Changed my mind',
+                'Delivery is taking too long',
+                'Wrong address / details',
+                'Found another product',
+                'Other',
+              ];
+
+    String selectedReason =
+        reasons.first;
+
+    final TextEditingController
+        noteController =
+        TextEditingController();
+
+    bool isSubmitting = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext context,
+            void Function(
+              void Function(),
+            ) setDialogState,
+          ) {
+            Future<void> submit() async {
+              if (isSubmitting) {
+                return;
+              }
+
+              setDialogState(() {
+                isSubmitting = true;
+              });
+
+              try {
+                final String now =
+                    DateTime.now()
+                        .toIso8601String();
+
+                final Map<String, dynamic>
+                    update =
+                    isReturn
+                        ? <String, dynamic>{
+                            'returnRequestStatus':
+                                'Pending',
+                            'returnRequestReason':
+                                selectedReason,
+                            'returnRequestNote':
+                                noteController.text
+                                    .trim(),
+                            'returnRequestedAt':
+                                now,
+                            'returnRequestedBy':
+                                'customer',
+                            'customerRequestType':
+                                'Return',
+                            'customerRequestStatus':
+                                'Pending',
+                            'customerRequestUpdatedAt':
+                                now,
+                          }
+                        : <String, dynamic>{
+                            'cancelRequestStatus':
+                                'Pending',
+                            'cancelRequestReason':
+                                selectedReason,
+                            'cancelRequestNote':
+                                noteController.text
+                                    .trim(),
+                            'cancelRequestedAt':
+                                now,
+                            'cancelRequestedBy':
+                                'customer',
+                            'customerRequestType':
+                                'Cancellation',
+                            'customerRequestStatus':
+                                'Pending',
+                            'customerRequestUpdatedAt':
+                                now,
+                          };
+
+                await updateOrderTrackingFields(
+                  orderId,
+                  update,
+                );
+
+                if (!mounted ||
+                    !dialogContext.mounted) {
+                  return;
+                }
+
+                Navigator.pop(
+                  dialogContext,
+                );
+
+                await reloadOrdersForCurrentCustomer();
+
+                if (!mounted) {
+                  return;
+                }
+
+                setState(() {});
+
+                _showMessage(
+                  isReturn
+                      ? 'Return request submitted successfully.'
+                      : 'Cancellation request submitted successfully.',
+                );
+              } catch (error) {
+                if (!mounted) {
+                  return;
+                }
+
+                _showMessage(
+                  'Could not submit request: $error',
+                );
+              } finally {
+                if (dialogContext.mounted) {
+                  setDialogState(() {
+                    isSubmitting = false;
+                  });
+                }
+              }
+            }
+
+            return AlertDialog(
+              title: Text(
+                isReturn
+                    ? 'Request Return'
+                    : 'Request Cancellation',
+              ),
+              content:
+                  SingleChildScrollView(
+                child: Column(
+                  mainAxisSize:
+                      MainAxisSize.min,
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      isReturn
+                          ? 'Tell us why you want to return this delivered order.'
+                          : 'Tell us why you want to cancel this order.',
+                    ),
+                    const SizedBox(
+                      height: 16,
+                    ),
+                    DropdownButtonFormField<
+                        String>(
+                      initialValue:
+                          selectedReason,
+                      decoration:
+                          const InputDecoration(
+                        labelText: 'Reason',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      items: reasons
+                          .map<
+                              DropdownMenuItem<
+                                  String>>(
+                            (
+                              String reason,
+                            ) =>
+                                DropdownMenuItem<
+                                    String>(
+                              value: reason,
+                              child:
+                                  Text(reason),
+                            ),
+                          )
+                          .toList(),
+                      onChanged:
+                          isSubmitting
+                              ? null
+                              : (
+                                  String?
+                                      value,
+                                ) {
+                                  if (value ==
+                                      null) {
+                                    return;
+                                  }
+
+                                  setDialogState(
+                                    () {
+                                      selectedReason =
+                                          value;
+                                    },
+                                  );
+                                },
+                    ),
+                    const SizedBox(
+                      height: 14,
+                    ),
+                    TextField(
+                      controller:
+                          noteController,
+                      enabled:
+                          !isSubmitting,
+                      minLines: 3,
+                      maxLines: 5,
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Additional details (optional)',
+                        hintText:
+                            'Write any useful details here.',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    Text(
+                      isReturn
+                          ? 'Your return request will be reviewed before any refund is processed.'
+                          : 'Submitting this request does not instantly cancel the order. Seller/Admin approval may be required.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors
+                            .grey.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed:
+                      isSubmitting
+                          ? null
+                          : () {
+                              Navigator.pop(
+                                dialogContext,
+                              );
+                            },
+                  child:
+                      const Text('Back'),
+                ),
+                FilledButton.icon(
+                  onPressed:
+                      isSubmitting
+                          ? null
+                          : submit,
+                  icon: isSubmitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : Icon(
+                          isReturn
+                              ? Icons
+                                  .assignment_return_outlined
+                              : Icons
+                                  .cancel_outlined,
+                        ),
+                  label: Text(
+                    isSubmitting
+                        ? 'Submitting...'
+                        : 'Submit Request',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    noteController.dispose();
+  }
+
+  Widget _customerRequestSection(
+    Map<String, dynamic> order,
+  ) {
+    final String cancelStatus =
+        _requestStatus(
+      order,
+      'cancelRequestStatus',
+    );
+
+    final String cancelReason =
+        _requestStatus(
+      order,
+      'cancelRequestReason',
+    );
+
+    final String returnStatus =
+        _requestStatus(
+      order,
+      'returnRequestStatus',
+    );
+
+    final String returnReason =
+        _requestStatus(
+      order,
+      'returnRequestReason',
+    );
+
+    final String refundStatus =
+        _requestStatus(
+      order,
+      'refundStatus',
+    );
+
+    final String refundReference =
+        _requestStatus(
+      order,
+      'refundReference',
+    );
+
+    final bool canCancel =
+        _canRequestCancellation(
+      order,
+    );
+
+    final bool canReturn =
+        _canRequestReturn(
+      order,
+    );
+
+    final bool hasRequest =
+        cancelStatus.isNotEmpty ||
+            returnStatus.isNotEmpty ||
+            refundStatus.isNotEmpty;
+
+    if (!canCancel &&
+        !canReturn &&
+        !hasRequest) {
+      return const SizedBox
+          .shrink();
+    }
+
+    Widget requestRow(
+      String title,
+      String status, {
+      String reason = '',
+      String reference = '',
+    }) {
+      final Color color =
+          _requestStatusColor(
+        status,
+      );
+
+      return Container(
+        width: double.infinity,
+        margin:
+            const EdgeInsets.only(
+          bottom: 10,
+        ),
+        padding:
+            const EdgeInsets.all(
+          12,
+        ),
+        decoration:
+            BoxDecoration(
+          color: color.withValues(
+            alpha: 0.08,
+          ),
+          borderRadius:
+              BorderRadius.circular(
+            10,
+          ),
+          border: Border.all(
+            color: color.withValues(
+              alpha: 0.25,
+            ),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    title,
+                    style:
+                        const TextStyle(
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Chip(
+                  label:
+                      Text(status),
+                  side:
+                      BorderSide.none,
+                  backgroundColor:
+                      color.withValues(
+                    alpha: 0.14,
+                  ),
+                ),
+              ],
+            ),
+            if (reason.isNotEmpty)
+              Text(
+                'Reason: $reason',
+              ),
+            if (reference.isNotEmpty)
+              Text(
+                'Reference: $reference',
+              ),
+          ],
+        ),
+      );
+    }
+
+    return Card(
+      child: Padding(
+        padding:
+            const EdgeInsets.all(
+          14,
+        ),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: <Widget>[
+            const Row(
+              children: <Widget>[
+                Icon(
+                  Icons
+                      .support_agent_outlined,
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Cancel / Return / Refund',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(
+              height: 12,
+            ),
+            if (cancelStatus
+                .isNotEmpty)
+              requestRow(
+                'Cancellation Request',
+                cancelStatus,
+                reason:
+                    cancelReason,
+              ),
+            if (returnStatus
+                .isNotEmpty)
+              requestRow(
+                'Return Request',
+                returnStatus,
+                reason:
+                    returnReason,
+              ),
+            if (refundStatus
+                .isNotEmpty)
+              requestRow(
+                'Refund',
+                refundStatus,
+                reference:
+                    refundReference,
+              ),
+            if (canCancel)
+              SizedBox(
+                width:
+                    double.infinity,
+                height: 50,
+                child:
+                    OutlinedButton.icon(
+                  onPressed: () {
+                    _showCustomerRequestDialog(
+                      order: order,
+                      isReturn: false,
+                    );
+                  },
+                  icon: const Icon(
+                    Icons.cancel_outlined,
+                    color: Colors.red,
+                  ),
+                  label: const Text(
+                    'Request Order Cancellation',
+                    style: TextStyle(
+                      color: Colors.red,
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            if (canCancel &&
+                canReturn)
+              const SizedBox(
+                height: 10,
+              ),
+            if (canReturn)
+              SizedBox(
+                width:
+                    double.infinity,
+                height: 50,
+                child:
+                    OutlinedButton.icon(
+                  onPressed: () {
+                    _showCustomerRequestDialog(
+                      order: order,
+                      isReturn: true,
+                    );
+                  },
+                  icon: const Icon(
+                    Icons
+                        .assignment_return_outlined,
+                  ),
+                  label: const Text(
+                    'Request Product Return',
+                    style: TextStyle(
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ),
+            if (hasRequest) ...<Widget>[
+              const SizedBox(
+                height: 4,
+              ),
+              Text(
+                'Seller/Admin review status will appear here automatically.',
+                style: TextStyle(
+                  fontSize: 12,
+                  color: Colors
+                      .grey.shade700,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   // =========================================================
@@ -2214,6 +2902,18 @@ class _OrderHistoryPageState
                 ),
               ),
             ),
+          ),
+
+          const SizedBox(
+            height: 12,
+          ),
+
+          // ==============================================
+          // CANCEL / RETURN / REFUND REQUEST
+          // ==============================================
+
+          _customerRequestSection(
+            order,
           ),
 
           const SizedBox(

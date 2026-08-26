@@ -47,6 +47,10 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
         return Colors.deepPurple;
       case 'Delivered':
         return Colors.teal;
+      case 'Cancelled':
+        return Colors.red;
+      case 'Returned':
+        return Colors.brown;
       default:
         return Colors.grey;
     }
@@ -70,8 +74,14 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
           name.contains(search) ||
           phone.contains(search);
 
+      final String refundStatus =
+          order['refundStatus']?.toString().trim() ?? '';
+
       final bool matchesFilter =
-          selectedFilter == 'All' || status == selectedFilter;
+          selectedFilter == 'All' ||
+              status == selectedFilter ||
+              (selectedFilter == 'Refund Pending' &&
+                  refundStatus == 'Pending');
 
       return matchesSearch && matchesFilter;
     }).toList();
@@ -829,6 +839,1582 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
     }
   }
 
+  String _refundText(
+    Map<String, dynamic> order,
+    String key,
+  ) {
+    return order[key]?.toString().trim() ?? '';
+  }
+
+  Color _refundColor(
+    String status,
+  ) {
+    switch (status) {
+      case 'Pending':
+        return Colors.orange;
+      case 'Processing':
+        return Colors.blue;
+      case 'Refunded':
+        return Colors.green;
+      case 'Rejected':
+        return Colors.red;
+      case 'Not Required':
+        return Colors.blueGrey;
+      default:
+        return Colors.grey;
+    }
+  }
+
+  int _refundPendingCount(
+    List<Map<String, dynamic>> orders,
+  ) {
+    return orders
+        .where(
+          (Map<String, dynamic> order) =>
+              _refundText(
+                order,
+                'refundStatus',
+              ) ==
+              'Pending',
+        )
+        .length;
+  }
+
+  double _paidSellerSettlementTotal(
+    Map<String, dynamic> order,
+  ) {
+    final dynamic rawSettlements =
+        order['sellerSettlements'];
+
+    if (rawSettlements is! Map) {
+      return 0;
+    }
+
+    double total = 0;
+
+    for (final dynamic rawValue
+        in rawSettlements.values) {
+      if (rawValue is! Map) {
+        continue;
+      }
+
+      final String status =
+          rawValue['status']?.toString().trim() ?? '';
+
+      if (status != 'Paid') {
+        continue;
+      }
+
+      total += _parseMoney(
+        rawValue['amount'] ??
+            rawValue['sellerPayable'],
+      );
+    }
+
+    return total;
+  }
+
+  bool _sellerWasAlreadyPaid(
+    Map<String, dynamic> order,
+  ) {
+    return _paidSellerSettlementTotal(order) > 0;
+  }
+
+  Future<void> _showRefundEditor(
+    Map<String, dynamic> order,
+  ) async {
+    final String orderId =
+        order['id']?.toString().trim() ?? '';
+
+    if (orderId.isEmpty) {
+      return;
+    }
+
+    final double orderAmount =
+        _parseMoney(order['amount']);
+
+    double refundAmount =
+        _parseMoney(order['refundAmount']);
+
+    if (refundAmount <= 0) {
+      refundAmount = orderAmount;
+    }
+
+    String refundStatus =
+        _refundText(
+      order,
+      'refundStatus',
+    );
+
+    if (refundStatus.isEmpty ||
+        refundStatus == 'Not Required') {
+      refundStatus = 'Pending';
+    }
+
+    String refundMethod =
+        _refundText(
+      order,
+      'refundMethod',
+    );
+
+    String refundReference =
+        _refundText(
+      order,
+      'refundReference',
+    );
+
+    String refundNote =
+        _refundText(
+      order,
+      'refundNote',
+    );
+
+    bool saving = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext context,
+            StateSetter setDialogState,
+          ) {
+            Future<void> save() async {
+              if (saving) {
+                return;
+              }
+
+              if (refundAmount <= 0) {
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Refund amount must be greater than 0.',
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              if (orderAmount > 0 &&
+                  refundAmount > orderAmount) {
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Refund amount cannot be greater than the order total.',
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              if (refundStatus == 'Refunded' &&
+                  refundMethod.trim().isEmpty) {
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Select the refund payment method.',
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              if (refundStatus == 'Refunded' &&
+                  refundReference.trim().isEmpty) {
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Transaction / Reference ID is required before marking Refunded.',
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              setDialogState(() {
+                saving = true;
+              });
+
+              try {
+                final String now =
+                    DateTime.now()
+                        .toIso8601String();
+
+                final User? adminUser =
+                    FirebaseAuth
+                        .instance
+                        .currentUser;
+
+                final Map<String, dynamic>
+                    update =
+                    <String, dynamic>{
+                  'refundStatus':
+                      refundStatus,
+                  'refundAmount':
+                      refundAmount,
+                  'refundMethod':
+                      refundMethod.trim(),
+                  'refundReference':
+                      refundReference.trim(),
+                  'refundNote':
+                      refundNote.trim(),
+                  'refundUpdatedAt':
+                      now,
+                  'refundProcessedBy':
+                      adminUser?.uid ?? '',
+                };
+
+                if (refundStatus ==
+                    'Processing') {
+                  update['refundProcessingAt'] =
+                      now;
+                }
+
+                if (refundStatus ==
+                    'Rejected') {
+                  update['refundRejectedAt'] =
+                      now;
+                }
+
+                if (refundStatus ==
+                    'Refunded') {
+                  update['refundedAt'] =
+                      now;
+
+                  final double paidSellerAmount =
+                      _paidSellerSettlementTotal(
+                    order,
+                  );
+
+                  if (paidSellerAmount > 0) {
+                    update.addAll(
+                      <String, dynamic>{
+                        'sellerAdjustmentRequired':
+                            true,
+                        'sellerAdjustmentStatus':
+                            'Pending',
+                        'sellerAdjustmentAmount':
+                            paidSellerAmount,
+                        'sellerAdjustmentReason':
+                            'Customer refund completed after seller settlement had already been paid.',
+                        'sellerAdjustmentCreatedAt':
+                            now,
+                      },
+                    );
+                  }
+
+                  final String source =
+                      _refundText(
+                    order,
+                    'refundSource',
+                  );
+
+                  if (source == 'Return') {
+                    update['status'] =
+                        'Returned';
+                    update['trackingStatus'] =
+                        'Returned';
+                    update['trackingEnabled'] =
+                        false;
+                    update['returnedAt'] =
+                        now;
+                  }
+                }
+
+                await updateOrderTrackingFields(
+                  orderId,
+                  update,
+                );
+
+                if (!mounted ||
+                    !dialogContext.mounted) {
+                  return;
+                }
+
+                Navigator.pop(
+                  dialogContext,
+                );
+
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      refundStatus ==
+                              'Refunded'
+                          ? 'Refund completed successfully.'
+                          : 'Refund status updated to $refundStatus.',
+                    ),
+                  ),
+                );
+              } catch (error) {
+                if (!mounted) {
+                  return;
+                }
+
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Could not update refund: '
+                      '${error.toString().replaceFirst('Exception: ', '')}',
+                    ),
+                  ),
+                );
+
+                if (dialogContext.mounted) {
+                  setDialogState(() {
+                    saving = false;
+                  });
+                }
+              }
+            }
+
+            return AlertDialog(
+              title:
+                  const Text(
+                'Process Customer Refund',
+              ),
+              content: SizedBox(
+                width: MediaQuery.of(dialogContext).size.width * 0.82,
+                child: SingleChildScrollView(
+                  child: Column(
+                  mainAxisSize:
+                      MainAxisSize.min,
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'Order ID: $orderId',
+                      style:
+                          const TextStyle(
+                        fontWeight:
+                            FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 6,
+                    ),
+                    Text(
+                      'Order Total: Rs. ${orderAmount.toStringAsFixed(0)}',
+                    ),
+                    const SizedBox(
+                      height: 14,
+                    ),
+                    TextFormField(
+                      initialValue:
+                          refundAmount
+                              .toStringAsFixed(
+                                0,
+                              ),
+                      enabled:
+                          !saving,
+                      keyboardType:
+                          const TextInputType
+                              .numberWithOptions(
+                        decimal: true,
+                      ),
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Refund Amount',
+                        prefixText:
+                            'Rs. ',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      onChanged:
+                          (String value) {
+                        refundAmount =
+                            double.tryParse(
+                                  value
+                                      .trim(),
+                                ) ??
+                                0;
+                      },
+                    ),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    DropdownButtonFormField<
+                        String>(
+                      isExpanded: true,
+                      initialValue:
+                          refundStatus,
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Refund Status',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      items:
+                          const <String>[
+                        'Pending',
+                        'Processing',
+                        'Refunded',
+                        'Rejected',
+                      ].map(
+                        (
+                          String value,
+                        ) {
+                          return DropdownMenuItem<
+                              String>(
+                            value:
+                                value,
+                            child:
+                                Text(
+                              value,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        },
+                      ).toList(),
+                      onChanged:
+                          saving
+                              ? null
+                              : (
+                                  String?
+                                      value,
+                                ) {
+                                  if (value ==
+                                      null) {
+                                    return;
+                                  }
+
+                                  setDialogState(
+                                    () {
+                                      refundStatus =
+                                          value;
+                                    },
+                                  );
+                                },
+                    ),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    DropdownButtonFormField<
+                        String>(
+                      initialValue:
+                          refundMethod
+                                  .isEmpty
+                              ? null
+                              : refundMethod,
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Refund Via',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      items:
+                          const <String>[
+                        'Original Payment Method',
+                        'eSewa',
+                        'Khalti',
+                        'Bank Transfer',
+                        'Cash',
+                        'Other',
+                      ].map(
+                        (
+                          String value,
+                        ) {
+                          return DropdownMenuItem<
+                              String>(
+                            value:
+                                value,
+                            child:
+                                Text(
+                              value,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          );
+                        },
+                      ).toList(),
+                      onChanged:
+                          saving
+                              ? null
+                              : (
+                                  String?
+                                      value,
+                                ) {
+                                  refundMethod =
+                                      value ??
+                                          '';
+                                },
+                    ),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    TextFormField(
+                      initialValue:
+                          refundReference,
+                      enabled:
+                          !saving,
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Transaction / Reference ID',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      onChanged:
+                          (String value) {
+                        refundReference =
+                            value;
+                      },
+                    ),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    TextFormField(
+                      initialValue:
+                          refundNote,
+                      enabled:
+                          !saving,
+                      minLines:
+                          2,
+                      maxLines:
+                          4,
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Admin Note (optional)',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      onChanged:
+                          (String value) {
+                        refundNote =
+                            value;
+                      },
+                    ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed:
+                      saving
+                          ? null
+                          : () {
+                              Navigator.pop(
+                                dialogContext,
+                              );
+                            },
+                  child:
+                      const Text(
+                    'Cancel',
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed:
+                      saving
+                          ? null
+                          : save,
+                  icon: saving
+                      ? const SizedBox(
+                          width:
+                              18,
+                          height:
+                              18,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth:
+                                2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons
+                              .payments_outlined,
+                        ),
+                  label: Text(
+                    saving
+                        ? 'Saving...'
+                        : 'Save Refund',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _refundCard(
+    Map<String, dynamic> order,
+  ) {
+    final String status =
+        _refundText(
+      order,
+      'refundStatus',
+    );
+
+    if (status.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final String source =
+        _refundText(
+      order,
+      'refundSource',
+    );
+
+    final String reason =
+        _refundText(
+      order,
+      'refundReason',
+    );
+
+    final String method =
+        _refundText(
+      order,
+      'refundMethod',
+    );
+
+    final String reference =
+        _refundText(
+      order,
+      'refundReference',
+    );
+
+    final String note =
+        _refundText(
+      order,
+      'refundNote',
+    );
+
+    final double amount =
+        _parseMoney(
+      order['refundAmount'],
+    );
+
+    final Color color =
+        _refundColor(
+      status,
+    );
+
+    final bool canProcess =
+        status == 'Pending' ||
+            status == 'Processing';
+
+    return Card(
+      margin:
+          EdgeInsets.zero,
+      child: Padding(
+        padding:
+            const EdgeInsets.all(
+          12,
+        ),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const Icon(
+                  Icons
+                      .currency_exchange,
+                  color:
+                      Colors.deepPurple,
+                ),
+                const SizedBox(
+                  width:
+                      8,
+                ),
+                const Expanded(
+                  child: Text(
+                    'Customer Refund',
+                    style:
+                        TextStyle(
+                      fontSize:
+                          16,
+                      fontWeight:
+                          FontWeight
+                              .bold,
+                    ),
+                  ),
+                ),
+                Chip(
+                  label:
+                      Text(status),
+                  backgroundColor:
+                      color.withValues(
+                    alpha:
+                        0.12,
+                  ),
+                  side:
+                      BorderSide(
+                    color:
+                        color,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(
+              height:
+                  8,
+            ),
+            if (source.isNotEmpty)
+              Text(
+                'Source: $source',
+              ),
+            if (reason.isNotEmpty)
+              Text(
+                'Reason: $reason',
+              ),
+            if (amount > 0)
+              Text(
+                'Refund Amount: Rs. ${amount.toStringAsFixed(0)}',
+                style:
+                    const TextStyle(
+                  fontWeight:
+                      FontWeight.bold,
+                ),
+              ),
+            if (method.isNotEmpty)
+              Text(
+                'Refund Via: $method',
+              ),
+            if (reference.isNotEmpty)
+              SelectableText(
+                'Transaction / Reference ID: $reference',
+              ),
+            if (note.isNotEmpty)
+              Text(
+                'Admin Note: $note',
+              ),
+            if (canProcess) ...<Widget>[
+              const SizedBox(
+                height:
+                    12,
+              ),
+              SizedBox(
+                width:
+                    double.infinity,
+                child:
+                    FilledButton.icon(
+                  onPressed:
+                      () {
+                    _showRefundEditor(
+                      order,
+                    );
+                  },
+                  icon:
+                      const Icon(
+                    Icons
+                        .payments_outlined,
+                  ),
+                  label:
+                      const Text(
+                    'Process Refund',
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showSellerAdjustmentEditor(
+    Map<String, dynamic> order,
+  ) async {
+    final String orderId =
+        order['id']?.toString().trim() ?? '';
+
+    if (orderId.isEmpty) {
+      return;
+    }
+
+    final double paidSellerAmount =
+        _paidSellerSettlementTotal(order);
+
+    final double storedAmount =
+        _parseMoney(
+      order['sellerAdjustmentAmount'],
+    );
+
+    final double adjustmentAmount =
+        storedAmount > 0
+            ? storedAmount
+            : paidSellerAmount;
+
+    String status =
+        _refundText(
+      order,
+      'sellerAdjustmentStatus',
+    );
+
+    if (status.isEmpty) {
+      status = 'Pending';
+    }
+
+    String method =
+        _refundText(
+      order,
+      'sellerAdjustmentMethod',
+    );
+
+    String reference =
+        _refundText(
+      order,
+      'sellerAdjustmentReference',
+    );
+
+    String note =
+        _refundText(
+      order,
+      'sellerAdjustmentNote',
+    );
+
+    bool saving = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext context,
+            StateSetter setDialogState,
+          ) {
+            Future<void> save() async {
+              if (saving) {
+                return;
+              }
+
+              if (adjustmentAmount <= 0) {
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Seller adjustment amount is not available.',
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              if (status == 'Recovered' &&
+                  method.trim().isEmpty) {
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Select how RD recovered the amount from the seller.',
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              if (status == 'Recovered' &&
+                  reference.trim().isEmpty) {
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  const SnackBar(
+                    content: Text(
+                      'Reference ID is required for a recovered adjustment.',
+                    ),
+                  ),
+                );
+                return;
+              }
+
+              setDialogState(() {
+                saving = true;
+              });
+
+              try {
+                final String now =
+                    DateTime.now()
+                        .toIso8601String();
+
+                final User? adminUser =
+                    FirebaseAuth
+                        .instance
+                        .currentUser;
+
+                final bool resolved =
+                    status == 'Recovered' ||
+                        status ==
+                            'Deducted from Next Settlement';
+
+                await updateOrderTrackingFields(
+                  orderId,
+                  <String, dynamic>{
+                    'sellerAdjustmentRequired':
+                        !resolved,
+                    'sellerAdjustmentStatus':
+                        status,
+                    'sellerAdjustmentAmount':
+                        adjustmentAmount,
+                    'sellerAdjustmentMethod':
+                        method.trim(),
+                    'sellerAdjustmentReference':
+                        reference.trim(),
+                    'sellerAdjustmentNote':
+                        note.trim(),
+                    'sellerAdjustmentUpdatedAt':
+                        now,
+                    'sellerAdjustmentUpdatedBy':
+                        adminUser?.uid ?? '',
+                    'sellerAdjustmentResolvedAt':
+                        resolved ? now : '',
+                  },
+                );
+
+                if (!mounted ||
+                    !dialogContext.mounted) {
+                  return;
+                }
+
+                Navigator.pop(
+                  dialogContext,
+                );
+
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      status == 'Recovered'
+                          ? 'Seller adjustment marked Recovered.'
+                          : status ==
+                                  'Deducted from Next Settlement'
+                              ? 'Seller adjustment marked as deducted from the next settlement.'
+                              : 'Seller adjustment kept Pending.',
+                    ),
+                  ),
+                );
+              } catch (error) {
+                if (!mounted) {
+                  return;
+                }
+
+                ScaffoldMessenger.of(
+                  this.context,
+                ).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      'Could not update seller adjustment: '
+                      '${error.toString().replaceFirst('Exception: ', '')}',
+                    ),
+                  ),
+                );
+
+                if (dialogContext.mounted) {
+                  setDialogState(() {
+                    saving = false;
+                  });
+                }
+              }
+            }
+
+            final double dialogWidth =
+                MediaQuery.of(dialogContext).size.width;
+
+            return AlertDialog(
+              insetPadding:
+                  const EdgeInsets.symmetric(
+                horizontal: 18,
+                vertical: 24,
+              ),
+              title:
+                  const Text(
+                'Seller Adjustment',
+              ),
+              content: SizedBox(
+                width: dialogWidth < 700
+                    ? dialogWidth - 72
+                    : 560,
+                child:
+                    SingleChildScrollView(
+                  child: Column(
+                  mainAxisSize:
+                      MainAxisSize.min,
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'Order ID: $orderId',
+                      style:
+                          const TextStyle(
+                        fontWeight:
+                            FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 6,
+                    ),
+                    Text(
+                      'Adjustment Amount: Rs. '
+                      '${adjustmentAmount.toStringAsFixed(0)}',
+                      style:
+                          const TextStyle(
+                        color:
+                            Colors.red,
+                        fontWeight:
+                            FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 14,
+                    ),
+                    DropdownButtonFormField<
+                        String>(
+                      isExpanded: true,
+                      initialValue:
+                          <String>[
+                        'Pending',
+                        'Recovered',
+                        'Deducted from Next Settlement',
+                      ].contains(status)
+                              ? status
+                              : 'Pending',
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Adjustment Status',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      selectedItemBuilder:
+                          (BuildContext context) {
+                        return const <String>[
+                          'Pending',
+                          'Recovered',
+                          'Deducted from Next Settlement',
+                        ].map<Widget>(
+                          (String value) {
+                            return Align(
+                              alignment:
+                                  Alignment.centerLeft,
+                              child: Text(
+                                value,
+                                maxLines: 1,
+                                overflow:
+                                    TextOverflow.ellipsis,
+                              ),
+                            );
+                          },
+                        ).toList();
+                      },
+                      items:
+                          const <String>[
+                        'Pending',
+                        'Recovered',
+                        'Deducted from Next Settlement',
+                      ].map(
+                        (
+                          String value,
+                        ) {
+                          return DropdownMenuItem<
+                              String>(
+                            value:
+                                value,
+                            child:
+                                Text(
+                              value,
+                              maxLines: 1,
+                              overflow:
+                                  TextOverflow.ellipsis,
+                            ),
+                          );
+                        },
+                      ).toList(),
+                      onChanged:
+                          saving
+                              ? null
+                              : (
+                                  String?
+                                      value,
+                                ) {
+                                  if (value ==
+                                      null) {
+                                    return;
+                                  }
+
+                                  setDialogState(
+                                    () {
+                                      status =
+                                          value;
+                                    },
+                                  );
+                                },
+                    ),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    DropdownButtonFormField<
+                        String>(
+                      isExpanded: true,
+                      initialValue:
+                          method.isEmpty
+                              ? null
+                              : method,
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Recovery / Deduction Method',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      selectedItemBuilder:
+                          (BuildContext context) {
+                        return const <String>[
+                          'eSewa',
+                          'Khalti',
+                          'Bank Transfer',
+                          'Cash',
+                          'Deducted from Seller Payout',
+                          'Other',
+                        ].map<Widget>(
+                          (String value) {
+                            return Align(
+                              alignment:
+                                  Alignment.centerLeft,
+                              child: Text(
+                                value,
+                                maxLines: 1,
+                                overflow:
+                                    TextOverflow.ellipsis,
+                              ),
+                            );
+                          },
+                        ).toList();
+                      },
+                      items:
+                          const <String>[
+                        'eSewa',
+                        'Khalti',
+                        'Bank Transfer',
+                        'Cash',
+                        'Deducted from Seller Payout',
+                        'Other',
+                      ].map(
+                        (
+                          String value,
+                        ) {
+                          return DropdownMenuItem<
+                              String>(
+                            value:
+                                value,
+                            child:
+                                Text(
+                              value,
+                              maxLines: 1,
+                              overflow:
+                                  TextOverflow.ellipsis,
+                            ),
+                          );
+                        },
+                      ).toList(),
+                      onChanged:
+                          saving
+                              ? null
+                              : (
+                                  String?
+                                      value,
+                                ) {
+                                  method =
+                                      value ??
+                                          '';
+                                },
+                    ),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    TextFormField(
+                      initialValue:
+                          reference,
+                      enabled:
+                          !saving,
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Transaction / Reference ID',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      onChanged:
+                          (String value) {
+                        reference =
+                            value;
+                      },
+                    ),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    TextFormField(
+                      initialValue:
+                          note,
+                      enabled:
+                          !saving,
+                      minLines:
+                          2,
+                      maxLines:
+                          4,
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Admin Note (optional)',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      onChanged:
+                          (String value) {
+                        note =
+                            value;
+                      },
+                    ),
+                    const SizedBox(
+                      height: 10,
+                    ),
+                    Text(
+                      status ==
+                              'Deducted from Next Settlement'
+                          ? 'Use this status only after the amount has actually been deducted from a later seller payout.'
+                          : 'Recovered means RD has actually received the amount back from the seller.',
+                      style:
+                          TextStyle(
+                        fontSize:
+                            12,
+                        color:
+                            Colors.grey.shade700,
+                      ),
+                    ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed:
+                      saving
+                          ? null
+                          : () {
+                              Navigator.pop(
+                                dialogContext,
+                              );
+                            },
+                  child:
+                      const Text(
+                    'Cancel',
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed:
+                      saving
+                          ? null
+                          : save,
+                  icon: saving
+                      ? const SizedBox(
+                          width:
+                              18,
+                          height:
+                              18,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth:
+                                2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons
+                              .check_circle_outline,
+                        ),
+                  label:
+                      Text(
+                    saving
+                        ? 'Saving...'
+                        : 'Save Adjustment',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _sellerAdjustmentCard(
+    Map<String, dynamic> order,
+  ) {
+    final double paidSellerAmount =
+        _paidSellerSettlementTotal(order);
+
+    final bool storedRequired =
+        order['sellerAdjustmentRequired'] == true;
+
+    final bool logicallyRequired =
+        paidSellerAmount > 0 &&
+            (order['status']?.toString().trim() ==
+                    'Cancelled' ||
+                order['status']?.toString().trim() ==
+                    'Returned' ||
+                _refundText(
+                      order,
+                      'refundStatus',
+                    ) ==
+                    'Pending' ||
+                _refundText(
+                      order,
+                      'refundStatus',
+                    ) ==
+                    'Processing' ||
+                _refundText(
+                      order,
+                      'refundStatus',
+                    ) ==
+                    'Refunded');
+
+    if (!storedRequired &&
+        !logicallyRequired) {
+      return const SizedBox.shrink();
+    }
+
+    final String adjustmentStatus =
+        _refundText(
+      order,
+      'sellerAdjustmentStatus',
+    );
+
+    final double storedAmount =
+        _parseMoney(
+      order['sellerAdjustmentAmount'],
+    );
+
+    final double amount =
+        storedAmount > 0
+            ? storedAmount
+            : paidSellerAmount;
+
+    final String reason =
+        _refundText(
+      order,
+      'sellerAdjustmentReason',
+    );
+
+    final String method =
+        _refundText(
+      order,
+      'sellerAdjustmentMethod',
+    );
+
+    final String reference =
+        _refundText(
+      order,
+      'sellerAdjustmentReference',
+    );
+
+    final String note =
+        _refundText(
+      order,
+      'sellerAdjustmentNote',
+    );
+
+    final bool adjustmentResolved =
+        adjustmentStatus == 'Recovered' ||
+            adjustmentStatus ==
+                'Deducted from Next Settlement';
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding:
+            const EdgeInsets.all(
+          12,
+        ),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: <Widget>[
+            const Row(
+              children: <Widget>[
+                Icon(
+                  Icons
+                      .sync_problem_outlined,
+                  color:
+                      Colors.red,
+                ),
+                SizedBox(
+                  width:
+                      8,
+                ),
+                Expanded(
+                  child: Text(
+                    'Seller Adjustment Required',
+                    style:
+                        TextStyle(
+                      fontSize:
+                          16,
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(
+              height:
+                  8,
+            ),
+            Text(
+              'Seller was already paid before this cancellation / return.',
+              style:
+                  const TextStyle(
+                color:
+                    Colors.red,
+                fontWeight:
+                    FontWeight.w600,
+              ),
+            ),
+            if (amount > 0)
+              Text(
+                'Amount to recover / deduct: Rs. '
+                '${amount.toStringAsFixed(0)}',
+                style:
+                    const TextStyle(
+                  fontWeight:
+                      FontWeight.bold,
+                ),
+              ),
+            Text(
+              'Adjustment Status: '
+              '${adjustmentStatus.isEmpty ? 'Pending' : adjustmentStatus}',
+            ),
+            if (reason.isNotEmpty)
+              Text(
+                reason,
+                style:
+                    TextStyle(
+                  fontSize:
+                      12,
+                  color:
+                      Colors.grey.shade700,
+                ),
+              ),
+            if (method.isNotEmpty)
+              Text(
+                'Method: $method',
+              ),
+            if (reference.isNotEmpty)
+              SelectableText(
+                'Reference: $reference',
+              ),
+            if (note.isNotEmpty)
+              Text(
+                'Admin Note: $note',
+              ),
+            const SizedBox(
+              height:
+                  8,
+            ),
+            Text(
+              adjustmentResolved
+                  ? 'This seller adjustment has been resolved.'
+                  : 'Do not pay this seller settlement again. Recover this amount from the seller or deduct it from a future seller payout.',
+              style:
+                  const TextStyle(
+                fontSize:
+                    12,
+              ),
+            ),
+            const SizedBox(
+              height:
+                  10,
+            ),
+            SizedBox(
+              width:
+                  double.infinity,
+              child:
+                  OutlinedButton.icon(
+                onPressed:
+                    () {
+                  _showSellerAdjustmentEditor(
+                    order,
+                  );
+                },
+                icon:
+                    const Icon(
+                  Icons
+                      .sync_alt_outlined,
+                ),
+                label:
+                    Text(
+                  adjustmentResolved
+                      ? 'View / Update Adjustment'
+                      : 'Process Seller Adjustment',
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _refundPendingChip(
+    List<Map<String, dynamic>>
+        orders,
+  ) {
+    final bool selected =
+        selectedFilter ==
+            'Refund Pending';
+
+    return ChoiceChip(
+      selected:
+          selected,
+      onSelected:
+          (_) {
+        setState(() {
+          selectedFilter =
+              selected
+                  ? 'All'
+                  : 'Refund Pending';
+        });
+      },
+      avatar:
+          const Icon(
+        Icons
+            .currency_exchange,
+        size:
+            18,
+        color:
+            Colors.orange,
+      ),
+      label:
+          Text(
+        'Refund Pending (${_refundPendingCount(orders)})',
+      ),
+    );
+  }
+
   Widget _statusChip(
     List<Map<String, dynamic>> orders,
     String status,
@@ -1030,6 +2616,12 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                     _statusChip(allOrders, 'Shipped', Icons.local_shipping),
                     const SizedBox(width: 8),
                     _statusChip(allOrders, 'Delivered', Icons.inventory_2),
+                    const SizedBox(width: 8),
+                    _statusChip(allOrders, 'Cancelled', Icons.cancel_outlined),
+                    const SizedBox(width: 8),
+                    _statusChip(allOrders, 'Returned', Icons.assignment_return_outlined),
+                    const SizedBox(width: 8),
+                    _refundPendingChip(allOrders),
                   ],
                 ),
               ),
@@ -1047,6 +2639,16 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                               final String status =
                                   order['status']?.toString() ?? 'Pending';
                               final Color color = _statusColor(status);
+                              final List<String> availableStatuses =
+                                  <String>[...orderStatuses];
+
+                              if (!availableStatuses.contains(status)) {
+                                availableStatuses.add(status);
+                              }
+
+                              final bool closedOrder =
+                                  status == 'Cancelled' ||
+                                      status == 'Returned';
                               final String customerName =
                                   (order['customerName'] ??
                                           order['name'] ??
@@ -1100,7 +2702,7 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                           '${order['id']}_$status',
                                         ),
                                         initialValue:
-                                            orderStatuses.contains(status)
+                                            availableStatuses.contains(status)
                                                 ? status
                                                 : 'Pending',
                                         decoration: const InputDecoration(
@@ -1109,7 +2711,7 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                           prefixIcon:
                                               Icon(Icons.local_shipping),
                                         ),
-                                        items: orderStatuses
+                                        items: availableStatuses
                                             .map(
                                               (String item) =>
                                                   DropdownMenuItem<String>(
@@ -1118,21 +2720,106 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                               ),
                                             )
                                             .toList(),
-                                        onChanged: (String? value) {
-                                          if (value == null || value == status) {
-                                            return;
-                                          }
-                                          _changeStatus(
-                                            order['id'].toString(),
-                                            value,
-                                          );
-                                        },
+                                        onChanged: closedOrder
+                                            ? null
+                                            : (String? value) {
+                                                if (value == null ||
+                                                    value == status) {
+                                                  return;
+                                                }
+                                                _changeStatus(
+                                                  order['id'].toString(),
+                                                  value,
+                                                );
+                                              },
                                       ),
                                       const SizedBox(height: 10),
+                                      _refundCard(
+                                        order,
+                                      ),
+                                      if (_refundText(
+                                        order,
+                                        'refundStatus',
+                                      ).isNotEmpty)
+                                        const SizedBox(height: 10),
+                                      _sellerAdjustmentCard(
+                                        order,
+                                      ),
+                                      if (_sellerWasAlreadyPaid(
+                                            order,
+                                          ) &&
+                                          (status == 'Cancelled' ||
+                                              status == 'Returned' ||
+                                              _refundText(
+                                                    order,
+                                                    'refundStatus',
+                                                  ) ==
+                                                  'Pending' ||
+                                              _refundText(
+                                                    order,
+                                                    'refundStatus',
+                                                  ) ==
+                                                  'Processing' ||
+                                              _refundText(
+                                                    order,
+                                                    'refundStatus',
+                                                  ) ==
+                                                  'Refunded'))
+                                        const SizedBox(height: 10),
                                       SizedBox(
                                         width: double.infinity,
                                         child: OutlinedButton.icon(
                                           onPressed: () {
+                                            final String refundStatus =
+                                                _refundText(
+                                              order,
+                                              'refundStatus',
+                                            );
+
+                                            final bool sellerAlreadyPaid =
+                                                _sellerWasAlreadyPaid(
+                                              order,
+                                            );
+
+                                            if (sellerAlreadyPaid &&
+                                                (status == 'Cancelled' ||
+                                                    status == 'Returned' ||
+                                                    refundStatus == 'Pending' ||
+                                                    refundStatus == 'Processing' ||
+                                                    refundStatus == 'Refunded')) {
+                                              final double paidAmount =
+                                                  _paidSellerSettlementTotal(
+                                                order,
+                                              );
+
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                SnackBar(
+                                                  content: Text(
+                                                    'Seller was already paid Rs. '
+                                                    '${paidAmount.toStringAsFixed(0)}. '
+                                                    'This amount must be recovered or deducted from a future payout.',
+                                                  ),
+                                                ),
+                                              );
+                                              return;
+                                            }
+
+                                            if (status == 'Cancelled' ||
+                                                status == 'Returned' ||
+                                                refundStatus == 'Pending' ||
+                                                refundStatus == 'Processing') {
+                                              ScaffoldMessenger.of(context)
+                                                  .showSnackBar(
+                                                const SnackBar(
+                                                  content: Text(
+                                                    'Seller settlement is on hold while cancellation / return / refund is being handled.',
+                                                  ),
+                                                ),
+                                              );
+                                              return;
+                                            }
+
                                             _openSellerSettlement(
                                               order,
                                             );
@@ -1140,8 +2827,40 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                           icon: const Icon(
                                             Icons.account_balance_wallet_outlined,
                                           ),
-                                          label: const Text(
-                                            'Seller Settlement',
+                                          label: Text(
+                                            _sellerWasAlreadyPaid(order) &&
+                                                    (status == 'Cancelled' ||
+                                                        status == 'Returned' ||
+                                                        _refundText(
+                                                              order,
+                                                              'refundStatus',
+                                                            ) ==
+                                                            'Pending' ||
+                                                        _refundText(
+                                                              order,
+                                                              'refundStatus',
+                                                            ) ==
+                                                            'Processing' ||
+                                                        _refundText(
+                                                              order,
+                                                              'refundStatus',
+                                                            ) ==
+                                                            'Refunded')
+                                                ? 'Seller Adjustment Required'
+                                                : status == 'Cancelled' ||
+                                                        status == 'Returned' ||
+                                                        _refundText(
+                                                              order,
+                                                              'refundStatus',
+                                                            ) ==
+                                                            'Pending' ||
+                                                        _refundText(
+                                                              order,
+                                                              'refundStatus',
+                                                            ) ==
+                                                            'Processing'
+                                                    ? 'Seller Settlement On Hold'
+                                                    : 'Seller Settlement',
                                           ),
                                         ),
                                       ),

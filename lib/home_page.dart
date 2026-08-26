@@ -7,6 +7,7 @@ import 'package:speech_to_text/speech_to_text.dart' as stt;
 
 import 'admin_auth_page.dart';
 import 'cart_page.dart';
+import 'customer_dashboard_page.dart';
 import 'data/cart_data.dart';
 import 'data/product_data.dart';
 import 'delivery_person_auth_page.dart';
@@ -1167,7 +1168,16 @@ class _HomePageState extends State<HomePage> {
                     if (value == 'profile') {
                       Navigator.push<void>(
                         context,
-                        MaterialPageRoute<void>(builder: (_) => const ProfilePage()),
+                        MaterialPageRoute<void>(
+                          builder: (_) => const ProfilePage(),
+                        ),
+                      );
+                    } else if (value == 'customer') {
+                      Navigator.push<void>(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => const CustomerDashboardPage(),
+                        ),
                       );
                     } else if (value == 'admin') {
                       Navigator.push<void>(
@@ -1191,10 +1201,53 @@ class _HomePageState extends State<HomePage> {
                     }
                   },
                   itemBuilder: (_) => const <PopupMenuEntry<String>>[
-                    PopupMenuItem<String>(value: 'profile', child: Text('My Profile')),
-                    PopupMenuItem<String>(value: 'seller', child: Text('Seller Dashboard')),
-                    PopupMenuItem<String>(value: 'delivery', child: Text('Delivery Person')),
-                    PopupMenuItem<String>(value: 'admin', child: Text('Admin Dashboard')),
+                    PopupMenuItem<String>(
+                      value: 'profile',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.person_outline),
+                        title: Text('My Profile'),
+                      ),
+                    ),
+                    PopupMenuDivider(),
+                    PopupMenuItem<String>(
+                      value: 'customer',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.account_circle_rounded, color: _rdRed),
+                        title: Text('Customer Dashboard'),
+                        subtitle: Text('No ID / password required'),
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'seller',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.storefront_outlined),
+                        title: Text('Seller Dashboard'),
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'delivery',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.delivery_dining_outlined),
+                        title: Text('Delivery Person'),
+                      ),
+                    ),
+                    PopupMenuItem<String>(
+                      value: 'admin',
+                      child: ListTile(
+                        dense: true,
+                        contentPadding: EdgeInsets.zero,
+                        leading: Icon(Icons.admin_panel_settings_outlined),
+                        title: Text('Admin Dashboard'),
+                      ),
+                    ),
                   ],
                   child: Container(
                     width: 44,

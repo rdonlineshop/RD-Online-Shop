@@ -55,11 +55,36 @@ Future<void> _ensureCustomerSessionDocument(String customerId) async {
   );
 }
 
+Future<Map<String, dynamic>?> _registeredCustomerDocument(
+  User user,
+) async {
+  if (user.isAnonymous) {
+    return null;
+  }
+
+  try {
+    final DocumentSnapshot<Map<String, dynamic>> document =
+        await _customersCollection.doc(user.uid).get();
+
+    if (!document.exists) {
+      return null;
+    }
+
+    final Map<String, dynamic> data =
+        document.data() ?? <String, dynamic>{};
+
+    if (data['role']?.toString().trim() != 'customer' ||
+        data['isActive'] == false) {
+      return null;
+    }
+
+    return data;
+  } catch (_) {
+    return null;
+  }
+}
+
 Future<String> getOrCreateCustomerId() async {
-  // IMPORTANT: Never sign out an active Admin/Seller/Delivery account here.
-  // The previous version forced every non-anonymous account to sign out, which
-  // caused Admin Order Management to flash the orders and then immediately lose
-  // Firestore permission when a customer helper finished in the background.
   User? user = FirebaseAuth.instance.currentUser;
 
   if (user == null) {
@@ -72,25 +97,61 @@ Future<String> getOrCreateCustomerId() async {
     throw StateError('Could not start customer session.');
   }
 
-  if (!user.isAnonymous) {
-    // Customer action requested while a staff account is active. Switch only
-    // at this explicit customer action point; background listeners never do it.
-    await FirebaseAuth.instance.signOut();
-    final UserCredential credential =
-        await FirebaseAuth.instance.signInAnonymously();
-    user = credential.user;
-
-    if (user == null) {
-      throw StateError('Could not start customer session.');
-    }
-  }
-
   final SharedPreferences prefs = await SharedPreferences.getInstance();
 
-  // IMPORTANT: Always prefer the already-saved customer ID.
-  // Seller/driver login signs the anonymous customer out and later creates a
-  // new anonymous Firebase UID. Keeping this saved ID stable prevents
-  // "My Orders" from disappearing after role login/logout.
+  // Registered customer:
+  // customers/{authUid}.customerId is the permanent RD customer identity.
+  // It may be an older guest ID so existing orders survive registration.
+  if (!user.isAnonymous) {
+    final Map<String, dynamic>? customer =
+        await _registeredCustomerDocument(user);
+
+    if (customer != null) {
+      String customerId =
+          customer['customerId']?.toString().trim() ?? '';
+
+      if (customerId.isEmpty) {
+        customerId = user.uid;
+
+        await _customersCollection.doc(user.uid).set(
+          <String, dynamic>{
+            'authUid': user.uid,
+            'customerId': customerId,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+
+      await prefs.setString(_customerIdPreferenceKey, customerId);
+      return customerId;
+    }
+
+    // Admin/Seller/Delivery account is active.
+    // Never sign it out from a background customer helper.
+    final String savedId =
+        prefs.getString(_customerIdPreferenceKey)?.trim() ?? '';
+
+    if (savedId.isNotEmpty) {
+      return savedId;
+    }
+
+    final Random random = Random.secure();
+    final String randomPart =
+        random.nextInt(1000000).toString().padLeft(6, '0');
+    final String localCustomerId =
+        'RDC${DateTime.now().microsecondsSinceEpoch}$randomPart';
+
+    await prefs.setString(
+      _customerIdPreferenceKey,
+      localCustomerId,
+    );
+
+    return localCustomerId;
+  }
+
+  // Guest customer: preserve the already-saved ID across anonymous Firebase
+  // UID changes caused by explicit Seller/Admin/Driver login/logout.
   final String savedId =
       prefs.getString(_customerIdPreferenceKey)?.trim() ?? '';
 
@@ -99,26 +160,45 @@ Future<String> getOrCreateCustomerId() async {
     return savedId;
   }
 
-  String customerId;
-  if (user.isAnonymous) {
-    // First-time customer: using the first anonymous UID keeps old data
-    // compatible while the value remains stable in SharedPreferences.
-    customerId = user.uid;
-  } else {
-    final Random random = Random.secure();
-    final String randomPart =
-        random.nextInt(1000000).toString().padLeft(6, '0');
-    customerId =
-        'RDC${DateTime.now().microsecondsSinceEpoch}$randomPart';
-  }
+  final String customerId = user.uid;
 
-  await prefs.setString(_customerIdPreferenceKey, customerId);
+  await prefs.setString(
+    _customerIdPreferenceKey,
+    customerId,
+  );
+
   await _ensureCustomerSessionDocument(customerId);
   return customerId;
 }
 
 Future<String?> getSavedCustomerId() async {
   final SharedPreferences prefs = await SharedPreferences.getInstance();
+  final User? user = FirebaseAuth.instance.currentUser;
+
+  if (user != null && !user.isAnonymous) {
+    final Map<String, dynamic>? customer =
+        await _registeredCustomerDocument(user);
+
+    if (customer != null) {
+      final String registeredId =
+          customer['customerId']?.toString().trim() ?? '';
+
+      if (registeredId.isNotEmpty) {
+        await prefs.setString(
+          _customerIdPreferenceKey,
+          registeredId,
+        );
+        return registeredId;
+      }
+
+      await prefs.setString(
+        _customerIdPreferenceKey,
+        user.uid,
+      );
+      return user.uid;
+    }
+  }
+
   final String savedId =
       prefs.getString(_customerIdPreferenceKey)?.trim() ?? '';
 
@@ -126,12 +206,91 @@ Future<String?> getSavedCustomerId() async {
     return savedId;
   }
 
-  final User? user = FirebaseAuth.instance.currentUser;
   if (user != null && user.isAnonymous) {
     return user.uid;
   }
 
   return null;
+}
+
+Future<String> activateRegisteredCustomerSession(
+  User user,
+) async {
+  if (user.isAnonymous) {
+    throw StateError('Registered customer account is required.');
+  }
+
+  final DocumentSnapshot<Map<String, dynamic>> document =
+      await _customersCollection.doc(user.uid).get();
+
+  if (!document.exists) {
+    throw StateError('Customer profile was not found.');
+  }
+
+  final Map<String, dynamic> data =
+      document.data() ?? <String, dynamic>{};
+
+  if (data['role']?.toString().trim() != 'customer' ||
+      data['isActive'] == false) {
+    throw StateError('This account is not an active customer account.');
+  }
+
+  String customerId =
+      data['customerId']?.toString().trim() ?? '';
+
+  if (customerId.isEmpty) {
+    customerId = user.uid;
+
+    await _customersCollection.doc(user.uid).set(
+      <String, dynamic>{
+        'authUid': user.uid,
+        'customerId': customerId,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: true),
+    );
+  }
+
+  final SharedPreferences prefs = await SharedPreferences.getInstance();
+  await prefs.setString(_customerIdPreferenceKey, customerId);
+
+  await reloadOrdersForCurrentCustomer();
+  return customerId;
+}
+
+Future<String> switchToGuestCustomerSession({
+  String? preferredCustomerId,
+}) async {
+  final FirebaseAuth auth = FirebaseAuth.instance;
+
+  await _ordersSubscription?.cancel();
+  _ordersSubscription = null;
+  _ordersListenerStarted = false;
+  _ordersListenerCustomerId = '';
+
+  if (auth.currentUser != null && auth.currentUser!.isAnonymous) {
+    // Keep the current anonymous Firebase user.
+  } else {
+    await auth.signOut();
+    await auth.signInAnonymously();
+  }
+
+  final User? guest = auth.currentUser;
+  if (guest == null || !guest.isAnonymous) {
+    throw StateError('Could not restore guest customer session.');
+  }
+
+  final String preferred = preferredCustomerId?.trim() ?? '';
+  final String customerId =
+      preferred.isNotEmpty ? preferred : guest.uid;
+
+  final SharedPreferences prefs = await SharedPreferences.getInstance();
+  await prefs.setString(_customerIdPreferenceKey, customerId);
+
+  await _ensureCustomerSessionDocument(customerId);
+  await reloadOrdersForCurrentCustomer();
+
+  return customerId;
 }
 
 dynamic _safeValue(dynamic value) {
@@ -410,11 +569,20 @@ Future<void> _migrateLocalOrdersToFirestore() async {
   }
 
   final User? user = FirebaseAuth.instance.currentUser;
-  if (user == null || !user.isAnonymous) {
+  if (user == null) {
     return;
   }
 
   final String customerId = await getOrCreateCustomerId();
+
+  if (!user.isAnonymous) {
+    final Map<String, dynamic>? customer =
+        await _registeredCustomerDocument(user);
+
+    if (customer == null) {
+      return;
+    }
+  }
 
   for (final Map<String, dynamic> order in orderHistory) {
     final String orderId = order['id']?.toString().trim() ?? '';
@@ -439,13 +607,22 @@ Future<void> _migrateLocalOrdersToFirestore() async {
 Future<void> _startOrdersListener() async {
   final User? user = FirebaseAuth.instance.currentUser;
 
-  // Customer realtime listener should only run in the anonymous customer
-  // session. Seller/driver/admin pages use their own streams.
-  if (user == null || !user.isAnonymous) {
+  if (user == null) {
     return;
   }
 
   final String customerId = await getOrCreateCustomerId();
+
+  // Run customer realtime sync for anonymous guests and registered customers.
+  // Never attach this listener while Admin/Seller/Delivery auth is active.
+  if (!user.isAnonymous) {
+    final Map<String, dynamic>? customer =
+        await _registeredCustomerDocument(user);
+
+    if (customer == null) {
+      return;
+    }
+  }
 
   if (_ordersListenerStarted && _ordersListenerCustomerId == customerId) {
     return;

@@ -29,6 +29,8 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     'Processing',
     'Shipped',
     'Delivered',
+    'Cancelled',
+    'Returned',
   ];
 
   @override
@@ -678,6 +680,25 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     if (!_isCurrentSellerOrder(order)) {
       _showMessage(
         'You can only update your own order.',
+      );
+      return;
+    }
+
+    final String currentStatus =
+        order['status']?.toString().trim() ?? 'Pending';
+
+    if (currentStatus == 'Cancelled' ||
+        currentStatus == 'Returned') {
+      _showMessage(
+        'This order is already closed and cannot be changed here.',
+      );
+      return;
+    }
+
+    if (newStatus == 'Cancelled' ||
+        newStatus == 'Returned') {
+      _showMessage(
+        'Use the customer Cancel / Return request review section for this action.',
       );
       return;
     }
@@ -2135,6 +2156,785 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
   }
 
   // =========================================================
+  // CUSTOMER CANCEL / RETURN REQUEST REVIEW
+  // =========================================================
+
+  String _requestText(
+    Map<String, dynamic> order,
+    String key,
+  ) {
+    return order[key]?.toString().trim() ?? '';
+  }
+
+  bool _paymentWasPaid(
+    Map<String, dynamic> order,
+  ) {
+    final String status =
+        _requestText(
+      order,
+      'paymentStatus',
+    ).toLowerCase();
+
+    return status == 'paid' ||
+        status == 'success' ||
+        status == 'successful' ||
+        status == 'completed';
+  }
+
+  bool _isCashOnDelivery(
+    Map<String, dynamic> order,
+  ) {
+    final String payment =
+        _requestText(
+      order,
+      'payment',
+    ).toLowerCase();
+
+    return payment == 'cod' ||
+        payment.contains('cash on delivery');
+  }
+
+  Color _customerRequestColor(
+    String status,
+  ) {
+    switch (status.toLowerCase()) {
+      case 'pending':
+      case 'pending review':
+        return Colors.orange;
+      case 'approved':
+        return Colors.green;
+      case 'rejected':
+        return Colors.red;
+      case 'not required':
+        return Colors.blueGrey;
+      default:
+        return Colors.blueGrey;
+    }
+  }
+
+  Future<void> _reviewCustomerRequest({
+    required Map<String, dynamic> order,
+    required bool isReturn,
+    required bool approve,
+    required String sellerNote,
+  }) async {
+    if (!_isCurrentSellerOrder(order)) {
+      _showMessage(
+        'You can only review requests for your own order.',
+      );
+      return;
+    }
+
+    final String orderId =
+        order['id']?.toString().trim() ?? '';
+
+    if (orderId.isEmpty) {
+      _showMessage(
+        'Order ID is missing.',
+      );
+      return;
+    }
+
+    final String sellerId =
+        FirebaseAuth.instance.currentUser?.uid ?? '';
+
+    if (sellerId.isEmpty) {
+      _showMessage(
+        'Seller login is required.',
+      );
+      return;
+    }
+
+    final String now =
+        DateTime.now().toIso8601String();
+
+    final double amount =
+        _toDouble(order['amount']) ?? 0;
+
+    final Map<String, dynamic> currentSettlement =
+        _currentSellerSettlement(order);
+
+    final String currentSettlementStatus =
+        currentSettlement['status']?.toString().trim() ?? '';
+
+    final double alreadyPaidToSeller =
+        _toDouble(
+              currentSettlement['amount'] ??
+                  currentSettlement['sellerPayable'],
+            ) ??
+            0;
+
+    final bool sellerWasAlreadyPaid =
+        currentSettlementStatus == 'Paid' &&
+            alreadyPaidToSeller > 0;
+
+    final Map<String, dynamic> update =
+        <String, dynamic>{
+      'customerRequestType':
+          isReturn ? 'Return' : 'Cancellation',
+      'customerRequestStatus':
+          approve ? 'Approved' : 'Rejected',
+      'customerRequestUpdatedAt':
+          now,
+    };
+
+    if (isReturn) {
+      update.addAll(
+        <String, dynamic>{
+          'returnRequestStatus':
+              approve ? 'Approved' : 'Rejected',
+          'returnReviewedAt':
+              now,
+          'returnReviewedBySellerId':
+              sellerId,
+          'returnSellerNote':
+              sellerNote.trim(),
+        },
+      );
+
+      if (approve) {
+        // A return is requested only after delivery, so a refund
+        // normally needs Admin processing after seller approval.
+        update.addAll(
+          <String, dynamic>{
+            'returnStatus':
+                'Approved',
+            'returnApprovedAt':
+                now,
+            'refundStatus':
+                'Pending',
+            'refundSource':
+                'Return',
+            'refundReason':
+                'Return approved by seller',
+            'refundRequestedAt':
+                now,
+            'refundAmount':
+                amount,
+          },
+        );
+      }
+    } else {
+      update.addAll(
+        <String, dynamic>{
+          'cancelRequestStatus':
+              approve ? 'Approved' : 'Rejected',
+          'cancelReviewedAt':
+              now,
+          'cancelReviewedBySellerId':
+              sellerId,
+          'cancelSellerNote':
+              sellerNote.trim(),
+        },
+      );
+
+      if (approve) {
+        final bool refundNeeded =
+            !_isCashOnDelivery(order) &&
+                _paymentWasPaid(order);
+
+        update.addAll(
+          <String, dynamic>{
+            'status':
+                'Cancelled',
+            'trackingStatus':
+                'Cancelled',
+            'trackingEnabled':
+                false,
+            'cancelledAt':
+                now,
+            'cancelledBy':
+                'seller',
+            'refundStatus':
+                refundNeeded
+                    ? 'Pending'
+                    : 'Not Required',
+            'refundSource':
+                'Cancellation',
+            'refundReason':
+                refundNeeded
+                    ? 'Cancellation approved by seller'
+                    : 'No completed prepaid payment found',
+            'refundRequestedAt':
+                refundNeeded ? now : '',
+            'refundAmount':
+                refundNeeded ? amount : 0,
+          },
+        );
+      }
+    }
+
+    if (approve && sellerWasAlreadyPaid) {
+      update.addAll(
+        <String, dynamic>{
+          'sellerAdjustmentRequired':
+              true,
+          'sellerAdjustmentStatus':
+              'Pending',
+          'sellerAdjustmentSellerId':
+              sellerId,
+          'sellerAdjustmentAmount':
+              alreadyPaidToSeller,
+          'sellerAdjustmentReason':
+              isReturn
+                  ? 'Seller was already paid before the approved return.'
+                  : 'Seller was already paid before the approved cancellation.',
+          'sellerAdjustmentCreatedAt':
+              now,
+        },
+      );
+    }
+
+    await updateOrderTrackingFields(
+      orderId,
+      update,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    await _loadOrders();
+
+    if (!mounted) {
+      return;
+    }
+
+    final String action =
+        approve ? 'approved' : 'rejected';
+
+    _showMessage(
+      '${isReturn ? 'Return' : 'Cancellation'} request $action.',
+    );
+  }
+
+  Future<void> _openCustomerRequestReview({
+    required Map<String, dynamic> order,
+    required bool isReturn,
+  }) async {
+    final String status =
+        _requestText(
+      order,
+      isReturn
+          ? 'returnRequestStatus'
+          : 'cancelRequestStatus',
+    );
+
+    if (status != 'Pending') {
+      _showMessage(
+        'This request has already been reviewed.',
+      );
+      return;
+    }
+
+    final String reason =
+        _requestText(
+      order,
+      isReturn
+          ? 'returnRequestReason'
+          : 'cancelRequestReason',
+    );
+
+    final String note =
+        _requestText(
+      order,
+      isReturn
+          ? 'returnRequestNote'
+          : 'cancelRequestNote',
+    );
+
+    String sellerResponse = '';
+
+    bool isSaving = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext context,
+            StateSetter setDialogState,
+          ) {
+            Future<void> save(
+              bool approve,
+            ) async {
+              if (isSaving) {
+                return;
+              }
+
+              setDialogState(() {
+                isSaving = true;
+              });
+
+              try {
+                await _reviewCustomerRequest(
+                  order: order,
+                  isReturn: isReturn,
+                  approve: approve,
+                  sellerNote:
+                      sellerResponse,
+                );
+
+                if (!mounted ||
+                    !dialogContext.mounted) {
+                  return;
+                }
+
+                Navigator.pop(
+                  dialogContext,
+                );
+              } catch (error) {
+                if (mounted) {
+                  _showMessage(
+                    'Could not review request: $error',
+                  );
+                }
+              } finally {
+                if (dialogContext.mounted) {
+                  setDialogState(() {
+                    isSaving = false;
+                  });
+                }
+              }
+            }
+
+            return AlertDialog(
+              title: Text(
+                isReturn
+                    ? 'Review Return Request'
+                    : 'Review Cancellation Request',
+              ),
+              content:
+                  SingleChildScrollView(
+                child: Column(
+                  mainAxisSize:
+                      MainAxisSize.min,
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'Reason: '
+                      '${reason.isEmpty ? 'Not provided' : reason}',
+                      style:
+                          const TextStyle(
+                        fontWeight:
+                            FontWeight.bold,
+                      ),
+                    ),
+                    if (note.isNotEmpty) ...<Widget>[
+                      const SizedBox(
+                        height: 8,
+                      ),
+                      Text(
+                        'Customer note: $note',
+                      ),
+                    ],
+                    const SizedBox(
+                      height: 16,
+                    ),
+                    TextField(
+                      enabled:
+                          !isSaving,
+                      minLines: 2,
+                      maxLines: 4,
+                      onChanged: (
+                        String value,
+                      ) {
+                        sellerResponse =
+                            value;
+                      },
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Seller response / note (optional)',
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    Text(
+                      isReturn
+                          ? 'Approve sends the return to Refund Pending for Admin processing.'
+                          : 'Approve cancels the order. A completed prepaid payment will move to Refund Pending.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color:
+                            Colors.grey.shade700,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed:
+                      isSaving
+                          ? null
+                          : () {
+                              Navigator.pop(
+                                dialogContext,
+                              );
+                            },
+                  child:
+                      const Text('Back'),
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      isSaving
+                          ? null
+                          : () {
+                              save(false);
+                            },
+                  icon: const Icon(
+                    Icons.close,
+                    color: Colors.red,
+                  ),
+                  label: const Text(
+                    'Reject',
+                    style: TextStyle(
+                      color: Colors.red,
+                    ),
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed:
+                      isSaving
+                          ? null
+                          : () {
+                              save(true);
+                            },
+                  icon: isSaving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.check_circle_outline,
+                        ),
+                  label: const Text(
+                    'Approve',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+  }
+
+  Widget _customerRequestReviewCard(
+    Map<String, dynamic> order,
+  ) {
+    final String cancelStatus =
+        _requestText(
+      order,
+      'cancelRequestStatus',
+    );
+
+    final String returnStatus =
+        _requestText(
+      order,
+      'returnRequestStatus',
+    );
+
+    final String refundStatus =
+        _requestText(
+      order,
+      'refundStatus',
+    );
+
+    if (cancelStatus.isEmpty &&
+        returnStatus.isEmpty &&
+        refundStatus.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    Widget requestBox({
+      required String title,
+      required String status,
+      required String reason,
+      required String note,
+      required bool isReturn,
+    }) {
+      final Color color =
+          _customerRequestColor(
+        status,
+      );
+
+      return Container(
+        width: double.infinity,
+        margin:
+            const EdgeInsets.only(
+          bottom: 10,
+        ),
+        padding:
+            const EdgeInsets.all(
+          12,
+        ),
+        decoration:
+            BoxDecoration(
+          color: color.withValues(
+            alpha: 0.08,
+          ),
+          borderRadius:
+              BorderRadius.circular(
+            10,
+          ),
+          border: Border.all(
+            color: color.withValues(
+              alpha: 0.30,
+            ),
+          ),
+        ),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    title,
+                    style:
+                        const TextStyle(
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                ),
+                Chip(
+                  label:
+                      Text(status),
+                  side:
+                      BorderSide.none,
+                  backgroundColor:
+                      color.withValues(
+                    alpha: 0.15,
+                  ),
+                ),
+              ],
+            ),
+            if (reason.isNotEmpty)
+              Text(
+                'Reason: $reason',
+              ),
+            if (note.isNotEmpty) ...<Widget>[
+              const SizedBox(
+                height: 4,
+              ),
+              Text(
+                'Customer note: $note',
+              ),
+            ],
+            if (status == 'Pending') ...<Widget>[
+              const SizedBox(
+                height: 12,
+              ),
+              SizedBox(
+                width:
+                    double.infinity,
+                height: 48,
+                child:
+                    FilledButton.icon(
+                  onPressed: () {
+                    _openCustomerRequestReview(
+                      order: order,
+                      isReturn: isReturn,
+                    );
+                  },
+                  icon: const Icon(
+                    Icons
+                        .rate_review_outlined,
+                  ),
+                  label: const Text(
+                    'Review Request',
+                  ),
+                ),
+              ),
+            ],
+          ],
+        ),
+      );
+    }
+
+    final String cancelReason =
+        _requestText(
+      order,
+      'cancelRequestReason',
+    );
+    final String cancelNote =
+        _requestText(
+      order,
+      'cancelRequestNote',
+    );
+    final String returnReason =
+        _requestText(
+      order,
+      'returnRequestReason',
+    );
+    final String returnNote =
+        _requestText(
+      order,
+      'returnRequestNote',
+    );
+
+    final String refundAmount =
+        _requestText(
+      order,
+      'refundAmount',
+    );
+
+    final Color refundColor =
+        _customerRequestColor(
+      refundStatus,
+    );
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding:
+            const EdgeInsets.all(
+          12,
+        ),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: <Widget>[
+            const Row(
+              children: <Widget>[
+                Icon(
+                  Icons
+                      .support_agent_outlined,
+                  color:
+                      Colors.deepPurple,
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Customer Cancel / Return Request',
+                    style:
+                        TextStyle(
+                      fontSize: 16,
+                      fontWeight:
+                          FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(
+              height: 10,
+            ),
+            if (cancelStatus
+                .isNotEmpty)
+              requestBox(
+                title:
+                    'Cancellation Request',
+                status:
+                    cancelStatus,
+                reason:
+                    cancelReason,
+                note:
+                    cancelNote,
+                isReturn:
+                    false,
+              ),
+            if (returnStatus
+                .isNotEmpty)
+              requestBox(
+                title:
+                    'Return Request',
+                status:
+                    returnStatus,
+                reason:
+                    returnReason,
+                note:
+                    returnNote,
+                isReturn:
+                    true,
+              ),
+            if (refundStatus
+                .isNotEmpty)
+              Container(
+                width:
+                    double.infinity,
+                padding:
+                    const EdgeInsets.all(
+                  12,
+                ),
+                decoration:
+                    BoxDecoration(
+                  color:
+                      refundColor.withValues(
+                    alpha: 0.08,
+                  ),
+                  borderRadius:
+                      BorderRadius.circular(
+                    10,
+                  ),
+                  border:
+                      Border.all(
+                    color:
+                        refundColor.withValues(
+                      alpha: 0.30,
+                    ),
+                  ),
+                ),
+                child: Row(
+                  children: <Widget>[
+                    const Icon(
+                      Icons
+                          .payments_outlined,
+                    ),
+                    const SizedBox(
+                      width: 8,
+                    ),
+                    Expanded(
+                      child:
+                          Column(
+                        crossAxisAlignment:
+                            CrossAxisAlignment
+                                .start,
+                        children:
+                            <Widget>[
+                          Text(
+                            'Refund: $refundStatus',
+                            style:
+                                const TextStyle(
+                              fontWeight:
+                                  FontWeight
+                                      .bold,
+                            ),
+                          ),
+                          if (refundAmount
+                              .isNotEmpty)
+                            Text(
+                              'Requested Amount: Rs. $refundAmount',
+                            ),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================================================
   // SELLER SETTLEMENT
   // =========================================================
 
@@ -2246,6 +3046,73 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     final String dateText = _formatSettlementDate(dateValue);
     final Color statusColor = _settlementStatusColor(status);
 
+    final String adjustmentStatus =
+        order['sellerAdjustmentStatus']?.toString().trim() ?? '';
+
+    final bool adjustmentResolved =
+        adjustmentStatus == 'Recovered' ||
+            adjustmentStatus == 'Deducted from Next Settlement';
+
+    final String orderStatus =
+        order['status']?.toString().trim() ?? '';
+
+    final String refundStatus =
+        order['refundStatus']?.toString().trim() ?? '';
+
+    final double paidSettlementAmount =
+        _toDouble(
+              settlement['amount'] ??
+                  settlement['sellerPayable'],
+            ) ??
+            0;
+
+    final bool sellerAlreadyPaid =
+        status == 'Paid' &&
+            paidSettlementAmount > 0;
+
+    final bool adjustmentRequired =
+        !adjustmentResolved &&
+            (order['sellerAdjustmentRequired'] == true ||
+                (sellerAlreadyPaid &&
+                    (orderStatus == 'Cancelled' ||
+                        orderStatus == 'Returned' ||
+                        refundStatus == 'Pending' ||
+                        refundStatus == 'Processing' ||
+                        refundStatus == 'Refunded')));
+
+    final bool showAdjustment =
+        adjustmentRequired ||
+            adjustmentResolved ||
+            adjustmentStatus.isNotEmpty ||
+            order['sellerAdjustmentRequired'] == true;
+
+    final double storedAdjustmentAmount =
+        _toDouble(order['sellerAdjustmentAmount']) ?? 0;
+
+    final double adjustmentAmount =
+        storedAdjustmentAmount > 0
+            ? storedAdjustmentAmount
+            : paidSettlementAmount;
+
+    final String savedAdjustmentReason =
+        order['sellerAdjustmentReason']?.toString().trim() ?? '';
+
+    final String adjustmentReason =
+        savedAdjustmentReason.isNotEmpty
+            ? savedAdjustmentReason
+            : showAdjustment
+                ? 'Seller was already paid before this cancellation / return.'
+                : '';
+
+    final String adjustmentMethod =
+        order['sellerAdjustmentMethod']?.toString().trim() ?? '';
+
+    final String adjustmentReference =
+        order['sellerAdjustmentReference']?.toString().trim() ?? '';
+
+    final String adjustmentNote =
+        order['sellerAdjustmentNote']?.toString().trim() ?? '';
+
     return Card(
       margin: EdgeInsets.zero,
       child: Padding(
@@ -2311,6 +3178,76 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                 'Admin Note: $note',
                 style: TextStyle(
                   color: Colors.grey.shade700,
+                ),
+              ),
+            ],
+            if (showAdjustment) ...<Widget>[
+              const SizedBox(height: 12),
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: (adjustmentResolved
+                          ? Colors.green
+                          : Colors.red)
+                      .withValues(alpha: 0.07),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: (adjustmentResolved
+                            ? Colors.green
+                            : Colors.red)
+                        .withValues(alpha: 0.30),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(
+                      'RD Adjustment: '
+                      '${adjustmentStatus.isEmpty ? 'Pending' : adjustmentStatus}',
+                      style: TextStyle(
+                        color: adjustmentResolved
+                            ? Colors.green
+                            : Colors.red,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    if (adjustmentAmount > 0)
+                      Text(
+                        'Adjustment Amount: Rs. '
+                        '${adjustmentAmount.toStringAsFixed(0)}',
+                      ),
+                    if (adjustmentReason.isNotEmpty)
+                      Text(
+                        adjustmentReason,
+                        style: TextStyle(
+                          fontSize: 12,
+                          color: Colors.grey.shade700,
+                        ),
+                      ),
+                    if (adjustmentMethod.isNotEmpty)
+                      Text(
+                        'Method: $adjustmentMethod',
+                      ),
+                    if (adjustmentReference.isNotEmpty)
+                      SelectableText(
+                        'Reference: $adjustmentReference',
+                      ),
+                    if (adjustmentNote.isNotEmpty)
+                      Text(
+                        'RD Note: $adjustmentNote',
+                      ),
+                    if (adjustmentResolved) ...<Widget>[
+                      const SizedBox(height: 6),
+                      const Text(
+                        'This RD adjustment has been resolved.',
+                        style: TextStyle(
+                          color: Colors.green,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ],
+                  ],
                 ),
               ),
             ],
@@ -2596,6 +3533,15 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                   16,
             ),
 
+            _customerRequestReviewCard(
+              order,
+            ),
+
+            const SizedBox(
+              height:
+                  16,
+            ),
+
             _sellerSettlementCard(
               order,
             ),
@@ -2674,21 +3620,22 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                 },
               ).toList(),
               onChanged:
-                  (
-                String? value,
-              ) {
-                if (value ==
-                        null ||
-                    value ==
-                        currentStatus) {
-                  return;
-                }
+                  currentStatus == 'Cancelled' ||
+                          currentStatus == 'Returned'
+                      ? null
+                      : (
+                          String? value,
+                        ) {
+                          if (value == null ||
+                              value == currentStatus) {
+                            return;
+                          }
 
-                _changeStatus(
-                  order,
-                  value,
-                );
-              },
+                          _changeStatus(
+                            order,
+                            value,
+                          );
+                        },
             ),
           ],
         ),
