@@ -17,6 +17,10 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
   final TextEditingController searchController = TextEditingController();
   String selectedFilter = 'All';
 
+  String selectedDateFilter = 'All Dates';
+  DateTime? customStartDate;
+  DateTime? customEndDate;
+
   @override
   void initState() {
     super.initState();
@@ -56,6 +60,295 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
     }
   }
 
+  DateTime? _orderDate(
+    Map<String, dynamic> order,
+  ) {
+    final List<dynamic> candidates = <dynamic>[
+      order['orderDateTime'],
+      order['createdAt'],
+      order['orderDate'],
+      order['date'],
+      order['timestamp'],
+    ];
+
+    for (final dynamic value in candidates) {
+      if (value == null) {
+        continue;
+      }
+
+      if (value is Timestamp) {
+        return value.toDate();
+      }
+
+      if (value is DateTime) {
+        return value;
+      }
+
+      if (value is num) {
+        final int raw = value.toInt();
+
+        if (raw > 1000000000000) {
+          return DateTime.fromMillisecondsSinceEpoch(raw);
+        }
+
+        if (raw > 1000000000) {
+          return DateTime.fromMillisecondsSinceEpoch(raw * 1000);
+        }
+      }
+
+      final String raw = value.toString().trim();
+
+      if (raw.isEmpty || raw.toLowerCase() == 'null') {
+        continue;
+      }
+
+      final DateTime? parsed = DateTime.tryParse(raw);
+
+      if (parsed != null) {
+        return parsed;
+      }
+    }
+
+    return null;
+  }
+
+  DateTime _startOfDay(
+    DateTime date,
+  ) {
+    return DateTime(
+      date.year,
+      date.month,
+      date.day,
+    );
+  }
+
+  bool _matchesDateFilter(
+    Map<String, dynamic> order,
+  ) {
+    if (selectedDateFilter == 'All Dates') {
+      return true;
+    }
+
+    final DateTime? orderDate = _orderDate(order);
+
+    if (orderDate == null) {
+      return false;
+    }
+
+    final DateTime today =
+        _startOfDay(DateTime.now());
+    final DateTime orderDay =
+        _startOfDay(orderDate);
+
+    DateTime startDate;
+    DateTime endDate;
+
+    switch (selectedDateFilter) {
+      case 'Today':
+        startDate = today;
+        endDate = today;
+        break;
+
+      case 'Yesterday':
+        startDate =
+            today.subtract(const Duration(days: 1));
+        endDate = startDate;
+        break;
+
+      case 'Last 7 Days':
+        startDate =
+            today.subtract(const Duration(days: 6));
+        endDate = today;
+        break;
+
+      case 'Last 30 Days':
+        startDate =
+            today.subtract(const Duration(days: 29));
+        endDate = today;
+        break;
+
+      case 'This Month':
+        startDate = DateTime(
+          today.year,
+          today.month,
+          1,
+        );
+        endDate = today;
+        break;
+
+      case 'Custom Range':
+        if (customStartDate == null ||
+            customEndDate == null) {
+          return true;
+        }
+
+        startDate =
+            _startOfDay(customStartDate!);
+        endDate =
+            _startOfDay(customEndDate!);
+        break;
+
+      default:
+        return true;
+    }
+
+    return !orderDay.isBefore(startDate) &&
+        !orderDay.isAfter(endDate);
+  }
+
+  String _formatDate(
+    DateTime date,
+  ) {
+    final String day =
+        date.day.toString().padLeft(2, '0');
+    final String month =
+        date.month.toString().padLeft(2, '0');
+
+    return '$day/$month/${date.year}';
+  }
+
+  String _dateFilterLabel() {
+    if (selectedDateFilter == 'Custom Range' &&
+        customStartDate != null &&
+        customEndDate != null) {
+      return '${_formatDate(customStartDate!)} - '
+          '${_formatDate(customEndDate!)}';
+    }
+
+    return selectedDateFilter;
+  }
+
+  Future<void> _pickCustomDateRange() async {
+    final DateTime now = DateTime.now();
+
+    final DateTimeRange? picked =
+        await showDateRangePicker(
+      context: context,
+      firstDate: DateTime(2020),
+      lastDate: DateTime(
+        now.year + 5,
+        12,
+        31,
+      ),
+      initialDateRange:
+          customStartDate != null &&
+                  customEndDate != null
+              ? DateTimeRange(
+                  start: customStartDate!,
+                  end: customEndDate!,
+                )
+              : null,
+      helpText: 'Select Order Date Range',
+      saveText: 'Apply',
+    );
+
+    if (picked == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      selectedDateFilter = 'Custom Range';
+      customStartDate = picked.start;
+      customEndDate = picked.end;
+    });
+  }
+
+  void _clearDateFilter() {
+    setState(() {
+      selectedDateFilter = 'All Dates';
+      customStartDate = null;
+      customEndDate = null;
+    });
+  }
+
+  Widget _dateFilterBar() {
+    const List<String> dateFilters =
+        <String>[
+      'All Dates',
+      'Today',
+      'Yesterday',
+      'Last 7 Days',
+      'Last 30 Days',
+      'This Month',
+      'Custom Range',
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(
+        12,
+        8,
+        12,
+        4,
+      ),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: DropdownButtonFormField<String>(
+              initialValue: selectedDateFilter,
+              isExpanded: true,
+              decoration: InputDecoration(
+                labelText: 'Order Date',
+                prefixIcon:
+                    const Icon(Icons.date_range),
+                border: OutlineInputBorder(
+                  borderRadius:
+                      BorderRadius.circular(12),
+                ),
+              ),
+              items: dateFilters
+                  .map(
+                    (String value) =>
+                        DropdownMenuItem<String>(
+                      value: value,
+                      child: Text(
+                        value == 'Custom Range' &&
+                                selectedDateFilter ==
+                                    'Custom Range' &&
+                                customStartDate != null &&
+                                customEndDate != null
+                            ? _dateFilterLabel()
+                            : value,
+                        maxLines: 1,
+                        overflow:
+                            TextOverflow.ellipsis,
+                      ),
+                    ),
+                  )
+                  .toList(),
+              onChanged: (String? value) async {
+                if (value == null) {
+                  return;
+                }
+
+                if (value == 'Custom Range') {
+                  await _pickCustomDateRange();
+                  return;
+                }
+
+                setState(() {
+                  selectedDateFilter = value;
+                  customStartDate = null;
+                  customEndDate = null;
+                });
+              },
+            ),
+          ),
+          const SizedBox(width: 8),
+          IconButton.filledTonal(
+            tooltip: 'Clear Date Filter',
+            onPressed:
+                selectedDateFilter == 'All Dates'
+                    ? null
+                    : _clearDateFilter,
+            icon: const Icon(
+              Icons.filter_alt_off,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   List<Map<String, dynamic>> _filtered(
     List<Map<String, dynamic>> orders,
   ) {
@@ -83,7 +376,12 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
               (selectedFilter == 'Refund Pending' &&
                   refundStatus == 'Pending');
 
-      return matchesSearch && matchesFilter;
+      final bool matchesDate =
+          _matchesDateFilter(order);
+
+      return matchesSearch &&
+          matchesFilter &&
+          matchesDate;
     }).toList();
   }
 
@@ -2682,7 +2980,8 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                   ],
                 ),
               ),
-              const SizedBox(height: 8),
+              _dateFilterBar(),
+              const SizedBox(height: 4),
               Expanded(
                 child: allOrders.isEmpty
                     ? const Center(child: Text('No Orders Yet'))
@@ -2730,6 +3029,11 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                       const SizedBox(height: 6),
                                       Text('Customer: $customerName'),
                                       Text('Mobile: ${order['phone'] ?? '-'}'),
+                                      if (_orderDate(order) != null)
+                                        Text(
+                                          'Order Date: '
+                                          '${_formatDate(_orderDate(order)!)}',
+                                        ),
                                       Text('Amount: Rs. ${order['amount'] ?? '0'}'),
                                       Text('Payment: ${order['payment'] ?? '-'}'),
                                       Text(
