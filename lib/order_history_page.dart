@@ -1,5 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -3140,168 +3141,135 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // RECOVER ORDER ON A NEW DEVICE
+  // LINK DEVICES TO THE SAME CUSTOMER ID
   // =========================================================
 
-  Future<void> _showRecoverOrderDialog() async {
-    final TextEditingController orderIdController =
-        TextEditingController();
-
-    final TextEditingController phoneController =
-        TextEditingController();
-
-    bool isRecovering = false;
+  Future<void> _showCreateDeviceLinkCodeDialog() async {
+    bool isCreating = false;
+    String linkCode = '';
+    String errorMessage = '';
 
     await showDialog<void>(
       context: context,
       barrierDismissible: false,
-      builder: (
-        BuildContext dialogContext,
-      ) {
+      builder: (BuildContext dialogContext) {
         return StatefulBuilder(
           builder: (
             BuildContext context,
             void Function(void Function()) setDialogState,
           ) {
-            Future<void> recover() async {
-              if (isRecovering) {
-                return;
-              }
-
-              final String orderId =
-                  orderIdController.text.trim();
-
-              final String phone =
-                  phoneController.text.trim();
-
-              if (orderId.isEmpty || phone.isEmpty) {
-                ScaffoldMessenger.of(this.context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Please enter the Order ID and phone number.',
-                    ),
-                  ),
-                );
-
+            Future<void> createCode() async {
+              if (isCreating) {
                 return;
               }
 
               setDialogState(() {
-                isRecovering = true;
+                isCreating = true;
+                errorMessage = '';
               });
 
               try {
-                await recoverCustomerOrder(
-                  orderId: orderId,
-                  phone: phone,
-                );
+                final String code = await createCustomerDeviceLinkCode();
 
-                if (!mounted || !dialogContext.mounted) {
+                if (!dialogContext.mounted) {
                   return;
                 }
 
-                Navigator.pop(dialogContext);
-
-                ScaffoldMessenger.of(this.context).showSnackBar(
-                  const SnackBar(
-                    content: Text(
-                      'Order recovered successfully.',
-                    ),
-                  ),
-                );
-              } on FirebaseException catch (error) {
-                if (!mounted) {
+                setDialogState(() {
+                  linkCode = code;
+                });
+              } catch (error) {
+                if (!dialogContext.mounted) {
                   return;
                 }
 
-                final String message =
-                    error.code == 'not-found'
-                        ? 'Order not found. Please check the Order ID.'
-                        : 'Order ID or phone number did not match.';
-
-                ScaffoldMessenger.of(this.context).showSnackBar(
-                  SnackBar(
-                    content: Text(message),
-                  ),
-                );
-              } on ArgumentError catch (error) {
-                if (!mounted) {
-                  return;
-                }
-
-                ScaffoldMessenger.of(this.context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      error.message?.toString() ??
-                          'Please check the entered details.',
-                    ),
-                  ),
-                );
+                setDialogState(() {
+                  errorMessage = 'Could not create link code: $error';
+                });
               } finally {
                 if (dialogContext.mounted) {
                   setDialogState(() {
-                    isRecovering = false;
+                    isCreating = false;
                   });
                 }
               }
             }
 
             return AlertDialog(
-              title: const Text(
-                'Recover My Order',
-              ),
+              title: const Text('Create Device Link Code'),
               content: SingleChildScrollView(
                 child: Column(
                   mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     const Text(
-                      'Enter the Order ID and the phone number used when placing the order.',
+                      'Use this on the device that already shows your correct My Orders.',
                     ),
-
-                    const SizedBox(height: 16),
-
-                    TextField(
-                      controller: orderIdController,
-                      enabled: !isRecovering,
-                      textCapitalization: TextCapitalization.characters,
-                      decoration: const InputDecoration(
-                        labelText: 'Order ID',
-                        hintText: 'RD123456789',
-                        prefixIcon: Icon(Icons.receipt_long),
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-
                     const SizedBox(height: 12),
-
-                    TextField(
-                      controller: phoneController,
-                      enabled: !isRecovering,
-                      keyboardType: TextInputType.phone,
-                      onSubmitted: (_) {
-                        recover();
-                      },
-                      decoration: const InputDecoration(
-                        labelText: 'Phone Number',
-                        prefixIcon: Icon(Icons.phone),
-                        border: OutlineInputBorder(),
-                      ),
+                    const Text(
+                      'The code works once and expires in 10 minutes.',
+                      style: TextStyle(fontSize: 12),
                     ),
+                    if (linkCode.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 18),
+                      Container(
+                        width: double.infinity,
+                        padding: const EdgeInsets.all(16),
+                        decoration: BoxDecoration(
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                            color: Theme.of(context).colorScheme.primary,
+                          ),
+                        ),
+                        child: SelectableText(
+                          linkCode,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 24,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: 2,
+                          ),
+                        ),
+                      ),
+                    ],
+                    if (errorMessage.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 12),
+                      Text(
+                        errorMessage,
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ],
                   ],
                 ),
               ),
               actions: <Widget>[
                 TextButton(
-                  onPressed: isRecovering
+                  onPressed: isCreating
                       ? null
                       : () {
                           Navigator.pop(dialogContext);
                         },
-                  child: const Text('Cancel'),
+                  child: const Text('Close'),
                 ),
+                if (linkCode.isNotEmpty)
+                  TextButton.icon(
+                    onPressed: () async {
+                      await Clipboard.setData(
+                        ClipboardData(text: linkCode),
+                      );
+
+                      if (!mounted) {
+                        return;
+                      }
+
+                      _showMessage('Link code copied.');
+                    },
+                    icon: const Icon(Icons.copy),
+                    label: const Text('Copy Code'),
+                  ),
                 FilledButton.icon(
-                  onPressed: isRecovering ? null : recover,
-                  icon: isRecovering
+                  onPressed: isCreating ? null : createCode,
+                  icon: isCreating
                       ? const SizedBox(
                           width: 18,
                           height: 18,
@@ -3309,9 +3277,13 @@ class _OrderHistoryPageState
                             strokeWidth: 2,
                           ),
                         )
-                      : const Icon(Icons.restore),
+                      : const Icon(Icons.link),
                   label: Text(
-                    isRecovering ? 'Checking...' : 'Recover Order',
+                    isCreating
+                        ? 'Creating...'
+                        : linkCode.isEmpty
+                            ? 'Create Code'
+                            : 'New Code',
                   ),
                 ),
               ],
@@ -3320,9 +3292,180 @@ class _OrderHistoryPageState
         );
       },
     );
+  }
 
-    orderIdController.dispose();
-    phoneController.dispose();
+  Future<void> _showEnterDeviceLinkCodeDialog() async {
+    String enteredCode = '';
+    bool isLinking = false;
+    String errorMessage = '';
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext context,
+            void Function(void Function()) setDialogState,
+          ) {
+            Future<void> linkDevice() async {
+              if (isLinking) {
+                return;
+              }
+
+              if (enteredCode.trim().isEmpty) {
+                setDialogState(() {
+                  errorMessage = 'Please enter the link code.';
+                });
+                return;
+              }
+
+              setDialogState(() {
+                isLinking = true;
+                errorMessage = '';
+              });
+
+              try {
+                final String linkedCustomerId =
+                    await linkThisDeviceToCustomer(enteredCode);
+
+                if (!mounted || !dialogContext.mounted) {
+                  return;
+                }
+
+                setState(() {
+                  customerId = linkedCustomerId;
+                  isLoadingCustomer = false;
+                });
+
+                Navigator.pop(dialogContext);
+                _showMessage(
+                  'This device is now linked. My Orders will stay on both devices.',
+                );
+              } catch (error) {
+                if (!dialogContext.mounted) {
+                  return;
+                }
+
+                setDialogState(() {
+                  errorMessage = 'Could not link this device: $error';
+                });
+              } finally {
+                if (dialogContext.mounted) {
+                  setDialogState(() {
+                    isLinking = false;
+                  });
+                }
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('Link This Device'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    const Text(
+                      'Enter the one-time code created on the device that already has your correct My Orders.',
+                    ),
+                    const SizedBox(height: 16),
+                    TextField(
+                      enabled: !isLinking,
+                      autofocus: true,
+                      textCapitalization: TextCapitalization.characters,
+                      onChanged: (String value) {
+                        enteredCode = value;
+                      },
+                      onSubmitted: (_) {
+                        linkDevice();
+                      },
+                      decoration: const InputDecoration(
+                        labelText: 'Device Link Code',
+                        hintText: 'ABCD-EFGH-JKLM',
+                        prefixIcon: Icon(Icons.devices),
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                    if (errorMessage.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 12),
+                      Text(
+                        errorMessage,
+                        style: const TextStyle(color: Colors.red),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: isLinking
+                      ? null
+                      : () {
+                          Navigator.pop(dialogContext);
+                        },
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  onPressed: isLinking ? null : linkDevice,
+                  icon: isLinking
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(Icons.link),
+                  label: Text(
+                    isLinking ? 'Linking...' : 'Link This Device',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Future<void> _showDeviceLinkOptions() async {
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Link My Devices'),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              ListTile(
+                leading: const Icon(Icons.phone_android),
+                title: const Text('Create Link Code'),
+                subtitle: const Text(
+                  'Use on the device that already has your correct orders.',
+                ),
+                onTap: () {
+                  Navigator.pop(dialogContext);
+                  _showCreateDeviceLinkCodeDialog();
+                },
+              ),
+              const Divider(),
+              ListTile(
+                leading: const Icon(Icons.laptop_windows),
+                title: const Text('Enter Link Code'),
+                subtitle: const Text(
+                  'Use on the new device you want to connect.',
+                ),
+                onTap: () {
+                  Navigator.pop(dialogContext);
+                  _showEnterDeviceLinkCodeDialog();
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   // =========================================================
@@ -3388,10 +3531,10 @@ class _OrderHistoryPageState
       ),
 
       floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showRecoverOrderDialog,
-        icon: const Icon(Icons.restore),
+        onPressed: _showDeviceLinkOptions,
+        icon: const Icon(Icons.devices),
         label: const Text(
-          'Recover Order',
+          'Link Devices',
         ),
       ),
 

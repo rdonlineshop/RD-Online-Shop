@@ -1,3 +1,5 @@
+import 'dart:math';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -16,26 +18,15 @@ class AdminOrderPage extends StatefulWidget {
 class _AdminOrderPageState extends State<AdminOrderPage> {
   final TextEditingController searchController = TextEditingController();
   String selectedFilter = 'All';
+  String submittedSearch = '';
 
   String selectedDateFilter = 'All Dates';
   DateTime? customStartDate;
   DateTime? customEndDate;
 
   @override
-  void initState() {
-    super.initState();
-    searchController.addListener(_refresh);
-  }
-
-  void _refresh() {
-    if (mounted) setState(() {});
-  }
-
-  @override
   void dispose() {
-    searchController
-      ..removeListener(_refresh)
-      ..dispose();
+    searchController.dispose();
     super.dispose();
   }
 
@@ -352,7 +343,7 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
   List<Map<String, dynamic>> _filtered(
     List<Map<String, dynamic>> orders,
   ) {
-    final String search = searchController.text.trim().toLowerCase();
+    final String search = submittedSearch.trim().toLowerCase();
 
     return orders.where((Map<String, dynamic> order) {
       final String status = order['status']?.toString() ?? 'Pending';
@@ -405,6 +396,191 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
         SnackBar(
           content: Text(
             'Could not update order: ${error.toString().replaceFirst('Exception: ', '')}',
+          ),
+        ),
+      );
+    }
+  }
+
+
+  String _generateDeviceRestoreCode() {
+    const String alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    final Random random = Random.secure();
+
+    return List<String>.generate(
+      12,
+      (_) => alphabet[random.nextInt(alphabet.length)],
+    ).join();
+  }
+
+  String _displayDeviceRestoreCode(String code) {
+    if (code.length != 12) {
+      return code;
+    }
+
+    return '${code.substring(0, 4)}-'
+        '${code.substring(4, 8)}-'
+        '${code.substring(8, 12)}';
+  }
+
+  Future<String> _createAdminDeviceRestoreCode(
+    String customerId,
+  ) async {
+    final String cleanCustomerId = customerId.trim();
+
+    if (cleanCustomerId.isEmpty) {
+      throw StateError(
+        'This order does not have a customer ID to restore.',
+      );
+    }
+
+    final User? adminUser = FirebaseAuth.instance.currentUser;
+
+    if (adminUser == null) {
+      throw StateError('Admin session is not available.');
+    }
+
+    final CollectionReference<Map<String, dynamic>> links =
+        FirebaseFirestore.instance.collection(
+      'customer_device_links',
+    );
+
+    final DateTime expiresAt =
+        DateTime.now().toUtc().add(const Duration(minutes: 10));
+
+    for (int attempt = 0; attempt < 5; attempt++) {
+      final String code = _generateDeviceRestoreCode();
+      final DocumentReference<Map<String, dynamic>> linkRef =
+          links.doc(code);
+
+      final DocumentSnapshot<Map<String, dynamic>> existing =
+          await linkRef.get();
+
+      if (existing.exists) {
+        continue;
+      }
+
+      await linkRef.set(
+        <String, dynamic>{
+          'customerId': cleanCustomerId,
+          'createdByUid': adminUser.uid,
+          'createdAt': FieldValue.serverTimestamp(),
+          'expiresAt': Timestamp.fromDate(expiresAt),
+          'used': false,
+        },
+      );
+
+      return _displayDeviceRestoreCode(code);
+    }
+
+    throw StateError(
+      'Could not create a restore code. Please try again.',
+    );
+  }
+
+  Future<void> _showCustomerDeviceRestoreCode(
+    Map<String, dynamic> order,
+  ) async {
+    final String customerId =
+        order['customerId']?.toString().trim() ?? '';
+    final String orderId =
+        order['id']?.toString().trim() ?? '-';
+
+    if (customerId.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This order does not have a customer ID to restore.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      final String code =
+          await _createAdminDeviceRestoreCode(customerId);
+
+      if (!mounted) {
+        return;
+      }
+
+      await showDialog<void>(
+        context: context,
+        builder: (BuildContext dialogContext) {
+          return AlertDialog(
+            title: const Text(
+              'Customer Device Restore Code',
+            ),
+            content: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    'Order ID: $orderId',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'Use this code on the customer device that should regain this customer\'s My Orders.',
+                  ),
+                  const SizedBox(height: 8),
+                  const Text(
+                    'The code works once and expires in 10 minutes.',
+                    style: TextStyle(
+                      color: Colors.orange,
+                    ),
+                  ),
+                  const SizedBox(height: 16),
+                  Container(
+                    width: double.infinity,
+                    padding: const EdgeInsets.symmetric(
+                      vertical: 18,
+                      horizontal: 12,
+                    ),
+                    decoration: BoxDecoration(
+                      border: Border.all(
+                        color: Colors.deepPurple,
+                      ),
+                      borderRadius: BorderRadius.circular(12),
+                    ),
+                    child: SelectableText(
+                      code,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 26,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: 2,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(dialogContext);
+                },
+                child: const Text('Close'),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not create restore code: '
+            '${error.toString().replaceFirst('Exception: ', '')}',
           ),
         ),
       );
@@ -2933,15 +3109,32 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                 padding: const EdgeInsets.fromLTRB(12, 12, 12, 6),
                 child: TextField(
                   controller: searchController,
+                  textInputAction: TextInputAction.search,
+                  onChanged: (String value) {
+                    if (value.trim().isEmpty && submittedSearch.isNotEmpty) {
+                      setState(() {
+                        submittedSearch = '';
+                      });
+                    }
+                  },
+                  onSubmitted: (String value) {
+                    setState(() {
+                      submittedSearch = value.trim();
+                    });
+                  },
                   decoration: InputDecoration(
                     hintText: 'Search Order ID, Customer or Mobile',
                     prefixIcon: const Icon(Icons.search),
-                    suffixIcon: searchController.text.isEmpty
-                        ? null
-                        : IconButton(
-                            onPressed: searchController.clear,
-                            icon: const Icon(Icons.clear),
-                          ),
+                    suffixIcon: IconButton(
+                      tooltip: 'Clear Search',
+                      onPressed: () {
+                        searchController.clear();
+                        setState(() {
+                          submittedSearch = '';
+                        });
+                      },
+                      icon: const Icon(Icons.clear),
+                    ),
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(12),
                     ),
@@ -3029,6 +3222,9 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                       const SizedBox(height: 6),
                                       Text('Customer: $customerName'),
                                       Text('Mobile: ${order['phone'] ?? '-'}'),
+                                      SelectableText(
+                                        'Customer ID: ${order['customerId'] ?? '-'}',
+                                      ),
                                       if (_orderDate(order) != null)
                                         Text(
                                           'Order Date: '
@@ -3222,6 +3418,30 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                                             'Processing'
                                                     ? 'Seller Settlement On Hold'
                                                     : 'Seller Settlement',
+                                          ),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: OutlinedButton.icon(
+                                          onPressed:
+                                              (order['customerId']
+                                                              ?.toString()
+                                                              .trim() ??
+                                                          '')
+                                                      .isEmpty
+                                                  ? null
+                                                  : () {
+                                                      _showCustomerDeviceRestoreCode(
+                                                        order,
+                                                      );
+                                                    },
+                                          icon: const Icon(
+                                            Icons.phonelink_lock_outlined,
+                                          ),
+                                          label: const Text(
+                                            'Generate Device Restore Code',
                                           ),
                                         ),
                                       ),

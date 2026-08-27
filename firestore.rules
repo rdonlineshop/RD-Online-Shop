@@ -67,8 +67,6 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (signedIn() && request.auth.uid == authUid);
 
-      // Anonymous customer sessions may be recreated after seller/driver
-      // login/logout. The stable customerId remains stored on the device.
       allow create: if signedIn()
         && request.auth.uid == authUid
         && request.resource.data.authUid == request.auth.uid
@@ -82,7 +80,79 @@ service cloud.firestore {
           && request.resource.data.authUid == request.auth.uid
           && request.resource.data.customerId == resource.data.customerId
           && request.resource.data.role == resource.data.role
-          && request.resource.data.isActive == resource.data.isActive);
+          && request.resource.data.isActive == resource.data.isActive)
+        || (signedIn()
+          && request.auth.uid == authUid
+          && request.resource.data.authUid == request.auth.uid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive
+          && request.resource.data.linkedViaCode is string
+          && exists(
+            /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+          )
+          && get(
+            /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+          ).data.used == true
+          && get(
+            /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+          ).data.usedByUid == request.auth.uid
+          && get(
+            /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+          ).data.expiresAt > request.time
+          && request.resource.data.customerId == get(
+            /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+          ).data.customerId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'customerId',
+            'linkedViaCode',
+            'linkedAt',
+            'updatedAt'
+          ]));
+
+      allow delete: if isAdmin();
+    }
+
+    match /customer_device_links/{linkCode} {
+      allow get: if signedIn();
+      allow list: if false;
+
+      allow create: if (
+          (
+            hasCustomerSession()
+            && request.resource.data.customerId == customerData().customerId
+            && request.resource.data.createdByUid == request.auth.uid
+          )
+          || (
+            isAdmin()
+            && request.resource.data.customerId is string
+            && request.resource.data.customerId.size() > 0
+            && request.resource.data.createdByUid == request.auth.uid
+          )
+        )
+        && request.resource.data.used == false
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.keys().hasOnly([
+          'customerId',
+          'createdByUid',
+          'createdAt',
+          'expiresAt',
+          'used'
+        ]);
+
+      allow update: if signedIn()
+        && resource.data.used == false
+        && resource.data.expiresAt > request.time
+        && request.resource.data.used == true
+        && request.resource.data.usedByUid == request.auth.uid
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.createdByUid == resource.data.createdByUid
+        && request.resource.data.expiresAt == resource.data.expiresAt
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'used',
+          'usedByUid',
+          'usedAt'
+        ]);
 
       allow delete: if isAdmin();
     }
@@ -208,14 +278,84 @@ service cloud.firestore {
         ]);
 
       // Secure recovery without reading somebody else's order first.
-      // The caller must know both Order ID and the original phone number.
+      // The caller must know both the Order ID and the original phone number.
+      //
+      // New orders use recoveryPhoneKey. Older RD orders may only have
+      // phone / customerPhone / mobile, so those legacy fields are accepted
+      // as recovery proof as well.
+      function recoveryProofMatches() {
+        return request.resource.data.recoveryProof is string
+          && request.resource.data.recoveryProof.size() >= 6
+          && (
+            (
+              'recoveryPhoneKey' in resource.data
+              && resource.data.recoveryPhoneKey is string
+              && request.resource.data.recoveryProof
+                == resource.data.recoveryPhoneKey
+            )
+            || (
+              'recoveryProof' in resource.data
+              && resource.data.recoveryProof is string
+              && request.resource.data.recoveryProof
+                == resource.data.recoveryProof
+            )
+            || (
+              'phone' in resource.data
+              && resource.data.phone is string
+              && request.resource.data.recoveryProof
+                == resource.data.phone
+            )
+            || (
+              'customerPhone' in resource.data
+              && resource.data.customerPhone is string
+              && request.resource.data.recoveryProof
+                == resource.data.customerPhone
+            )
+            || (
+              'mobile' in resource.data
+              && resource.data.mobile is string
+              && request.resource.data.recoveryProof
+                == resource.data.mobile
+            )
+          );
+      }
+
       allow update: if hasCustomerSession()
+        && recoveryProofMatches()
         && request.resource.data.customerId == customerData().customerId
-        && request.resource.data.recoveryProof == resource.data.recoveryPhoneKey
+        && request.resource.data.recoveryPhoneKey
+          == request.resource.data.recoveryProof
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'customerId',
           'recoveryProof',
-          'recoveredAt'
+          'recoveryPhoneKey',
+          'recoveredAt',
+          'updatedAt'
+        ]);
+
+      // Merge orders already owned by the new device into the linked customer.
+      allow update: if customerOwnsOrder()
+        && request.resource.data.linkedViaCode is string
+        && exists(
+          /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+        )
+        && get(
+          /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+        ).data.used == true
+        && get(
+          /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+        ).data.usedByUid == request.auth.uid
+        && get(
+          /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+        ).data.expiresAt > request.time
+        && request.resource.data.customerId == get(
+          /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+        ).data.customerId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'customerId',
+          'linkedViaCode',
+          'linkedAt',
+          'updatedAt'
         ]);
 
       allow update: if sellerOwnsOrder()

@@ -19,6 +19,9 @@ CollectionReference<Map<String, dynamic>> get _ordersCollection =>
 CollectionReference<Map<String, dynamic>> get _customersCollection =>
     FirebaseFirestore.instance.collection('customers');
 
+CollectionReference<Map<String, dynamic>> get _customerDeviceLinksCollection =>
+    FirebaseFirestore.instance.collection('customer_device_links');
+
 StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _ordersSubscription;
 bool _ordersListenerStarted = false;
 String _ordersListenerCustomerId = '';
@@ -33,6 +36,30 @@ const List<String> orderStatuses = <String>[
 
 String normalizeOrderRecoveryPhone(String phone) {
   return phone.replaceAll(RegExp(r'[^0-9]'), '');
+}
+
+String _normalizeCustomerDeviceLinkCode(String value) {
+  return value.toUpperCase().replaceAll(RegExp(r'[^A-Z0-9]'), '');
+}
+
+String _generateCustomerDeviceLinkCode() {
+  const String alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  final Random random = Random.secure();
+
+  return List<String>.generate(
+    12,
+    (_) => alphabet[random.nextInt(alphabet.length)],
+  ).join();
+}
+
+String _displayCustomerDeviceLinkCode(String code) {
+  if (code.length != 12) {
+    return code;
+  }
+
+  return '${code.substring(0, 4)}-'
+      '${code.substring(4, 8)}-'
+      '${code.substring(8, 12)}';
 }
 
 Future<void> _ensureCustomerSessionDocument(String customerId) async {
@@ -731,8 +758,22 @@ Future<void> addOrder(Map<String, dynamic> newOrder) async {
   order['createdAt'] ??= now;
   order['updatedAt'] = now;
 
-  final String recoveryPhoneKey =
-      normalizeOrderRecoveryPhone(order['phone']?.toString() ?? '');
+  String recoveryPhoneKey = '';
+
+  for (final dynamic candidate in <dynamic>[
+    order['phone'],
+    order['customerPhone'],
+    order['mobile'],
+  ]) {
+    final String normalized =
+        normalizeOrderRecoveryPhone(candidate?.toString() ?? '');
+
+    if (normalized.isNotEmpty) {
+      recoveryPhoneKey = normalized;
+      break;
+    }
+  }
+
   if (recoveryPhoneKey.isNotEmpty) {
     order['recoveryPhoneKey'] = recoveryPhoneKey;
   }
@@ -1238,6 +1279,202 @@ Future<void> disposeOrderListener() async {
   _ordersListenerCustomerId = '';
 }
 
+Future<String> createCustomerDeviceLinkCode() async {
+  final String customerId = await getOrCreateCustomerId();
+  final User? user = FirebaseAuth.instance.currentUser;
+
+  if (user == null || customerId.trim().isEmpty) {
+    throw StateError('Customer session is not available.');
+  }
+
+  if (!user.isAnonymous) {
+    final Map<String, dynamic>? customer =
+        await _registeredCustomerDocument(user);
+
+    if (customer == null) {
+      throw StateError(
+        'Please use Customer mode before linking devices.',
+      );
+    }
+  }
+
+  final DateTime expiresAt =
+      DateTime.now().toUtc().add(const Duration(minutes: 10));
+
+  for (int attempt = 0; attempt < 5; attempt++) {
+    final String code = _generateCustomerDeviceLinkCode();
+    final DocumentReference<Map<String, dynamic>> linkRef =
+        _customerDeviceLinksCollection.doc(code);
+
+    final DocumentSnapshot<Map<String, dynamic>> existing =
+        await linkRef.get();
+
+    if (existing.exists) {
+      continue;
+    }
+
+    try {
+      await linkRef.set(
+        <String, dynamic>{
+          'customerId': customerId.trim(),
+          'createdByUid': user.uid,
+          'createdAt': FieldValue.serverTimestamp(),
+          'expiresAt': Timestamp.fromDate(expiresAt),
+          'used': false,
+        },
+      );
+
+      return _displayCustomerDeviceLinkCode(code);
+    } on FirebaseException catch (error) {
+      if (error.code == 'permission-denied') {
+        rethrow;
+      }
+    }
+  }
+
+  throw StateError(
+    'Could not create a device link code. Please try again.',
+  );
+}
+
+Future<String> linkThisDeviceToCustomer(String linkCode) async {
+  final String cleanCode =
+      _normalizeCustomerDeviceLinkCode(linkCode.trim());
+
+  if (cleanCode.length != 12) {
+    throw ArgumentError('Please enter the full 12-character link code.');
+  }
+
+  final FirebaseAuth auth = FirebaseAuth.instance;
+  User? user = auth.currentUser;
+
+  if (user == null) {
+    final UserCredential credential = await auth.signInAnonymously();
+    user = credential.user;
+  }
+
+  if (user == null) {
+    throw StateError('Could not start customer session.');
+  }
+
+  if (!user.isAnonymous) {
+    final Map<String, dynamic>? customer =
+        await _registeredCustomerDocument(user);
+
+    if (customer == null) {
+      throw StateError(
+        'Please use Customer mode before linking devices.',
+      );
+    }
+  }
+
+  final String currentCustomerId = await getOrCreateCustomerId();
+
+  if (user.isAnonymous) {
+    await _ensureCustomerSessionDocument(currentCustomerId);
+  }
+
+  final DocumentReference<Map<String, dynamic>> linkRef =
+      _customerDeviceLinksCollection.doc(cleanCode);
+
+  String targetCustomerId = '';
+
+  await FirebaseFirestore.instance.runTransaction(
+    (Transaction transaction) async {
+      final DocumentSnapshot<Map<String, dynamic>> snapshot =
+          await transaction.get(linkRef);
+
+      if (!snapshot.exists) {
+        throw StateError('Link code was not found.');
+      }
+
+      final Map<String, dynamic> data =
+          snapshot.data() ?? <String, dynamic>{};
+
+      if (data['used'] == true) {
+        throw StateError('This link code has already been used.');
+      }
+
+      final dynamic rawExpiresAt = data['expiresAt'];
+      DateTime? expiresAt;
+
+      if (rawExpiresAt is Timestamp) {
+        expiresAt = rawExpiresAt.toDate().toUtc();
+      } else if (rawExpiresAt is DateTime) {
+        expiresAt = rawExpiresAt.toUtc();
+      }
+
+      if (expiresAt == null ||
+          !expiresAt.isAfter(DateTime.now().toUtc())) {
+        throw StateError('This link code has expired.');
+      }
+
+      targetCustomerId =
+          data['customerId']?.toString().trim() ?? '';
+
+      if (targetCustomerId.isEmpty) {
+        throw StateError('Link code is invalid.');
+      }
+
+      transaction.update(
+        linkRef,
+        <String, dynamic>{
+          'used': true,
+          'usedByUid': user!.uid,
+          'usedAt': FieldValue.serverTimestamp(),
+        },
+      );
+    },
+  );
+
+  // Merge orders already owned by this device into the target customer ID.
+  if (currentCustomerId != targetCustomerId) {
+    final QuerySnapshot<Map<String, dynamic>> currentOrders =
+        await _ordersCollection
+            .where('customerId', isEqualTo: currentCustomerId)
+            .get();
+
+    const int batchSize = 400;
+    for (int start = 0; start < currentOrders.docs.length; start += batchSize) {
+      final int end = (start + batchSize < currentOrders.docs.length)
+          ? start + batchSize
+          : currentOrders.docs.length;
+
+      final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+      for (final QueryDocumentSnapshot<Map<String, dynamic>> document
+          in currentOrders.docs.sublist(start, end)) {
+        batch.update(
+          document.reference,
+          <String, dynamic>{
+            'customerId': targetCustomerId,
+            'linkedViaCode': cleanCode,
+            'linkedAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+      }
+
+      await batch.commit();
+    }
+  }
+
+  await _customersCollection.doc(user.uid).update(
+    <String, dynamic>{
+      'customerId': targetCustomerId,
+      'linkedViaCode': cleanCode,
+      'linkedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    },
+  );
+
+  final SharedPreferences prefs = await SharedPreferences.getInstance();
+  await prefs.setString(_customerIdPreferenceKey, targetCustomerId);
+
+  await reloadOrdersForCurrentCustomer();
+  return targetCustomerId;
+}
+
 Future<void> recoverCustomerOrder({
   required String orderId,
   required String phone,
@@ -1253,44 +1490,19 @@ Future<void> recoverCustomerOrder({
     throw ArgumentError('Please enter the phone number used for this order.');
   }
 
+  // Do not read the old order first.
+  // Firestore Security Rules intentionally block another device from reading
+  // an order until ownership recovery succeeds.
+  final String customerId = await getOrCreateCustomerId();
+
   final DocumentReference<Map<String, dynamic>> orderRef =
       _ordersCollection.doc(cleanOrderId);
-
-  final DocumentSnapshot<Map<String, dynamic>> snapshot =
-      await orderRef.get();
-
-  if (!snapshot.exists) {
-    throw FirebaseException(
-      plugin: 'cloud_firestore',
-      code: 'not-found',
-      message: 'Order not found.',
-    );
-  }
-
-  final Map<String, dynamic> data =
-      snapshot.data() ?? <String, dynamic>{};
-
-  final String savedRecoveryKey = normalizeOrderRecoveryPhone(
-    data['recoveryPhoneKey']?.toString() ??
-        data['recoveryProof']?.toString() ??
-        data['phone']?.toString() ??
-        '',
-  );
-
-  if (savedRecoveryKey.isEmpty || savedRecoveryKey != recoveryProof) {
-    throw FirebaseException(
-      plugin: 'cloud_firestore',
-      code: 'permission-denied',
-      message: 'Order ID or phone number did not match.',
-    );
-  }
-
-  final String customerId = await getOrCreateCustomerId();
 
   await orderRef.update(
     <String, dynamic>{
       'customerId': customerId,
-      'recoveryPhoneKey': savedRecoveryKey,
+      'recoveryProof': recoveryProof,
+      'recoveryPhoneKey': recoveryProof,
       'recoveredAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     },
