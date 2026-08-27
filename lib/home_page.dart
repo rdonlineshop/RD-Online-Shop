@@ -980,6 +980,22 @@ class _HomePageState extends State<HomePage> {
   static const Color _rdBlack = Color(0xFF000000);
   static const Color _pageBg = Color(0xFFF7F7F7);
 
+  bool _isDesktop(BuildContext context) {
+    return MediaQuery.sizeOf(context).width >= 900;
+  }
+
+  Widget _contentWidth(
+    Widget child, {
+    double maxWidth = 1180,
+  }) {
+    return Center(
+      child: ConstrainedBox(
+        constraints: BoxConstraints(maxWidth: maxWidth),
+        child: child,
+      ),
+    );
+  }
+
 
   void _openAllCategories() {
     showModalBottomSheet<void>(
@@ -1082,8 +1098,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _brandHeader() {
+    final bool desktop = _isDesktop(context);
+
     return Container(
-      height: 150,
+      height: desktop ? 118 : 150,
       color: _pageBg,
       child: Stack(
         fit: StackFit.expand,
@@ -1101,10 +1119,10 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           Positioned(
-            left: 12,
-            top: 0,
-            width: 200,
-            height: 120,
+            left: desktop ? 28 : 12,
+            top: 8,
+            width: desktop ? 130 : 150,
+            height: desktop ? 70 : 78,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(28),
               child: Image.asset(
@@ -1130,8 +1148,8 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           Positioned(
-            right: 12,
-            top: 38,
+            right: desktop ? 28 : 12,
+            top: desktop ? 24 : 38,
             child: Row(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
@@ -1272,7 +1290,8 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _searchBox() {
-    return Padding(
+    return _contentWidth(
+      Padding(
       padding: const EdgeInsets.fromLTRB(18, 8, 18, 12),
       child: Material(
         elevation: 5,
@@ -1330,6 +1349,7 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         ),
+      ),
       ),
     );
   }
@@ -1394,7 +1414,8 @@ class _HomePageState extends State<HomePage> {
     final List<String> visibleCategories =
         categories.where((String category) => category != 'All').toList();
 
-    return SizedBox(
+    return _contentWidth(
+      SizedBox(
       height: 110,
       child: ScrollConfiguration(
         behavior: const MaterialScrollBehavior().copyWith(
@@ -1416,17 +1437,21 @@ class _HomePageState extends State<HomePage> {
           },
         ),
       ),
+      ),
     );
   }
 
   Widget _offerBanner() {
+    final bool desktop = _isDesktop(context);
+
     if (selectedCategory == 'All') {
-      return Padding(
+      return _contentWidth(
+        Padding(
         padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
         child: ClipRRect(
           borderRadius: BorderRadius.circular(24),
           child: AspectRatio(
-            aspectRatio: 3.0,
+            aspectRatio: desktop ? 5.0 : 3.0,
             child: Image.asset(
               'assets/images/rd_offer_banner.png',
               width: double.infinity,
@@ -1449,6 +1474,7 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
         ),
+        ),
       );
     }
 
@@ -1456,10 +1482,11 @@ class _HomePageState extends State<HomePage> {
     final String imagePath =
         categoryImages[selectedCategory] ?? categoryImages['All']!;
 
-    return Padding(
+    return _contentWidth(
+      Padding(
       padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
       child: Container(
-        height: 175,
+        height: desktop ? 180 : 175,
         decoration: BoxDecoration(
           borderRadius: BorderRadius.circular(24),
           gradient: LinearGradient(
@@ -1582,6 +1609,7 @@ class _HomePageState extends State<HomePage> {
           ],
         ),
       ),
+      ),
     );
   }
 
@@ -1592,7 +1620,8 @@ class _HomePageState extends State<HomePage> {
       (Icons.autorenew_rounded, 'Easy\nReturns'),
       (Icons.headset_mic_rounded, '24/7\nSupport'),
     ];
-    return Container(
+    return _contentWidth(
+      Container(
       margin: const EdgeInsets.fromLTRB(18, 8, 18, 18),
       padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 8),
       decoration: BoxDecoration(
@@ -1624,6 +1653,7 @@ class _HomePageState extends State<HomePage> {
             ),
           );
         }).toList(),
+      ),
       ),
     );
   }
@@ -1673,47 +1703,67 @@ class _HomePageState extends State<HomePage> {
       );
     }
 
-    return SafeArea(
-      top: false,
-      child: Container(
-        margin: const EdgeInsets.fromLTRB(14, 0, 14, 10),
-        decoration: BoxDecoration(
-          color: Colors.white,
-          borderRadius: BorderRadius.circular(28),
-          boxShadow: const <BoxShadow>[
-            BoxShadow(color: Colors.black12, blurRadius: 14, offset: Offset(0, 4)),
-          ],
-        ),
-        child: Row(
-          children: <Widget>[
-            item(Icons.home_rounded, 'Home', () {}, active: true),
-            item(Icons.grid_view_rounded, 'Categories', _openAllCategories),
-            item(
-              Icons.shopping_cart_rounded,
-              'Cart',
-              () async {
-                await Navigator.push<void>(context, MaterialPageRoute<void>(builder: (_) => const CartPage()));
-                if (mounted) setState(() {});
-              },
-              badge: getCartItemCount(),
+    return Align(
+      alignment: Alignment.bottomCenter,
+      heightFactor: 1,
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(maxWidth: 900),
+        child: SafeArea(
+          top: false,
+          child: Container(
+            margin: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+            decoration: BoxDecoration(
+              color: Colors.white,
+              borderRadius: BorderRadius.circular(28),
+              boxShadow: const <BoxShadow>[
+                BoxShadow(
+                  color: Colors.black12,
+                  blurRadius: 14,
+                  offset: Offset(0, 4),
+                ),
+              ],
             ),
-            item(
-              Icons.inventory_2_rounded,
-              'My Orders',
-              () => Navigator.push<void>(
-                context,
-                MaterialPageRoute<void>(builder: (_) => const OrderHistoryPage()),
-              ),
+            child: Row(
+              children: <Widget>[
+                item(Icons.home_rounded, 'Home', () {}, active: true),
+                item(Icons.grid_view_rounded, 'Categories', _openAllCategories),
+                item(
+                  Icons.shopping_cart_rounded,
+                  'Cart',
+                  () async {
+                    await Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) => const CartPage(),
+                      ),
+                    );
+                    if (mounted) setState(() {});
+                  },
+                  badge: getCartItemCount(),
+                ),
+                item(
+                  Icons.inventory_2_rounded,
+                  'My Orders',
+                  () => Navigator.push<void>(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) => const OrderHistoryPage(),
+                    ),
+                  ),
+                ),
+                item(
+                  Icons.account_circle_outlined,
+                  'Profile',
+                  () => Navigator.push<void>(
+                    context,
+                    MaterialPageRoute<void>(
+                      builder: (_) => const ProfilePage(),
+                    ),
+                  ),
+                ),
+              ],
             ),
-            item(
-              Icons.account_circle_outlined,
-              'Profile',
-              () => Navigator.push<void>(
-                context,
-                MaterialPageRoute<void>(builder: (_) => const ProfilePage()),
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );
@@ -1745,22 +1795,37 @@ class _HomePageState extends State<HomePage> {
             SliverToBoxAdapter(child: _offerBanner()),
             SliverToBoxAdapter(child: _categoriesStrip()),
             SliverToBoxAdapter(
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
-                child: Row(
-                  children: <Widget>[
-                    const Expanded(
-                      child: Text(
-                        'Best Selling Products',
-                        style: TextStyle(fontSize: 21, fontWeight: FontWeight.w900),
+              child: _contentWidth(
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+                  child: Row(
+                    children: <Widget>[
+                      const Expanded(
+                        child: Text(
+                          'Best Selling Products',
+                          style: TextStyle(
+                            fontSize: 21,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
                       ),
-                    ),
-                    TextButton.icon(
-                      onPressed: () => setState(() => selectedCategory = 'All'),
-                      icon: const Icon(Icons.chevron_right_rounded, color: _rdRed),
-                      label: const Text('View All', style: TextStyle(color: _rdRed, fontWeight: FontWeight.w800)),
-                    ),
-                  ],
+                      TextButton.icon(
+                        onPressed: () =>
+                            setState(() => selectedCategory = 'All'),
+                        icon: const Icon(
+                          Icons.chevron_right_rounded,
+                          color: _rdRed,
+                        ),
+                        label: const Text(
+                          'View All',
+                          style: TextStyle(
+                            color: _rdRed,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
             ),
@@ -1772,17 +1837,28 @@ class _HomePageState extends State<HomePage> {
                 ),
               )
             else
-              SliverPadding(
-                padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
-                sliver: SliverLayoutBuilder(
-                  builder: (BuildContext context, constraints) {
-                    final int columns = _gridColumns(constraints.crossAxisExtent);
-                    return SliverGrid(
+              SliverLayoutBuilder(
+                builder: (BuildContext context, constraints) {
+                  final double availableWidth = constraints.crossAxisExtent;
+                  final double contentWidth =
+                      availableWidth > 1180 ? 1180 : availableWidth;
+                  final double sidePadding =
+                      ((availableWidth - contentWidth) / 2) + 14;
+                  final int columns = _gridColumns(contentWidth);
+
+                  return SliverPadding(
+                    padding: EdgeInsets.fromLTRB(
+                      sidePadding,
+                      0,
+                      sidePadding,
+                      8,
+                    ),
+                    sliver: SliverGrid(
                       gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
                         crossAxisCount: columns,
                         crossAxisSpacing: 12,
                         mainAxisSpacing: 12,
-                        childAspectRatio: 0.66,
+                        childAspectRatio: contentWidth >= 900 ? 0.78 : 0.66,
                       ),
                       delegate: SliverChildBuilderDelegate(
                         (BuildContext context, int index) {
@@ -1809,9 +1885,9 @@ class _HomePageState extends State<HomePage> {
                         },
                         childCount: filteredProducts.length,
                       ),
-                    );
-                  },
-                ),
+                    ),
+                  );
+                },
               ),
             SliverToBoxAdapter(child: _benefitStrip()),
             const SliverToBoxAdapter(child: SizedBox(height: 8)),
