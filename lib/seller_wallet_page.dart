@@ -116,7 +116,10 @@ class SellerWalletPage extends StatelessWidget {
   }) {
     return Card(
       child: Padding(
-        padding: const EdgeInsets.all(10),
+        padding: const EdgeInsets.symmetric(
+          horizontal: 8,
+          vertical: 8,
+        ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: <Widget>[
@@ -134,11 +137,11 @@ class SellerWalletPage extends StatelessWidget {
               textAlign: TextAlign.center,
               overflow: TextOverflow.ellipsis,
               style: const TextStyle(
-                fontSize: 13,
+                fontSize: 12,
                 fontWeight: FontWeight.w600,
               ),
             ),
-            const SizedBox(height: 5),
+            const SizedBox(height: 4),
             FittedBox(
               fit: BoxFit.scaleDown,
               child: Text(
@@ -309,7 +312,7 @@ class SellerWalletPage extends StatelessWidget {
                         crossAxisCount: wide ? 4 : 2,
                         crossAxisSpacing: 8,
                         mainAxisSpacing: 8,
-                        mainAxisExtent: wide ? 125 : 145,
+                        mainAxisExtent: wide ? 145 : 155,
                       ),
                       children: <Widget>[
                         _summaryCard(

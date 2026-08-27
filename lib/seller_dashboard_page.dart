@@ -7,6 +7,7 @@ import 'seller_product_page.dart';
 import 'seller_shop_profile_page.dart';
 import 'seller_order_page.dart';
 import 'seller_wallet_page.dart';
+import 'seller_reviews_page.dart';
 
 class SellerDashboardPage extends StatelessWidget {
   const SellerDashboardPage({super.key});
@@ -789,6 +790,27 @@ class SellerDashboardPage extends StatelessWidget {
                         MaterialPageRoute<void>(
                           builder: (_) =>
                               const SellerWalletPage(),
+                        ),
+                      );
+                    },
+                  ),
+
+                  _sellerCard(
+                    context,
+                    icon:
+                        Icons.star_rate_rounded,
+                    color:
+                        Colors.amber,
+                    title:
+                        'Reviews & Ratings',
+                    subtitle:
+                        'Average rating, customer reviews and product feedback',
+                    onTap: () {
+                      Navigator.push<void>(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              const SellerReviewsPage(),
                         ),
                       );
                     },

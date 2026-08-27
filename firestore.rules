@@ -410,6 +410,23 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+
+    match /reviews/{reviewId} {
+      // Admin can read all reviews.
+      allow read: if isAdmin();
+
+      // An active seller can read only reviews that belong to that seller.
+      // SellerReviewsPage queries with:
+      // .where('sellerId', isEqualTo: currentSellerUid)
+      allow read: if isActiveSeller()
+        && resource.data.sellerId is string
+        && resource.data.sellerId == request.auth.uid;
+
+      // Review creation/update/delete will be added with the customer
+      // review-submission feature. Keep writes closed for now.
+      allow create, update, delete: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
