@@ -1925,6 +1925,7 @@ class _CheckoutPageState
                 String>(
               initialValue:
                   selectedDeliveryArea,
+              isExpanded: true,
               decoration:
                   const InputDecoration(
                 labelText:
@@ -1942,16 +1943,21 @@ class _CheckoutPageState
                   MapEntry<String, double>
                       entry,
                 ) {
+                  final String deliveryLabel =
+                      entry.value == 0
+                          ? '${entry.key} — Free'
+                          : '${entry.key} — Rs. ${entry.value.toStringAsFixed(0)}';
+
                   return DropdownMenuItem<
                       String>(
                     value:
                         entry.key,
                     child:
                         Text(
-                      entry.value ==
-                              0
-                          ? '${entry.key} — Free'
-                          : '${entry.key} — Rs. ${entry.value.toStringAsFixed(0)}',
+                      deliveryLabel,
+                      maxLines: 1,
+                      overflow:
+                          TextOverflow.ellipsis,
                     ),
                   );
                 },

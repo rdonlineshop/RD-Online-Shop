@@ -412,19 +412,108 @@ service cloud.firestore {
 
 
     match /reviews/{reviewId} {
+      function reviewOrderExists() {
+        return request.resource.data.orderId is string
+          && exists(
+            /databases/$(database)/documents/orders/$(request.resource.data.orderId)
+          );
+      }
+
+      function reviewOrderData() {
+        return get(
+          /databases/$(database)/documents/orders/$(request.resource.data.orderId)
+        ).data;
+      }
+
+      function validReviewContent() {
+        return request.resource.data.rating is int
+          && request.resource.data.rating >= 1
+          && request.resource.data.rating <= 5
+          && request.resource.data.comment is string
+          && request.resource.data.comment.size() > 0
+          && request.resource.data.comment.size() <= 500;
+      }
+
       // Admin can read all reviews.
       allow read: if isAdmin();
 
       // An active seller can read only reviews that belong to that seller.
-      // SellerReviewsPage queries with:
-      // .where('sellerId', isEqualTo: currentSellerUid)
       allow read: if isActiveSeller()
         && resource.data.sellerId is string
         && resource.data.sellerId == request.auth.uid;
 
-      // Review creation/update/delete will be added with the customer
-      // review-submission feature. Keep writes closed for now.
-      allow create, update, delete: if false;
+      // Customer can read their own submitted review.
+      allow read: if hasCustomerSession()
+        && resource.data.customerId is string
+        && resource.data.customerId == customerData().customerId;
+
+      // Customer can create a review only for their own Delivered order.
+      // The seller must also belong to that order.
+      allow create: if hasCustomerSession()
+        && request.resource.data.keys().hasOnly([
+          'reviewId',
+          'orderId',
+          'customerId',
+          'customerName',
+          'sellerId',
+          'productId',
+          'productName',
+          'rating',
+          'comment',
+          'isVerifiedPurchase',
+          'orderStatus',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.reviewId == reviewId
+        && request.resource.data.customerId == customerData().customerId
+        && request.resource.data.sellerId is string
+        && request.resource.data.sellerId.size() > 0
+        && request.resource.data.productId is string
+        && request.resource.data.productName is string
+        && request.resource.data.productName.size() > 0
+        && request.resource.data.customerName is string
+        && request.resource.data.isVerifiedPurchase == true
+        && request.resource.data.orderStatus == 'Delivered'
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && validReviewContent()
+        && reviewOrderExists()
+        && reviewOrderData().customerId == customerData().customerId
+        && reviewOrderData().status == 'Delivered'
+        && reviewOrderData().sellerIds is list
+        && request.resource.data.sellerId in reviewOrderData().sellerIds;
+
+      // Customer may edit rating/comment for the same verified purchase.
+      // Ownership and order/seller/product identity cannot be transferred.
+      allow update: if hasCustomerSession()
+        && resource.data.customerId == customerData().customerId
+        && request.resource.data.reviewId == resource.data.reviewId
+        && request.resource.data.orderId == resource.data.orderId
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.sellerId == resource.data.sellerId
+        && request.resource.data.productId == resource.data.productId
+        && request.resource.data.isVerifiedPurchase == true
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.orderStatus == 'Delivered'
+        && request.resource.data.updatedAt is timestamp
+        && validReviewContent()
+        && reviewOrderExists()
+        && reviewOrderData().customerId == customerData().customerId
+        && reviewOrderData().status == 'Delivered'
+        && reviewOrderData().sellerIds is list
+        && request.resource.data.sellerId in reviewOrderData().sellerIds
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'rating',
+          'comment',
+          'customerName',
+          'productName',
+          'orderStatus',
+          'updatedAt'
+        ]);
+
+      // Review deletion is reserved for Admin moderation for now.
+      allow delete: if isAdmin();
     }
 
     match /{document=**} {

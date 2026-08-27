@@ -1,3 +1,4 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'order_data.dart';
 
@@ -241,6 +242,39 @@ class _OrderDetailsPageState
                           fontWeight: FontWeight.bold,
                         ),
                       ),
+                      if (status
+                                  .toLowerCase()
+                                  .trim() ==
+                              'delivered' &&
+                          (item['sellerId']
+                                      ?.toString()
+                                      .trim() ??
+                                  '')
+                              .isNotEmpty) ...<Widget>[
+                        const SizedBox(
+                          height: 8,
+                        ),
+                        Align(
+                          alignment:
+                              Alignment.centerLeft,
+                          child:
+                              OutlinedButton.icon(
+                            onPressed: () {
+                              _openReviewDialog(
+                                item,
+                              );
+                            },
+                            icon:
+                                const Icon(
+                              Icons.star_rate_rounded,
+                            ),
+                            label:
+                                const Text(
+                              'Rate & Review',
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ),
@@ -250,6 +284,441 @@ class _OrderDetailsPageState
         }).toList(),
       ),
     );
+  }
+
+
+  // =====================================
+  // CUSTOMER REVIEW
+  // =====================================
+
+  String _safeReviewPart(
+    dynamic value,
+  ) {
+    final String text =
+        value?.toString().trim() ?? '';
+
+    return text
+        .replaceAll(
+          RegExp(r'[^A-Za-z0-9_-]'),
+          '_',
+        )
+        .replaceAll(
+          RegExp(r'_+'),
+          '_',
+        );
+  }
+
+  String _reviewDocumentId(
+    Map<String, dynamic> item,
+  ) {
+    final String orderId = _safeReviewPart(
+      order['id'] ??
+          order['orderId'] ??
+          'order',
+    );
+
+    final String sellerId =
+        _safeReviewPart(
+      item['sellerId'],
+    );
+
+    final String productId =
+        _safeReviewPart(
+      item['productId'],
+    );
+
+    final String productName =
+        _safeReviewPart(
+      item['productName'] ??
+          item['name'] ??
+          'product',
+    );
+
+    return 'review_${orderId}_${sellerId}_'
+        '${productId.isNotEmpty ? productId : productName}';
+  }
+
+  Future<void> _openReviewDialog(
+    Map<String, dynamic> item,
+  ) async {
+    if (status.toLowerCase().trim() !=
+        'delivered') {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'You can review a product only after delivery.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final String sellerId =
+        item['sellerId']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (sellerId.isEmpty) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Seller information is missing for this product.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final String currentCustomerId =
+        await getOrCreateCustomerId();
+
+    final String orderCustomerId =
+        order['customerId']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (!mounted) {
+      return;
+    }
+
+    if (orderCustomerId.isEmpty ||
+        currentCustomerId !=
+            orderCustomerId) {
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This order is not linked to this customer device.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final String reviewId =
+        _reviewDocumentId(item);
+
+    final DocumentReference<
+            Map<String, dynamic>>
+        reviewReference =
+        FirebaseFirestore.instance
+            .collection('reviews')
+            .doc(reviewId);
+
+    int rating = 5;
+
+    String reviewComment = '';
+
+    bool existingReview = false;
+
+    try {
+      final DocumentSnapshot<
+              Map<String, dynamic>>
+          reviewSnapshot =
+          await reviewReference.get();
+
+      final Map<String, dynamic>?
+          reviewData =
+          reviewSnapshot.data();
+
+      if (reviewData != null) {
+        existingReview = true;
+
+        final dynamic savedRating =
+            reviewData['rating'];
+
+        if (savedRating is num) {
+          rating = savedRating
+              .toInt()
+              .clamp(1, 5);
+        } else {
+          rating =
+              int.tryParse(
+                    savedRating
+                            ?.toString() ??
+                        '',
+                  )
+                      ?.clamp(1, 5) ??
+                  5;
+        }
+
+        reviewComment =
+            reviewData['comment']
+                    ?.toString() ??
+                '';
+      }
+    } catch (_) {
+      // The dialog can still open.
+      // Firestore rules are checked again when saving.
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    final bool? shouldSave =
+        await showDialog<bool>(
+      context: context,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext context,
+            void Function(void Function())
+                setDialogState,
+          ) {
+            return AlertDialog(
+              title: Text(
+                existingReview
+                    ? 'Edit Review'
+                    : 'Rate & Review',
+              ),
+              content: ConstrainedBox(
+                constraints:
+                    const BoxConstraints(
+                  maxWidth: 430,
+                ),
+                child: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize:
+                        MainAxisSize.min,
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        (item['productName'] ??
+                                item['name'] ??
+                                'Product')
+                            .toString(),
+                        style:
+                            const TextStyle(
+                          fontSize: 17,
+                          fontWeight:
+                              FontWeight.bold,
+                        ),
+                      ),
+                      const SizedBox(
+                        height: 14,
+                      ),
+                      const Text(
+                        'Your rating',
+                        style:
+                            TextStyle(
+                          fontWeight:
+                              FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(
+                        height: 6,
+                      ),
+                      Wrap(
+                        spacing: 2,
+                        children:
+                            List<Widget>.generate(
+                          5,
+                          (int index) {
+                            final int
+                                star =
+                                index + 1;
+
+                            return IconButton(
+                              tooltip:
+                                  '$star star',
+                              onPressed: () {
+                                setDialogState(
+                                  () {
+                                    rating =
+                                        star;
+                                  },
+                                );
+                              },
+                              icon: Icon(
+                                star <= rating
+                                    ? Icons
+                                        .star_rounded
+                                    : Icons
+                                        .star_border_rounded,
+                                color:
+                                    Colors.amber,
+                                size: 34,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(
+                        height: 10,
+                      ),
+                      TextFormField(
+                        initialValue:
+                            reviewComment,
+                        onChanged:
+                            (String value) {
+                          reviewComment =
+                              value;
+                        },
+                        maxLines: 4,
+                        maxLength: 500,
+                        decoration:
+                            const InputDecoration(
+                          labelText:
+                              'Write your review',
+                          hintText:
+                              'Tell the seller about your experience.',
+                          border:
+                              OutlineInputBorder(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () {
+                    Navigator.pop(
+                      dialogContext,
+                      false,
+                    );
+                  },
+                  child:
+                      const Text(
+                    'Cancel',
+                  ),
+                ),
+                FilledButton.icon(
+                  onPressed: () {
+                    if (reviewComment
+                        .trim()
+                        .isEmpty) {
+                      ScaffoldMessenger.of(
+                        dialogContext,
+                      ).showSnackBar(
+                        const SnackBar(
+                          content: Text(
+                            'Please write a short review.',
+                          ),
+                        ),
+                      );
+                      return;
+                    }
+
+                    Navigator.pop(
+                      dialogContext,
+                      true,
+                    );
+                  },
+                  icon:
+                      const Icon(
+                    Icons.star,
+                  ),
+                  label: Text(
+                    existingReview
+                        ? 'Update Review'
+                        : 'Submit Review',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (shouldSave != true) {
+      return;
+    }
+
+    final String comment =
+        reviewComment.trim();
+
+    try {
+      final DocumentSnapshot<
+              Map<String, dynamic>>
+          existingSnapshot =
+          await reviewReference.get();
+
+      final Map<String, dynamic>
+          reviewData =
+          <String, dynamic>{
+        'reviewId': reviewId,
+        'orderId':
+            (order['id'] ??
+                    order['orderId'] ??
+                    '')
+                .toString(),
+        'customerId':
+            currentCustomerId,
+        'customerName':
+            (order['customerName'] ??
+                    order['name'] ??
+                    'Customer')
+                .toString(),
+        'sellerId': sellerId,
+        'productId':
+            item['productId']
+                    ?.toString() ??
+                '',
+        'productName':
+            (item['productName'] ??
+                    item['name'] ??
+                    'Product')
+                .toString(),
+        'rating': rating,
+        'comment': comment,
+        'isVerifiedPurchase': true,
+        'orderStatus': status,
+        'updatedAt':
+            FieldValue.serverTimestamp(),
+      };
+
+      if (!existingSnapshot.exists) {
+        reviewData['createdAt'] =
+            FieldValue.serverTimestamp();
+      }
+
+      await reviewReference.set(
+        reviewData,
+        SetOptions(
+          merge: true,
+        ),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content: Text(
+            existingSnapshot.exists
+                ? 'Review updated successfully.'
+                : 'Thank you. Your review was submitted.',
+          ),
+        ),
+      );
+
+      setState(() {});
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not save review: $error',
+          ),
+        ),
+      );
+    }
   }
 
   // =====================================
