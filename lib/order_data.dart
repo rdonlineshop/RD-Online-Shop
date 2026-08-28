@@ -456,7 +456,13 @@ void _sortOrders() {
 
 Future<void> loadOrders() async {
   await _loadLocalOrders();
-  await _migrateLocalOrdersToFirestore();
+
+  // Do not replay every locally saved/legacy order back to Firestore on app
+  // startup. New orders are already written by addOrder(), while device linking
+  // and recovery have their own explicit Firestore flows. Replaying old local
+  // backups can repeatedly try to update historical orders that this current
+  // customer session is not allowed to modify, which creates permission-denied
+  // WriteStream warnings.
   await _startOrdersListener();
 }
 
@@ -588,47 +594,6 @@ Future<void> saveOrders() async {
 
   // Do NOT overwrite the old device-wide "orderHistory" key here.
   // Older RD builds may still have recoverable orders in that legacy backup.
-}
-
-Future<void> _migrateLocalOrdersToFirestore() async {
-  if (orderHistory.isEmpty) {
-    return;
-  }
-
-  final User? user = FirebaseAuth.instance.currentUser;
-  if (user == null) {
-    return;
-  }
-
-  final String customerId = await getOrCreateCustomerId();
-
-  if (!user.isAnonymous) {
-    final Map<String, dynamic>? customer =
-        await _registeredCustomerDocument(user);
-
-    if (customer == null) {
-      return;
-    }
-  }
-
-  for (final Map<String, dynamic> order in orderHistory) {
-    final String orderId = order['id']?.toString().trim() ?? '';
-    if (orderId.isEmpty) continue;
-
-    final Map<String, dynamic> uploadData = _safeMap(order);
-    if (uploadData['customerId']?.toString().trim() != customerId) {
-      continue;
-    }
-
-    try {
-      await _ordersCollection.doc(orderId).set(
-            uploadData,
-            SetOptions(merge: true),
-          );
-    } catch (_) {
-      // Local backup remains available.
-    }
-  }
 }
 
 Future<void> _startOrdersListener() async {

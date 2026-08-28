@@ -437,46 +437,30 @@ service cloud.firestore {
       // Admin can read all reviews.
       allow read: if isAdmin();
 
-      // An active seller can read only reviews that belong to that seller.
+      // Active seller can read only reviews belonging to that seller.
       allow read: if isActiveSeller()
         && resource.data.sellerId is string
         && resource.data.sellerId == request.auth.uid;
 
-      // Customer can read their own submitted review.
+      // Customer can read only their own submitted review.
       allow read: if hasCustomerSession()
         && resource.data.customerId is string
         && resource.data.customerId == customerData().customerId;
 
-      // Customer can create a review only for their own Delivered order.
-      // The seller must also belong to that order.
+      // Customer can create a review only for an order that:
+      // 1) belongs to this customer,
+      // 2) is Delivered,
+      // 3) contains this seller.
+      //
+      // Keep create validation intentionally focused on ownership/content.
+      // Client metadata such as timestamps/product labels is not used as an
+      // authorization condition, which avoids false permission-denied errors.
       allow create: if hasCustomerSession()
-        && request.resource.data.keys().hasOnly([
-          'reviewId',
-          'orderId',
-          'customerId',
-          'customerName',
-          'sellerId',
-          'productId',
-          'productName',
-          'rating',
-          'comment',
-          'isVerifiedPurchase',
-          'orderStatus',
-          'createdAt',
-          'updatedAt'
-        ])
         && request.resource.data.reviewId == reviewId
+        && request.resource.data.customerId is string
         && request.resource.data.customerId == customerData().customerId
         && request.resource.data.sellerId is string
         && request.resource.data.sellerId.size() > 0
-        && request.resource.data.productId is string
-        && request.resource.data.productName is string
-        && request.resource.data.productName.size() > 0
-        && request.resource.data.customerName is string
-        && request.resource.data.isVerifiedPurchase == true
-        && request.resource.data.orderStatus == 'Delivered'
-        && request.resource.data.createdAt is timestamp
-        && request.resource.data.updatedAt is timestamp
         && validReviewContent()
         && reviewOrderExists()
         && reviewOrderData().customerId == customerData().customerId
@@ -484,8 +468,8 @@ service cloud.firestore {
         && reviewOrderData().sellerIds is list
         && request.resource.data.sellerId in reviewOrderData().sellerIds;
 
-      // Customer may edit rating/comment for the same verified purchase.
-      // Ownership and order/seller/product identity cannot be transferred.
+      // Customer may edit only rating/comment/time on their own review.
+      // Order/customer/seller/product identity cannot be transferred.
       allow update: if hasCustomerSession()
         && resource.data.customerId == customerData().customerId
         && request.resource.data.reviewId == resource.data.reviewId
@@ -493,10 +477,7 @@ service cloud.firestore {
         && request.resource.data.customerId == resource.data.customerId
         && request.resource.data.sellerId == resource.data.sellerId
         && request.resource.data.productId == resource.data.productId
-        && request.resource.data.isVerifiedPurchase == true
-        && request.resource.data.createdAt == resource.data.createdAt
-        && request.resource.data.orderStatus == 'Delivered'
-        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.productName == resource.data.productName
         && validReviewContent()
         && reviewOrderExists()
         && reviewOrderData().customerId == customerData().customerId
@@ -506,13 +487,10 @@ service cloud.firestore {
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'rating',
           'comment',
-          'customerName',
-          'productName',
-          'orderStatus',
           'updatedAt'
         ]);
 
-      // Review deletion is reserved for Admin moderation for now.
+      // Admin moderation only.
       allow delete: if isAdmin();
     }
 

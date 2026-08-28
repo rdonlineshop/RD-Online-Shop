@@ -164,6 +164,110 @@ class _OrderDetailsPageState
     return double.tryParse(priceText) ?? 0;
   }
 
+  String _orderProductImage(
+    Map<String, dynamic> item,
+  ) {
+    final List<dynamic> directImages =
+        <dynamic>[
+      item['image'],
+      item['imagePath'],
+      item['imageUrl'],
+      item['photoUrl'],
+      item['thumbnailUrl'],
+    ];
+
+    for (final dynamic value
+        in directImages) {
+      final String image =
+          value?.toString().trim() ?? '';
+
+      if (image.isNotEmpty &&
+          image.toLowerCase() != 'null') {
+        return image;
+      }
+    }
+
+    final List<dynamic> imageLists =
+        <dynamic>[
+      item['imagePaths'],
+      item['imageUrls'],
+      item['images'],
+      item['photoUrls'],
+      item['photos'],
+    ];
+
+    for (final dynamic value
+        in imageLists) {
+      if (value is List) {
+        for (final dynamic photo in value) {
+          final String image =
+              photo?.toString().trim() ?? '';
+
+          if (image.isNotEmpty &&
+              image.toLowerCase() !=
+                  'null') {
+            return image;
+          }
+        }
+      }
+    }
+
+    return '';
+  }
+
+  Widget _orderProductImageWidget(
+    Map<String, dynamic> item,
+  ) {
+    final String image =
+        _orderProductImage(item);
+
+    const Widget fallback =
+        Icon(
+      Icons.shopping_bag,
+      color: Colors.blue,
+      size: 34,
+    );
+
+    if (image.isEmpty) {
+      return fallback;
+    }
+
+    if (image.startsWith('http://') ||
+        image.startsWith('https://')) {
+      return Image.network(
+        image,
+        width: 58,
+        height: 58,
+        fit: BoxFit.cover,
+        errorBuilder: (
+          BuildContext context,
+          Object error,
+          StackTrace? stackTrace,
+        ) {
+          return fallback;
+        },
+      );
+    }
+
+    if (image.startsWith('assets/')) {
+      return Image.asset(
+        image,
+        width: 58,
+        height: 58,
+        fit: BoxFit.cover,
+        errorBuilder: (
+          BuildContext context,
+          Object error,
+          StackTrace? stackTrace,
+        ) {
+          return fallback;
+        },
+      );
+    }
+
+    return fallback;
+  }
+
   Widget _orderedItemsCard() {
     if (orderedItems.isEmpty) {
       return Container(
@@ -186,7 +290,6 @@ class _OrderDetailsPageState
         children: orderedItems.map((Map<String, dynamic> item) {
           final int quantity = int.tryParse(item['quantity'].toString()) ?? 1;
           final double itemTotal = _priceFromItem(item) * quantity;
-          final String? imagePath = item['image'] as String?;
 
           return Padding(
             padding: const EdgeInsets.all(12),
@@ -200,25 +303,14 @@ class _OrderDetailsPageState
                     color: Colors.blue.shade50,
                     borderRadius: BorderRadius.circular(10),
                   ),
-                  child: imagePath == null || imagePath.isEmpty
-                      ? const Icon(Icons.shopping_bag, color: Colors.blue)
-                      : ClipRRect(
-                          borderRadius: BorderRadius.circular(10),
-                          child: Image.asset(
-                            imagePath,
-                            fit: BoxFit.cover,
-                            errorBuilder: (
-                              BuildContext context,
-                              Object error,
-                              StackTrace? stackTrace,
-                            ) {
-                              return const Icon(
-                                Icons.shopping_bag,
-                                color: Colors.blue,
-                              );
-                            },
-                          ),
-                        ),
+                  child: ClipRRect(
+                    borderRadius:
+                        BorderRadius.circular(10),
+                    child:
+                        _orderProductImageWidget(
+                      item,
+                    ),
+                  ),
                 ),
                 const SizedBox(width: 12),
                 Expanded(
@@ -638,11 +730,6 @@ class _OrderDetailsPageState
         reviewComment.trim();
 
     try {
-      final DocumentSnapshot<
-              Map<String, dynamic>>
-          existingSnapshot =
-          await reviewReference.get();
-
       final Map<String, dynamic>
           reviewData =
           <String, dynamic>{
@@ -677,7 +764,7 @@ class _OrderDetailsPageState
             FieldValue.serverTimestamp(),
       };
 
-      if (!existingSnapshot.exists) {
+      if (!existingReview) {
         reviewData['createdAt'] =
             FieldValue.serverTimestamp();
       }
@@ -697,7 +784,7 @@ class _OrderDetailsPageState
           .showSnackBar(
         SnackBar(
           content: Text(
-            existingSnapshot.exists
+            existingReview
                 ? 'Review updated successfully.'
                 : 'Thank you. Your review was submitted.',
           ),
