@@ -383,15 +383,100 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
         .length;
   }
 
-  Future<void> _changeStatus(String orderId, String newStatus) async {
-    try {
-      await updateOrderStatus(orderId, newStatus);
+  List<String> _availableOrderStatuses(String currentStatus) {
+    final String cleanStatus = currentStatus.trim();
+
+    // Cancelled / Returned are handled by their dedicated flows.
+    if (cleanStatus == 'Cancelled' || cleanStatus == 'Returned') {
+      return <String>[cleanStatus];
+    }
+
+    final int currentIndex = orderStatuses.indexOf(cleanStatus);
+
+    // Unknown legacy status: keep it visible but do not allow an unsafe jump.
+    if (currentIndex < 0) {
+      return <String>[cleanStatus];
+    }
+
+    // Delivered is final and cannot go backwards.
+    if (currentIndex == orderStatuses.length - 1) {
+      return <String>[cleanStatus];
+    }
+
+    // Strict workflow: current status + exactly the next status only.
+    return <String>[
+      cleanStatus,
+      orderStatuses[currentIndex + 1],
+    ];
+  }
+
+  Future<void> _changeStatus(
+    String orderId,
+    String currentStatus,
+    String newStatus,
+  ) async {
+    final String cleanCurrent = currentStatus.trim();
+    final String cleanNew = newStatus.trim();
+
+    if (cleanNew == cleanCurrent) {
+      return;
+    }
+
+    if (cleanCurrent == 'Delivered' ||
+        cleanCurrent == 'Cancelled' ||
+        cleanCurrent == 'Returned') {
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Order status changed to $newStatus')),
+        SnackBar(
+          content: Text(
+            '$cleanCurrent order is locked and cannot be moved back to another status.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final int currentIndex = orderStatuses.indexOf(cleanCurrent);
+    final int newIndex = orderStatuses.indexOf(cleanNew);
+
+    if (currentIndex < 0 ||
+        newIndex < 0 ||
+        newIndex != currentIndex + 1) {
+      if (!mounted) return;
+
+      final String expectedNext =
+          currentIndex >= 0 && currentIndex < orderStatuses.length - 1
+              ? orderStatuses[currentIndex + 1]
+              : '';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            expectedNext.isEmpty
+                ? 'This order status cannot be changed from here.'
+                : 'Next allowed status is $expectedNext.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      await updateOrderStatus(orderId, cleanNew);
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Order status changed: $cleanCurrent → $cleanNew',
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) return;
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
@@ -3189,14 +3274,11 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                   order['status']?.toString() ?? 'Pending';
                               final Color color = _statusColor(status);
                               final List<String> availableStatuses =
-                                  <String>[...orderStatuses];
-
-                              if (!availableStatuses.contains(status)) {
-                                availableStatuses.add(status);
-                              }
+                                  _availableOrderStatuses(status);
 
                               final bool closedOrder =
-                                  status == 'Cancelled' ||
+                                  status == 'Delivered' ||
+                                      status == 'Cancelled' ||
                                       status == 'Returned';
                               final String customerName =
                                   (order['customerName'] ??
@@ -3286,6 +3368,7 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                                 }
                                                 _changeStatus(
                                                   order['id'].toString(),
+                                                  status,
                                                   value,
                                                 );
                                               },
