@@ -12,6 +12,8 @@ import 'data/cart_data.dart';
 import 'data/product_data.dart';
 import 'delivery_person_auth_page.dart';
 import 'order_history_page.dart';
+import 'order_data.dart';
+import 'customer_notifications_page.dart';
 import 'product_card.dart';
 import 'profile_page.dart';
 import 'seller_auth_page.dart';
@@ -55,6 +57,15 @@ class _HomePageState extends State<HomePage> {
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
       _productsSubscription;
+
+  StreamSubscription<List<Map<String, dynamic>>>?
+      _notificationOrdersSubscription;
+
+  List<Map<String, dynamic>> _latestNotificationOrders =
+      <Map<String, dynamic>>[];
+
+  String _notificationCustomerId = '';
+  int _notificationUnreadCount = 0;
 
   bool isListening = false;
   bool speechAvailable = false;
@@ -356,6 +367,63 @@ class _HomePageState extends State<HomePage> {
     _initializeSpeech();
     _loadCart();
     _listenToProducts();
+    _listenToCustomerNotifications();
+  }
+
+  Future<void> _listenToCustomerNotifications() async {
+    await _notificationOrdersSubscription?.cancel();
+    _notificationOrdersSubscription = null;
+
+    try {
+      final String customerId =
+          (await getOrCreateCustomerId()).trim();
+
+      _notificationCustomerId = customerId;
+
+      _notificationOrdersSubscription =
+          customerOrdersStream(customerId).listen(
+        (List<Map<String, dynamic>> orders) async {
+          _latestNotificationOrders = orders;
+          await _refreshNotificationBadge();
+        },
+        onError: (Object error) {
+          if (!mounted) {
+            return;
+          }
+
+          setState(() {
+            _notificationUnreadCount = 0;
+          });
+        },
+      );
+    } catch (_) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _notificationUnreadCount = 0;
+      });
+    }
+  }
+
+  Future<void> _refreshNotificationBadge() async {
+    if (_notificationCustomerId.trim().isEmpty) {
+      return;
+    }
+
+    final int unread = await countUnreadOrderNotifications(
+      _notificationCustomerId,
+      _latestNotificationOrders,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _notificationUnreadCount = unread;
+    });
   }
 
   void _refreshProducts() {
@@ -968,6 +1036,7 @@ class _HomePageState extends State<HomePage> {
   void dispose() {
     speech.stop();
     _productsSubscription?.cancel();
+    _notificationOrdersSubscription?.cancel();
 
     searchController
       ..removeListener(_refreshProducts)
@@ -1121,7 +1190,7 @@ class _HomePageState extends State<HomePage> {
           Positioned(
             left: desktop ? 28 : 12,
             top: 8,
-            width: desktop ? 130 : 150,
+            width: desktop ? 130 : 136,
             height: desktop ? 70 : 78,
             child: ClipRRect(
               borderRadius: BorderRadius.circular(28),
@@ -1163,6 +1232,22 @@ class _HomePageState extends State<HomePage> {
                         builder: (_) => const WishlistPage(),
                       ),
                     );
+                  },
+                ),
+                const SizedBox(width: 4),
+                _roundAction(
+                  icon: Icons.notifications_none_rounded,
+                  tooltip: 'Notifications',
+                  badge: _notificationUnreadCount,
+                  onTap: () async {
+                    await Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            const CustomerNotificationsPage(),
+                      ),
+                    );
+                    await _refreshNotificationBadge();
                   },
                 ),
                 const SizedBox(width: 4),
