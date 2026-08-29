@@ -3,11 +3,12 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'seller_auth_page.dart';
-import 'seller_product_page.dart';
-import 'seller_shop_profile_page.dart';
+import 'seller_notifications_page.dart';
 import 'seller_order_page.dart';
-import 'seller_wallet_page.dart';
+import 'seller_product_page.dart';
 import 'seller_reviews_page.dart';
+import 'seller_shop_profile_page.dart';
+import 'seller_wallet_page.dart';
 
 class SellerDashboardPage extends StatelessWidget {
   const SellerDashboardPage({super.key});
@@ -55,8 +56,7 @@ class SellerDashboardPage extends StatelessWidget {
   Future<void> _logout(
     BuildContext context,
   ) async {
-    final bool? confirm =
-        await showDialog<bool>(
+    final bool? confirm = await showDialog<bool>(
       context: context,
       builder: (
         BuildContext dialogContext,
@@ -119,16 +119,14 @@ class SellerDashboardPage extends StatelessWidget {
   Widget _sellerLogo(
     Map<String, dynamic> seller,
   ) {
-    final String photo =
-        _sellerPhoto(seller);
+    final String photo = _sellerPhoto(seller);
 
     if (photo.isEmpty) {
       return Container(
         width: 70,
         height: 70,
         decoration: BoxDecoration(
-          color: Colors.white
-              .withValues(alpha: 0.18),
+          color: Colors.white.withValues(alpha: 0.18),
           shape: BoxShape.circle,
         ),
         child: const Icon(
@@ -157,8 +155,7 @@ class SellerDashboardPage extends StatelessWidget {
             StackTrace? stackTrace,
           ) {
             return Container(
-              color: Colors.white
-                  .withValues(alpha: 0.18),
+              color: Colors.white.withValues(alpha: 0.18),
               child: const Icon(
                 Icons.storefront,
                 color: Colors.white,
@@ -175,22 +172,13 @@ class SellerDashboardPage extends StatelessWidget {
     Map<String, dynamic> seller,
   ) {
     final String shopName =
-        seller['shopName']
-                ?.toString()
-                .trim() ??
-            '';
+        seller['shopName']?.toString().trim() ?? '';
 
     final String ownerName =
-        seller['ownerName']
-                ?.toString()
-                .trim() ??
-            '';
+        seller['ownerName']?.toString().trim() ?? '';
 
     final String email =
-        seller['email']
-                ?.toString()
-                .trim() ??
-            '';
+        seller['email']?.toString().trim() ?? '';
 
     return Container(
       padding: const EdgeInsets.all(18),
@@ -201,94 +189,60 @@ class SellerDashboardPage extends StatelessWidget {
             Color(0xFF42A5F5),
           ],
         ),
-        borderRadius:
-            BorderRadius.circular(18),
+        borderRadius: BorderRadius.circular(18),
       ),
       child: Row(
-        crossAxisAlignment:
-            CrossAxisAlignment.center,
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: <Widget>[
           _sellerLogo(seller),
-
           const SizedBox(width: 16),
-
           Expanded(
             child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.start,
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: <Widget>[
                 Text(
-                  shopName.isEmpty
-                      ? 'My Shop'
-                      : shopName,
+                  shopName.isEmpty ? 'My Shop' : shopName,
                   style: const TextStyle(
                     color: Colors.white,
                     fontSize: 22,
-                    fontWeight:
-                        FontWeight.bold,
+                    fontWeight: FontWeight.bold,
                   ),
                 ),
-
-                if (ownerName.isNotEmpty)
-                  ...<Widget>[
-                    const SizedBox(
-                      height: 4,
+                if (ownerName.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 4),
+                  Text(
+                    ownerName,
+                    style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 15,
                     ),
-                    Text(
-                      ownerName,
-                      style:
-                          const TextStyle(
-                        color:
-                            Colors.white,
-                        fontSize: 15,
-                      ),
+                  ),
+                ],
+                if (email.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 3),
+                  Text(
+                    email,
+                    style: TextStyle(
+                      color: Colors.white.withValues(alpha: 0.85),
+                      fontSize: 13,
                     ),
-                  ],
-
-                if (email.isNotEmpty)
-                  ...<Widget>[
-                    const SizedBox(
-                      height: 3,
-                    ),
-                    Text(
-                      email,
-                      style: TextStyle(
-                        color: Colors.white
-                            .withValues(
-                          alpha: 0.85,
-                        ),
-                        fontSize: 13,
-                      ),
-                    ),
-                  ],
-
-                const SizedBox(
-                  height: 8,
-                ),
-
+                  ),
+                ],
+                const SizedBox(height: 8),
                 Container(
-                  padding:
-                      const EdgeInsets
-                          .symmetric(
+                  padding: const EdgeInsets.symmetric(
                     horizontal: 10,
                     vertical: 4,
                   ),
-                  decoration:
-                      BoxDecoration(
-                    color: Colors.white
-                        .withValues(
-                      alpha: 0.18,
-                    ),
-                    borderRadius:
-                        BorderRadius
-                            .circular(20),
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.18),
+                    borderRadius: BorderRadius.circular(20),
                   ),
                   child: const Text(
                     'Active Seller',
                     style: TextStyle(
                       color: Colors.white,
-                      fontWeight:
-                          FontWeight.bold,
+                      fontWeight: FontWeight.bold,
                       fontSize: 12,
                     ),
                   ),
@@ -306,44 +260,30 @@ class SellerDashboardPage extends StatelessWidget {
   ) {
     return Center(
       child: Padding(
-        padding:
-            const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(24),
         child: Column(
-          mainAxisSize:
-              MainAxisSize.min,
+          mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             const Icon(
               Icons.lock_outline,
               size: 70,
               color: Colors.grey,
             ),
-
-            const SizedBox(
-              height: 16,
-            ),
-
+            const SizedBox(height: 16),
             const Text(
               'Seller login required.',
               style: TextStyle(
                 fontSize: 19,
-                fontWeight:
-                    FontWeight.bold,
+                fontWeight: FontWeight.bold,
               ),
             ),
-
-            const SizedBox(
-              height: 14,
-            ),
-
+            const SizedBox(height: 14),
             FilledButton.icon(
               onPressed: () {
-                Navigator
-                    .pushAndRemoveUntil<
-                        void>(
+                Navigator.pushAndRemoveUntil<void>(
                   context,
                   MaterialPageRoute<void>(
-                    builder: (_) =>
-                        const SellerAuthPage(),
+                    builder: (_) => const SellerAuthPage(),
                   ),
                   (
                     Route<dynamic> route,
@@ -369,54 +309,34 @@ class SellerDashboardPage extends StatelessWidget {
     Map<String, dynamic> seller,
   ) {
     final String shopName =
-        seller['shopName']
-                ?.toString() ??
-            'Seller';
+        seller['shopName']?.toString() ?? 'Seller';
 
     return Center(
       child: Padding(
-        padding:
-            const EdgeInsets.all(24),
+        padding: const EdgeInsets.all(24),
         child: Column(
-          mainAxisSize:
-              MainAxisSize.min,
+          mainAxisSize: MainAxisSize.min,
           children: <Widget>[
             const Icon(
               Icons.block,
               size: 75,
               color: Colors.red,
             ),
-
-            const SizedBox(
-              height: 16,
-            ),
-
+            const SizedBox(height: 16),
             Text(
               '$shopName account is inactive.',
-              textAlign:
-                  TextAlign.center,
-              style:
-                  const TextStyle(
+              textAlign: TextAlign.center,
+              style: const TextStyle(
                 fontSize: 19,
-                fontWeight:
-                    FontWeight.bold,
+                fontWeight: FontWeight.bold,
               ),
             ),
-
-            const SizedBox(
-              height: 8,
-            ),
-
+            const SizedBox(height: 8),
             const Text(
               'Please contact RD Online Shop admin.',
-              textAlign:
-                  TextAlign.center,
+              textAlign: TextAlign.center,
             ),
-
-            const SizedBox(
-              height: 20,
-            ),
-
+            const SizedBox(height: 20),
             FilledButton.icon(
               onPressed: () {
                 _logout(context);
@@ -437,11 +357,8 @@ class SellerDashboardPage extends StatelessWidget {
   Widget _sellerStats(
     String sellerId,
   ) {
-    return StreamBuilder<
-        QuerySnapshot<
-            Map<String, dynamic>>>(
-      stream: FirebaseFirestore
-          .instance
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
           .collection('products')
           .where(
             'sellerId',
@@ -450,86 +367,52 @@ class SellerDashboardPage extends StatelessWidget {
           .snapshots(),
       builder: (
         BuildContext context,
-        AsyncSnapshot<
-                QuerySnapshot<
-                    Map<String, dynamic>>>
-            snapshot,
+        AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot,
       ) {
-        final List<
-                QueryDocumentSnapshot<
-                    Map<String, dynamic>>>
-            docs =
+        final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
             snapshot.data?.docs ??
-                <QueryDocumentSnapshot<
-                    Map<String, dynamic>>>[];
+                <QueryDocumentSnapshot<Map<String, dynamic>>>[];
 
-        final int totalProducts =
-            docs.length;
+        final int totalProducts = docs.length;
 
-        final int inStockProducts =
-            docs.where(
+        final int inStockProducts = docs.where(
           (
-            QueryDocumentSnapshot<
-                    Map<String, dynamic>>
-                doc,
+            QueryDocumentSnapshot<Map<String, dynamic>> doc,
           ) {
-            final Map<String, dynamic>
-                data =
-                doc.data();
+            final Map<String, dynamic> data = doc.data();
 
-            return data['inStock'] ==
-                true;
+            return data['inStock'] == true;
           },
         ).length;
 
         final int outOfStockProducts =
-            totalProducts -
-                inStockProducts;
+            totalProducts - inStockProducts;
 
         return Row(
           children: <Widget>[
             Expanded(
               child: _statCard(
-                icon:
-                    Icons.inventory_2,
-                title:
-                    totalProducts
-                        .toString(),
-                subtitle:
-                    'Products',
+                icon: Icons.inventory_2,
+                title: totalProducts.toString(),
+                subtitle: 'Products',
                 color: Colors.blue,
               ),
             ),
-
-            const SizedBox(
-              width: 10,
-            ),
-
+            const SizedBox(width: 10),
             Expanded(
               child: _statCard(
-                icon:
-                    Icons.check_circle,
-                title:
-                    inStockProducts
-                        .toString(),
-                subtitle:
-                    'In Stock',
+                icon: Icons.check_circle,
+                title: inStockProducts.toString(),
+                subtitle: 'In Stock',
                 color: Colors.green,
               ),
             ),
-
-            const SizedBox(
-              width: 10,
-            ),
-
+            const SizedBox(width: 10),
             Expanded(
               child: _statCard(
                 icon: Icons.cancel,
-                title:
-                    outOfStockProducts
-                        .toString(),
-                subtitle:
-                    'Out Stock',
+                title: outOfStockProducts.toString(),
+                subtitle: 'Out Stock',
                 color: Colors.red,
               ),
             ),
@@ -546,17 +429,14 @@ class SellerDashboardPage extends StatelessWidget {
     required Color color,
   }) {
     return Container(
-      padding:
-          const EdgeInsets.symmetric(
+      padding: const EdgeInsets.symmetric(
         horizontal: 8,
         vertical: 14,
       ),
       decoration: BoxDecoration(
-        borderRadius:
-            BorderRadius.circular(14),
+        borderRadius: BorderRadius.circular(14),
         border: Border.all(
-          color:
-              Colors.grey.shade200,
+          color: Colors.grey.shade200,
         ),
       ),
       child: Column(
@@ -565,28 +445,20 @@ class SellerDashboardPage extends StatelessWidget {
             icon,
             color: color,
           ),
-
-          const SizedBox(
-            height: 5,
-          ),
-
+          const SizedBox(height: 5),
           Text(
             title,
             style: const TextStyle(
               fontSize: 18,
-              fontWeight:
-                  FontWeight.bold,
+              fontWeight: FontWeight.bold,
             ),
           ),
-
           Text(
             subtitle,
-            textAlign:
-                TextAlign.center,
+            textAlign: TextAlign.center,
             style: TextStyle(
               fontSize: 11,
-              color:
-                  Colors.grey.shade600,
+              color: Colors.grey.shade600,
             ),
           ),
         ],
@@ -599,8 +471,7 @@ class SellerDashboardPage extends StatelessWidget {
     BuildContext context,
   ) {
     final User? user =
-        FirebaseAuth
-            .instance.currentUser;
+        FirebaseAuth.instance.currentUser;
 
     if (user == null) {
       return Scaffold(
@@ -610,8 +481,7 @@ class SellerDashboardPage extends StatelessWidget {
           ),
           centerTitle: true,
         ),
-        body:
-            _notLoggedIn(
+        body: _notLoggedIn(
           context,
         ),
       );
@@ -622,12 +492,26 @@ class SellerDashboardPage extends StatelessWidget {
         title: const Text(
           'Seller Dashboard',
           style: TextStyle(
-            fontWeight:
-                FontWeight.bold,
+            fontWeight: FontWeight.bold,
           ),
         ),
         centerTitle: true,
         actions: <Widget>[
+          IconButton(
+            tooltip: 'Notifications',
+            onPressed: () {
+              Navigator.push<void>(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) =>
+                      const SellerNotificationsPage(),
+                ),
+              );
+            },
+            icon: const Icon(
+              Icons.notifications_none_rounded,
+            ),
+          ),
           IconButton(
             tooltip: 'Logout',
             onPressed: () {
@@ -639,33 +523,23 @@ class SellerDashboardPage extends StatelessWidget {
           ),
         ],
       ),
-
-      body: StreamBuilder<
-          DocumentSnapshot<
-              Map<String, dynamic>>>(
-        stream: FirebaseFirestore
-            .instance
+      body: StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance
             .collection('sellers')
             .doc(user.uid)
             .snapshots(),
         builder: (
           BuildContext context,
-          AsyncSnapshot<
-                  DocumentSnapshot<
-                      Map<String, dynamic>>>
-              snapshot,
+          AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> snapshot,
         ) {
           if (snapshot.hasError) {
             return Center(
               child: Padding(
-                padding:
-                    const EdgeInsets
-                        .all(24),
+                padding: const EdgeInsets.all(24),
                 child: Text(
                   'Could not load seller account:\n'
                   '${snapshot.error}',
-                  textAlign:
-                      TextAlign.center,
+                  textAlign: TextAlign.center,
                 ),
               ),
             );
@@ -673,30 +547,23 @@ class SellerDashboardPage extends StatelessWidget {
 
           if (!snapshot.hasData) {
             return const Center(
-              child:
-                  CircularProgressIndicator(),
+              child: CircularProgressIndicator(),
             );
           }
 
-          final DocumentSnapshot<
-                  Map<String, dynamic>>
-              sellerDocument =
+          final DocumentSnapshot<Map<String, dynamic>> sellerDocument =
               snapshot.data!;
 
-          if (!sellerDocument
-              .exists) {
+          if (!sellerDocument.exists) {
             return _notLoggedIn(
               context,
             );
           }
 
-          final Map<String, dynamic>
-              seller =
-              sellerDocument.data() ??
-                  <String, dynamic>{};
+          final Map<String, dynamic> seller =
+              sellerDocument.data() ?? <String, dynamic>{};
 
-          if (seller['isActive'] ==
-              false) {
+          if (seller['isActive'] == false) {
             return _inactiveSeller(
               context,
               seller,
@@ -705,83 +572,59 @@ class SellerDashboardPage extends StatelessWidget {
 
           return Center(
             child: ConstrainedBox(
-              constraints:
-                  const BoxConstraints(
+              constraints: const BoxConstraints(
                 maxWidth: 1000,
               ),
               child: ListView(
-                padding:
-                    const EdgeInsets
-                        .all(16),
+                padding: const EdgeInsets.all(16),
                 children: <Widget>[
                   _dashboardHeader(
                     seller,
                   ),
-
-                  const SizedBox(
-                    height: 16,
-                  ),
-
+                  const SizedBox(height: 16),
                   _sellerStats(
                     user.uid,
                   ),
-
-                  const SizedBox(
-                    height: 18,
-                  ),
-
+                  const SizedBox(height: 18),
                   _sellerCard(
                     context,
-                    icon:
-                        Icons.inventory_2,
-                    color:
-                        Colors.blue,
-                    title:
-                        'My Products',
+                    icon: Icons.inventory_2,
+                    color: Colors.blue,
+                    title: 'My Products',
                     subtitle:
                         'Add, edit, delete products and manage stock',
                     onTap: () {
                       Navigator.push<void>(
                         context,
-                        MaterialPageRoute<
-                            void>(
+                        MaterialPageRoute<void>(
                           builder: (_) =>
                               const SellerProductPage(),
                         ),
                       );
                     },
                   ),
-
                   _sellerCard(
                     context,
-                    icon:
-                        Icons.receipt_long,
-                    color:
-                        Colors.orange,
-                    title:
-                        'My Orders',
+                    icon: Icons.receipt_long,
+                    color: Colors.orange,
+                    title: 'My Orders',
                     subtitle:
                         'Check customer orders and delivery status',
                     onTap: () {
                       Navigator.push<void>(
                         context,
-                        MaterialPageRoute<
-                            void>(
+                        MaterialPageRoute<void>(
                           builder: (_) =>
                               const SellerOrderPage(),
                         ),
                       );
                     },
                   ),
-
                   _sellerCard(
                     context,
-                    icon: Icons
-                        .account_balance_wallet,
-                    color:
-                        Colors.green,
-                    title:
-                        'Wallet & Earnings',
+                    icon: Icons.account_balance_wallet,
+                    color: Colors.green,
+                    title: 'Wallet & Earnings',
                     subtitle:
                         'Sales, pending settlement, paid amount and payment history',
                     onTap: () {
@@ -794,15 +637,28 @@ class SellerDashboardPage extends StatelessWidget {
                       );
                     },
                   ),
-
                   _sellerCard(
                     context,
-                    icon:
-                        Icons.star_rate_rounded,
-                    color:
-                        Colors.amber,
-                    title:
-                        'Reviews & Ratings',
+                    icon: Icons.notifications_active_rounded,
+                    color: Colors.red,
+                    title: 'Notifications',
+                    subtitle:
+                        'Admin announcements and seller-specific notices',
+                    onTap: () {
+                      Navigator.push<void>(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              const SellerNotificationsPage(),
+                        ),
+                      );
+                    },
+                  ),
+                  _sellerCard(
+                    context,
+                    icon: Icons.star_rate_rounded,
+                    color: Colors.amber,
+                    title: 'Reviews & Ratings',
                     subtitle:
                         'Average rating, customer reviews and product feedback',
                     onTap: () {
@@ -815,22 +671,17 @@ class SellerDashboardPage extends StatelessWidget {
                       );
                     },
                   ),
-
                   _sellerCard(
                     context,
-                    icon:
-                        Icons.store,
-                    color:
-                        Colors.purple,
-                    title:
-                        'Shop Profile',
+                    icon: Icons.store,
+                    color: Colors.purple,
+                    title: 'Shop Profile',
                     subtitle:
                         'Shop name, address, photo and contact',
                     onTap: () {
                       Navigator.push<void>(
                         context,
-                        MaterialPageRoute<
-                            void>(
+                        MaterialPageRoute<void>(
                           builder: (_) =>
                               const SellerShopProfilePage(),
                         ),
@@ -855,20 +706,17 @@ class SellerDashboardPage extends StatelessWidget {
     required VoidCallback onTap,
   }) {
     return Card(
-      margin:
-          const EdgeInsets.only(
+      margin: const EdgeInsets.only(
         bottom: 12,
       ),
       child: ListTile(
         onTap: onTap,
-        contentPadding:
-            const EdgeInsets.all(
+        contentPadding: const EdgeInsets.all(
           14,
         ),
         leading: CircleAvatar(
           radius: 25,
-          backgroundColor:
-              color.withValues(
+          backgroundColor: color.withValues(
             alpha: 0.12,
           ),
           child: Icon(
@@ -879,12 +727,10 @@ class SellerDashboardPage extends StatelessWidget {
         title: Text(
           title,
           style: const TextStyle(
-            fontWeight:
-                FontWeight.bold,
+            fontWeight: FontWeight.bold,
           ),
         ),
-        subtitle:
-            Text(subtitle),
+        subtitle: Text(subtitle),
         trailing: const Icon(
           Icons.arrow_forward_ios,
           size: 18,
@@ -892,5 +738,4 @@ class SellerDashboardPage extends StatelessWidget {
       ),
     );
   }
-
 }
