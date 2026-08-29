@@ -2,8 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'admin_order_page.dart';
 import 'admin_earnings_page.dart';
+import 'admin_notification_center_page.dart';
+import 'admin_order_page.dart';
 import 'admin_product_page.dart';
 import 'admin_seller_page.dart';
 
@@ -155,6 +156,16 @@ class AdminDashboardPage extends StatelessWidget {
               context,
               MaterialPageRoute<void>(
                 builder: (_) => const AdminEarningsPage(),
+              ),
+            ),
+          ),
+          _dashboardCard(
+            icon: Icons.notifications_active,
+            title: 'Notifications',
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminNotificationCenterPage(),
               ),
             ),
           ),

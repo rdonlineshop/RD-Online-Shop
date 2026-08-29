@@ -494,6 +494,54 @@ service cloud.firestore {
       allow delete: if isAdmin();
     }
 
+
+    // ============================================================
+    // ADMIN NOTIFICATIONS
+    // ============================================================
+    //
+    // audience values:
+    // - customers : all customers
+    // - sellers   : all sellers
+    // - both      : all customers + all sellers
+    // - customer  : one customer (targetCustomerId)
+    // - seller    : one seller (targetSellerId)
+    //
+    // Only Admin can create/update/delete notifications.
+    // Customers/Sellers can only read notifications meant for them.
+    match /admin_notifications/{notificationId} {
+      function customerCanReadNotification() {
+        return hasCustomerSession()
+          && resource.data.isActive == true
+          && (
+            resource.data.audience in ['customers', 'both']
+            || (
+              resource.data.audience == 'customer'
+              && resource.data.targetCustomerId is string
+              && resource.data.targetCustomerId == customerData().customerId
+            )
+          );
+      }
+
+      function sellerCanReadNotification() {
+        return isActiveSeller()
+          && resource.data.isActive == true
+          && (
+            resource.data.audience in ['sellers', 'both']
+            || (
+              resource.data.audience == 'seller'
+              && resource.data.targetSellerId is string
+              && resource.data.targetSellerId == request.auth.uid
+            )
+          );
+      }
+
+      allow read: if isAdmin()
+        || customerCanReadNotification()
+        || sellerCanReadNotification();
+
+      allow create, update, delete: if isAdmin();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }
