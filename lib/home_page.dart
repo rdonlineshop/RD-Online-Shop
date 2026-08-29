@@ -11,11 +11,13 @@ import 'customer_dashboard_page.dart';
 import 'data/cart_data.dart';
 import 'data/product_data.dart';
 import 'delivery_person_auth_page.dart';
-import 'order_history_page.dart';
 import 'order_data.dart';
 import 'customer_notifications_page.dart';
 import 'product_card.dart';
 import 'profile_page.dart';
+import 'ride_booking_hub_page.dart';
+import 'stay_venue_booking_hub_page.dart';
+import 'ticket_booking_hub_page.dart';
 import 'seller_auth_page.dart';
 import 'wishlist_page.dart';
 
@@ -1744,43 +1746,97 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _bottomNav() {
-    Widget item(IconData icon, String label, VoidCallback onTap, {bool active = false, int badge = 0}) {
+    Widget item(
+      IconData icon,
+      String label,
+      VoidCallback onTap, {
+      bool active = false,
+      int badge = 0,
+      Color iconColor = _rdBlack,
+    }) {
+      final Color labelColor = active ? _rdRed : _rdBlack;
+
       return Expanded(
         child: InkWell(
           onTap: onTap,
+          borderRadius: BorderRadius.circular(24),
           child: Padding(
-            padding: const EdgeInsets.symmetric(vertical: 8),
+            padding: const EdgeInsets.symmetric(
+              vertical: 8,
+              horizontal: 2,
+            ),
             child: Column(
               mainAxisSize: MainAxisSize.min,
               children: <Widget>[
-                Stack(
-                  clipBehavior: Clip.none,
-                  children: <Widget>[
-                    Icon(icon, color: active ? _rdRed : _rdBlack, size: 27),
-                    if (badge > 0)
-                      Positioned(
-                        right: -11,
-                        top: -6,
-                        child: Container(
-                          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
-                          decoration: const BoxDecoration(color: _rdRed, shape: BoxShape.circle),
-                          child: Text(
-                            badge > 99 ? '99+' : badge.toString(),
-                            style: const TextStyle(color: Colors.white, fontSize: 9, fontWeight: FontWeight.bold),
+                Container(
+                  width: 38,
+                  height: 38,
+                  decoration: BoxDecoration(
+                    color: iconColor.withValues(alpha: 0.12),
+                    shape: BoxShape.circle,
+                  ),
+                  alignment: Alignment.center,
+                  child: Stack(
+                    clipBehavior: Clip.none,
+                    alignment: Alignment.center,
+                    children: <Widget>[
+                      Icon(
+                        icon,
+                        color: iconColor,
+                        size: 27,
+                      ),
+                      if (badge > 0)
+                        Positioned(
+                          right: -7,
+                          top: -7,
+                          child: Container(
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: 5,
+                              vertical: 2,
+                            ),
+                            decoration: const BoxDecoration(
+                              color: _rdRed,
+                              shape: BoxShape.circle,
+                            ),
+                            child: Text(
+                              badge > 99
+                                  ? '99+'
+                                  : badge.toString(),
+                              style: const TextStyle(
+                                color: Colors.white,
+                                fontSize: 9,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
                           ),
                         ),
-                      ),
-                  ],
+                    ],
+                  ),
                 ),
                 const SizedBox(height: 3),
                 Text(
                   label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.center,
                   style: TextStyle(
-                    color: active ? _rdRed : _rdBlack,
-                    fontSize: 11,
-                    fontWeight: active ? FontWeight.w800 : FontWeight.w600,
+                    color: labelColor,
+                    fontSize: 10.5,
+                    fontWeight:
+                        active ? FontWeight.w800 : FontWeight.w700,
                   ),
                 ),
+                if (active) ...<Widget>[
+                  const SizedBox(height: 4),
+                  Container(
+                    width: 28,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      color: _rdRed,
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -1810,41 +1866,60 @@ class _HomePageState extends State<HomePage> {
             ),
             child: Row(
               children: <Widget>[
-                item(Icons.home_rounded, 'Home', () {}, active: true),
-                item(Icons.grid_view_rounded, 'Categories', _openAllCategories),
                 item(
-                  Icons.shopping_cart_rounded,
-                  'Cart',
-                  () async {
-                    await Navigator.push<void>(
+                  Icons.home_rounded,
+                  'Home',
+                  () {},
+                  active: true,
+                  iconColor: _rdRed,
+                ),
+                item(
+                  Icons.grid_view_rounded,
+                  'Categories',
+                  _openAllCategories,
+                  iconColor: const Color(0xFF2F3640),
+                ),
+                item(
+                  Icons.directions_car_filled_rounded,
+                  'RD Ride',
+                  () {
+                    Navigator.push<void>(
                       context,
                       MaterialPageRoute<void>(
-                        builder: (_) => const CartPage(),
+                        builder: (_) =>
+                            const RideBookingHubPage(),
                       ),
                     );
-                    if (mounted) setState(() {});
                   },
-                  badge: getCartItemCount(),
+                  iconColor: const Color(0xFF1565C0),
                 ),
                 item(
-                  Icons.inventory_2_rounded,
-                  'My Orders',
-                  () => Navigator.push<void>(
-                    context,
-                    MaterialPageRoute<void>(
-                      builder: (_) => const OrderHistoryPage(),
-                    ),
-                  ),
+                  Icons.confirmation_number_rounded,
+                  'Ticket',
+                  () {
+                    Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            const TicketBookingHubPage(),
+                      ),
+                    );
+                  },
+                  iconColor: const Color(0xFFF57C00),
                 ),
                 item(
-                  Icons.account_circle_outlined,
-                  'Profile',
-                  () => Navigator.push<void>(
-                    context,
-                    MaterialPageRoute<void>(
-                      builder: (_) => const ProfilePage(),
-                    ),
-                  ),
+                  Icons.hotel_rounded,
+                  'Hotel/Resort',
+                  () {
+                    Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            const StayVenueBookingHubPage(),
+                      ),
+                    );
+                  },
+                  iconColor: const Color(0xFF2E7D32),
                 ),
               ],
             ),
