@@ -10,6 +10,8 @@ import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'services/platform_capabilities.dart';
+
 class SellerShopProfilePage extends StatefulWidget {
   const SellerShopProfilePage({super.key});
 
@@ -604,9 +606,9 @@ class _SellerShopProfilePageState
     });
 
     try {
-      if (Platform.isWindows) {
+      if (PlatformCapabilities.isWindows) {
         throw Exception(
-          'Current GPS Location works on Android/iPhone. '
+          'Current GPS Location works on Android/iPhone/macOS. '
           'On Windows enter Latitude and Longitude manually.',
         );
       }

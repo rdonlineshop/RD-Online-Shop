@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Rd Online Shop New</string>
+	<string>RD Online Shop</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -65,6 +65,20 @@
 		<string>UIInterfaceOrientationPortraitUpsideDown</string>
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
+	</array>
+	<key>NSCameraUsageDescription</key>
+	<string>RD Online Shop uses the camera to scan secure delivery QR codes.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>RD Online Shop uses the microphone for voice search and speech features.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>RD Online Shop uses speech recognition to convert voice search into text.</string>
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>RD Online Shop lets you choose product, shop, profile, and verification images from your photo library.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>RD Online Shop uses your location for delivery addresses, seller locations, ride booking, and live delivery tracking.</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
 	</array>
 </dict>
 </plist>

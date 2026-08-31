@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
 import '../order_data.dart';
+import '../services/platform_capabilities.dart';
 
 class DeliveryPersonTrackingPage extends StatefulWidget {
   final String orderId;
@@ -687,6 +688,14 @@ class _DeliveryPersonTrackingPageState
       return;
     }
 
+    // mobile_scanner has no Windows implementation in the current RD
+    // dependency set. Keep delivery confirmation fully usable there by
+    // falling back to the existing secure customer OTP flow.
+    if (!PlatformCapabilities.supportsQrCameraScanner) {
+      await _verifyOtpAndDeliver();
+      return;
+    }
+
     final String? scannedOtp =
         await Navigator.of(context).push<String>(
       MaterialPageRoute<String>(
@@ -1335,11 +1344,15 @@ class _DeliveryPersonTrackingPageState
                                 _isVerifyingOtp
                             ? null
                             : _scanQrAndDeliver,
-                    icon: const Icon(
-                      Icons.qr_code_scanner,
+                    icon: Icon(
+                      PlatformCapabilities.supportsQrCameraScanner
+                          ? Icons.qr_code_scanner
+                          : Icons.password,
                     ),
-                    label: const Text(
-                      'Scan Customer QR',
+                    label: Text(
+                      PlatformCapabilities.supportsQrCameraScanner
+                          ? 'Scan Customer QR'
+                          : 'Enter Customer OTP',
                     ),
                   ),
                 ),

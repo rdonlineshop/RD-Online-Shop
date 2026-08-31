@@ -11,6 +11,7 @@ import 'order_data.dart';
 import 'order_history_page.dart';
 import 'payments/esewa_payment_page.dart';
 import 'payments/esewa_payment_service.dart';
+import 'services/platform_capabilities.dart';
 
 class CheckoutPage extends StatefulWidget {
   final double cartSubtotal;
@@ -116,13 +117,12 @@ class _CheckoutPageState
   void initState() {
     super.initState();
 
-    // Geocoding has no Windows implementation. Avoid crashing the page
-    // while keeping address lookup available on supported platforms.
-    try {
-      geocoding = Geocoding();
-    } catch (_) {
-      geocoding = null;
-    }
+    // Native address lookup is available on Android and Apple platforms.
+    // Windows still uses GPS coordinates/manual address without calling the
+    // unsupported geocoding plugin.
+    geocoding = PlatformCapabilities.supportsNativeGeocoding
+        ? Geocoding()
+        : null;
 
     _loadSavedAddress();
 

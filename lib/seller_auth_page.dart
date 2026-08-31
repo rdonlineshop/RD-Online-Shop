@@ -1,5 +1,3 @@
-import 'dart:io';
-
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -7,6 +5,7 @@ import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 
 import 'seller_dashboard_page.dart';
+import 'services/platform_capabilities.dart';
 
 class SellerAuthPage extends StatefulWidget {
   const SellerAuthPage({super.key});
@@ -77,7 +76,7 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
     });
 
     try {
-      if (Platform.isWindows) {
+      if (PlatformCapabilities.isWindows) {
         throw Exception(
           'Please type the shop address manually on Windows.',
         );

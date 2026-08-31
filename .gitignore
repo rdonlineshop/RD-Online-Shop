@@ -43,3 +43,18 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Machine-specific / generated platform files (never commit/copy between SDKs)
+/android/local.properties
+/android/.gradle/
+/android/build/
+/ios/Flutter/Generated.xcconfig
+/ios/Flutter/flutter_export_environment.sh
+/ios/Flutter/ephemeral/
+/macos/Flutter/ephemeral/
+/windows/flutter/ephemeral/
+
+# Accidental binary installers are not app assets
+/assets/products/*.exe
+/assets/products/*.msi
+/assets/products/*.winmd

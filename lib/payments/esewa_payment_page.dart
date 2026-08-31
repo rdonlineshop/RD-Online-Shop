@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:webview_flutter/webview_flutter.dart';
 
 import 'esewa_payment_service.dart';
+import '../services/platform_capabilities.dart';
 
 class EsewaPaymentPage extends StatefulWidget {
   final String transactionUuid;
@@ -18,7 +19,7 @@ class EsewaPaymentPage extends StatefulWidget {
 }
 
 class _EsewaPaymentPageState extends State<EsewaPaymentPage> {
-  late final WebViewController _controller;
+  WebViewController? _controller;
   bool _loading = true;
   bool _verifying = false;
   bool _finished = false;
@@ -26,6 +27,11 @@ class _EsewaPaymentPageState extends State<EsewaPaymentPage> {
   @override
   void initState() {
     super.initState();
+
+    if (!PlatformCapabilities.supportsEmbeddedWebView) {
+      _loading = false;
+      return;
+    }
 
     _controller = WebViewController()
       ..setJavaScriptMode(JavaScriptMode.unrestricted)
@@ -174,6 +180,68 @@ class _EsewaPaymentPageState extends State<EsewaPaymentPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (!PlatformCapabilities.supportsEmbeddedWebView) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('eSewa Payment - UAT'),
+        ),
+        body: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: Padding(
+              padding: const EdgeInsets.all(24),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  const Icon(
+                    Icons.desktop_windows_outlined,
+                    size: 64,
+                  ),
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Embedded eSewa payment is not available on Windows.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Use RD Online Shop on Android, iPhone/iPad, or macOS for '
+                    'the embedded payment screen. Cash on Delivery remains '
+                    'available on Windows.',
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 20),
+                  FilledButton.icon(
+                    onPressed: () {
+                      Navigator.pop(
+                        context,
+                        EsewaResult.cancelled(widget.transactionUuid),
+                      );
+                    },
+                    icon: const Icon(Icons.arrow_back),
+                    label: const Text('Back to Checkout'),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
+    final WebViewController? controller = _controller;
+
+    if (controller == null) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
     return PopScope(
       canPop: false,
       onPopInvokedWithResult: (bool didPop, Object? result) async {
@@ -192,7 +260,7 @@ class _EsewaPaymentPageState extends State<EsewaPaymentPage> {
         ),
         body: Stack(
           children: <Widget>[
-            WebViewWidget(controller: _controller),
+            WebViewWidget(controller: controller),
             if (_loading || _verifying)
               const ColoredBox(
                 color: Colors.white,

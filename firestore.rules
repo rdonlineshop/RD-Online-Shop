@@ -57,6 +57,19 @@ service cloud.firestore {
         && driverData().role == 'delivery_person';
     }
 
+    function rideDriverData() {
+      return get(/databases/$(database)/documents/ride_drivers/$(request.auth.uid)).data;
+    }
+
+    function isActiveRideDriver() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/ride_drivers/$(request.auth.uid))
+        && rideDriverData().isActive == true
+        && rideDriverData().isApproved == true
+        && rideDriverData().drivingLicenseVerified == true
+        && rideDriverData().role == 'ride_driver';
+    }
+
     match /admins/{adminId} {
       allow read: if signedIn() && request.auth.uid == adminId;
       allow read: if isAdmin();
@@ -205,6 +218,113 @@ service cloud.firestore {
             'locationUpdatedAt',
             'currentOrderId'
           ]));
+
+      allow delete: if isAdmin();
+    }
+
+
+    match /ride_drivers/{rideDriverId} {
+      allow read: if isAdmin()
+        || (signedIn() && request.auth.uid == rideDriverId)
+        || (signedIn()
+          && resource.data.isActive == true
+          && resource.data.isOnline == true);
+
+      allow create: if signedIn()
+        && request.auth.uid == rideDriverId
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.role == 'ride_driver'
+        && request.resource.data.isActive == false
+        && request.resource.data.isApproved == false
+        && request.resource.data.isOnline == false
+        && request.resource.data.drivingLicenseNumber is string
+        && request.resource.data.drivingLicenseNumber.size() > 0
+        && request.resource.data.drivingLicenseExpiry is string
+        && request.resource.data.drivingLicenseExpiry.size() > 0
+        && request.resource.data.drivingLicenseFrontUrl is string
+        && request.resource.data.drivingLicenseFrontUrl.size() > 0
+        && request.resource.data.drivingLicenseBackUrl is string
+        && request.resource.data.drivingLicenseBackUrl.size() > 0
+        && request.resource.data.drivingLicenseVerified == false;
+
+      allow update: if isAdmin()
+        || (signedIn()
+          && request.auth.uid == rideDriverId
+          && resource.data.driverId == request.auth.uid
+          && resource.data.authUid == request.auth.uid
+          && resource.data.role == 'ride_driver'
+          && request.resource.data.driverId == resource.data.driverId
+          && request.resource.data.authUid == resource.data.authUid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive
+          && request.resource.data.isApproved == resource.data.isApproved
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name',
+            'phone',
+            'vehicleType',
+            'vehicleNumber',
+            'photoUrl',
+            'isOnline',
+            'latitude',
+            'longitude',
+            'locationUpdatedAt',
+            'currentRideRequestId',
+            'updatedAt'
+          ]));
+
+      allow delete: if isAdmin();
+    }
+
+
+    match /ride_requests/{rideRequestId} {
+      function rideDriverOwnsRequest() {
+        return isActiveRideDriver()
+          && resource.data.driverId == request.auth.uid;
+      }
+
+      allow read: if isAdmin()
+        || (signedIn()
+          && resource.data.customerAuthUid == request.auth.uid)
+        || rideDriverOwnsRequest();
+
+      allow create: if signedIn()
+        && request.resource.data.rideRequestId == rideRequestId
+        && request.resource.data.customerAuthUid == request.auth.uid
+        && request.resource.data.customerId is string
+        && request.resource.data.customerId.size() > 0
+        && request.resource.data.driverId is string
+        && request.resource.data.driverId.size() > 0
+        && request.resource.data.vehicleType is string
+        && request.resource.data.vehicleType.size() > 0
+        && request.resource.data.pickupAddress is string
+        && request.resource.data.pickupAddress.size() > 0
+        && request.resource.data.destinationAddress is string
+        && request.resource.data.destinationAddress.size() > 0
+        && request.resource.data.status == 'pending'
+        && request.resource.data.requestType == 'ride_now'
+        && request.resource.data.driverResponse == 'waiting';
+
+      allow update: if isAdmin()
+        || (rideDriverOwnsRequest()
+          && resource.data.status == 'pending'
+          && resource.data.driverResponse == 'waiting'
+          && request.resource.data.driverId == resource.data.driverId
+          && request.resource.data.customerAuthUid == resource.data.customerAuthUid
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'driverResponse',
+            'acceptedAt',
+            'rejectedAt',
+            'updatedAt'
+          ])
+          && (
+            (request.resource.data.status == 'accepted'
+              && request.resource.data.driverResponse == 'accepted')
+            || (request.resource.data.status == 'rejected'
+              && request.resource.data.driverResponse == 'rejected')
+          ));
 
       allow delete: if isAdmin();
     }

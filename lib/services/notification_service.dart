@@ -6,6 +6,8 @@ import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+import 'platform_capabilities.dart';
+
 class NotificationService {
   NotificationService._();
 
@@ -25,14 +27,8 @@ class NotificationService {
   // SUPPORTED PLATFORM
   // ============================================================
 
-  static bool get _isSupportedPlatform {
-    if (kIsWeb) {
-      return false;
-    }
-
-    return defaultTargetPlatform == TargetPlatform.android ||
-        defaultTargetPlatform == TargetPlatform.iOS;
-  }
+  static bool get _isSupportedPlatform =>
+      PlatformCapabilities.supportsPushNotifications;
 
   // ============================================================
   // INITIALIZE
@@ -276,18 +272,8 @@ class NotificationService {
   // PLATFORM NAME
   // ============================================================
 
-  static String get _platformName {
-    switch (defaultTargetPlatform) {
-      case TargetPlatform.android:
-        return 'android';
-
-      case TargetPlatform.iOS:
-        return 'ios';
-
-      default:
-        return 'unsupported';
-    }
-  }
+  static String get _platformName =>
+      PlatformCapabilities.platformName;
 
   // ============================================================
   // DISPOSE

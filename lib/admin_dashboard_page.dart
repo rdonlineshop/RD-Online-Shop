@@ -6,6 +6,7 @@ import 'admin_earnings_page.dart';
 import 'admin_notification_center_page.dart';
 import 'admin_order_page.dart';
 import 'admin_product_page.dart';
+import 'admin_ride_driver_management_page.dart';
 import 'admin_seller_page.dart';
 
 class AdminDashboardPage extends StatelessWidget {
@@ -166,6 +167,17 @@ class AdminDashboardPage extends StatelessWidget {
               context,
               MaterialPageRoute<void>(
                 builder: (_) => const AdminNotificationCenterPage(),
+              ),
+            ),
+          ),
+          _dashboardCard(
+            icon: Icons.drive_eta_rounded,
+            title: 'Ride Drivers',
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    const AdminRideDriverManagementPage(),
               ),
             ),
           ),
