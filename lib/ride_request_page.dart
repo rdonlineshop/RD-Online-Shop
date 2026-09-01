@@ -1,6 +1,8 @@
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
 import 'order_data.dart';
+import 'ride_customer_tracking_page.dart';
 import 'services/ride_driver_service.dart';
 import 'services/ride_request_service.dart';
 
@@ -66,10 +68,8 @@ class _RideRequestPageState extends State<RideRequestPage> {
         pickupLatitude: widget.pickupLatitude,
         pickupLongitude: widget.pickupLongitude,
         destinationAddress: destinationAddress,
-        destinationLatitude:
-            widget.destinationLatitude,
-        destinationLongitude:
-            widget.destinationLongitude,
+        destinationLatitude: widget.destinationLatitude,
+        destinationLongitude: widget.destinationLongitude,
       );
 
       if (!mounted) {
@@ -80,31 +80,12 @@ class _RideRequestPageState extends State<RideRequestPage> {
         _sentRequestId = requestId;
       });
 
-      await showDialog<void>(
-        context: context,
-        builder: (BuildContext dialogContext) {
-          return AlertDialog(
-            icon: const Icon(
-              Icons.check_circle_rounded,
-              color: Colors.green,
-              size: 44,
-            ),
-            title: const Text(
-              'Ride Request Sent',
-            ),
-            content: Text(
-              'Your ride request was sent to ${driver.name}.\n\nRequest ID: $requestId',
-            ),
-            actions: <Widget>[
-              FilledButton(
-                onPressed: () {
-                  Navigator.pop(dialogContext);
-                },
-                child: const Text('OK'),
-              ),
-            ],
-          );
-        },
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Ride request sent to ${driver.name}.',
+          ),
+        ),
       );
     } catch (error) {
       if (!mounted) {
@@ -125,6 +106,22 @@ class _RideRequestPageState extends State<RideRequestPage> {
         });
       }
     }
+  }
+
+  void _openTracking(String requestId) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => RideCustomerTrackingPage(
+          rideRequestId: requestId,
+          driverId: driver.driverId,
+        ),
+      ),
+    );
+  }
+
+  void _chooseAnotherDriver() {
+    Navigator.pop(context);
   }
 
   @override
@@ -155,43 +152,254 @@ class _RideRequestPageState extends State<RideRequestPage> {
                 const SizedBox(height: 16),
                 _fareCard(),
                 const SizedBox(height: 20),
-                SizedBox(
-                  height: 54,
-                  child: FilledButton.icon(
-                    onPressed: _isSending ||
-                            _sentRequestId != null
-                        ? null
-                        : _sendRideRequest,
-                    icon: _isSending
-                        ? const SizedBox(
-                            width: 20,
-                            height: 20,
-                            child:
-                                CircularProgressIndicator(
-                              strokeWidth: 2,
-                            ),
-                          )
-                        : Icon(
-                            _sentRequestId != null
-                                ? Icons.check_circle_rounded
-                                : Icons.send_rounded,
-                          ),
-                    label: Text(
-                      _isSending
-                          ? 'Sending...'
-                          : _sentRequestId != null
-                              ? 'Ride Request Sent'
-                              : 'Send Ride Request',
-                      style: const TextStyle(
-                        fontSize: 16,
-                        fontWeight: FontWeight.w900,
+                _requestActionSection(),
+              ],
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _requestActionSection() {
+    final String? requestId = _sentRequestId;
+
+    if (requestId == null) {
+      return SizedBox(
+        height: 54,
+        child: FilledButton.icon(
+          onPressed: _isSending ? null : _sendRideRequest,
+          icon: _isSending
+              ? const SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                  ),
+                )
+              : const Icon(
+                  Icons.send_rounded,
+                ),
+          label: Text(
+            _isSending
+                ? 'Sending...'
+                : 'Send Ride Request',
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ),
+      );
+    }
+
+    return StreamBuilder<
+        DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _rideRequestService.watchRideRequest(
+        requestId,
+      ),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<
+                DocumentSnapshot<Map<String, dynamic>>>
+            snapshot,
+      ) {
+        if (snapshot.hasError) {
+          return _requestStatusCard(
+            color: Colors.red,
+            icon: Icons.error_outline_rounded,
+            title: 'Could not load ride status',
+            message: snapshot.error.toString(),
+            actionLabel: 'Retry',
+            onAction: () {
+              setState(() {});
+            },
+          );
+        }
+
+        if (!snapshot.hasData) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(22),
+              child: Center(
+                child: CircularProgressIndicator(),
+              ),
+            ),
+          );
+        }
+
+        final DocumentSnapshot<Map<String, dynamic>> document =
+            snapshot.data!;
+
+        if (!document.exists) {
+          return _requestStatusCard(
+            color: Colors.red,
+            icon: Icons.search_off_rounded,
+            title: 'Ride request not found',
+            message:
+                'This request is no longer available.',
+            actionLabel: 'Choose Another Driver',
+            onAction: _chooseAnotherDriver,
+          );
+        }
+
+        final Map<String, dynamic> data =
+            document.data() ?? <String, dynamic>{};
+
+        final String status =
+            data['status']?.toString().trim().toLowerCase() ??
+                'pending';
+
+        switch (status) {
+          case 'accepted':
+            return _requestStatusCard(
+              color: Colors.green,
+              icon: Icons.check_circle_rounded,
+              title: 'Driver Accepted ✅',
+              message:
+                  '${driver.name} accepted your ride request. You can now track the driver.',
+              actionLabel: 'Track Driver',
+              onAction: () {
+                _openTracking(requestId);
+              },
+            );
+
+          case 'rejected':
+            return _requestStatusCard(
+              color: Colors.red,
+              icon: Icons.cancel_rounded,
+              title: 'Driver Rejected',
+              message:
+                  'This driver could not accept your ride. Please choose another nearby driver.',
+              actionLabel: 'Choose Another Driver',
+              onAction: _chooseAnotherDriver,
+            );
+
+          case 'started':
+          case 'in_progress':
+            return _requestStatusCard(
+              color: Colors.blue,
+              icon: Icons.route_rounded,
+              title: 'Trip In Progress',
+              message:
+                  'Your ride has started. Live tracking is available.',
+              actionLabel: 'Track Ride',
+              onAction: () {
+                _openTracking(requestId);
+              },
+            );
+
+          case 'completed':
+            return _requestStatusCard(
+              color: Colors.green,
+              icon: Icons.flag_circle_rounded,
+              title: 'Trip Completed',
+              message:
+                  'Your ride has been completed successfully.',
+              actionLabel: 'View Ride',
+              onAction: () {
+                _openTracking(requestId);
+              },
+            );
+
+          case 'cancelled':
+            return _requestStatusCard(
+              color: Colors.red,
+              icon: Icons.cancel_outlined,
+              title: 'Ride Cancelled',
+              message: 'This ride request was cancelled.',
+              actionLabel: 'Choose Another Driver',
+              onAction: _chooseAnotherDriver,
+            );
+
+          case 'pending':
+          default:
+            return _requestStatusCard(
+              color: Colors.orange,
+              icon: Icons.schedule_rounded,
+              title: 'Waiting for Driver',
+              message:
+                  'Request ID: $requestId\nWaiting for ${driver.name} to accept or reject the ride.',
+            );
+        }
+      },
+    );
+  }
+
+  Widget _requestStatusCard({
+    required Color color,
+    required IconData icon,
+    required String title,
+    required String message,
+    String? actionLabel,
+    VoidCallback? onAction,
+  }) {
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                CircleAvatar(
+                  backgroundColor:
+                      color.withValues(alpha: 0.12),
+                  child: Icon(
+                    icon,
+                    color: color,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        title,
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
                       ),
-                    ),
+                      const SizedBox(height: 4),
+                      Text(
+                        message,
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          height: 1.35,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
             ),
-          ),
+            if (actionLabel != null &&
+                onAction != null) ...<Widget>[
+              const SizedBox(height: 16),
+              SizedBox(
+                height: 50,
+                child: FilledButton.icon(
+                  onPressed: onAction,
+                  icon: Icon(
+                    actionLabel.contains('Track')
+                        ? Icons.location_searching_rounded
+                        : Icons.search_rounded,
+                  ),
+                  label: Text(
+                    actionLabel,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ],
         ),
       ),
     );
@@ -208,8 +416,7 @@ class _RideRequestPageState extends State<RideRequestPage> {
             const SizedBox(width: 12),
             Expanded(
               child: Column(
-                crossAxisAlignment:
-                    CrossAxisAlignment.start,
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
                   Text(
                     driver.name,
@@ -276,8 +483,7 @@ class _RideRequestPageState extends State<RideRequestPage> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment:
-              CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             const Text(
               'Trip Details',
@@ -310,8 +516,7 @@ class _RideRequestPageState extends State<RideRequestPage> {
       child: Padding(
         padding: const EdgeInsets.all(16),
         child: Column(
-          crossAxisAlignment:
-              CrossAxisAlignment.start,
+          crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
             const Text(
               'Ride Summary',
@@ -388,8 +593,7 @@ class _RideRequestPageState extends State<RideRequestPage> {
         const SizedBox(width: 10),
         Expanded(
           child: Column(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
                 label,

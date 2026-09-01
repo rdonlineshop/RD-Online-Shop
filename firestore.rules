@@ -283,6 +283,17 @@ service cloud.firestore {
           && resource.data.driverId == request.auth.uid;
       }
 
+      function rideIdentityUnchanged() {
+        return request.resource.data.rideRequestId == resource.data.rideRequestId
+          && request.resource.data.driverId == resource.data.driverId
+          && request.resource.data.customerAuthUid == resource.data.customerAuthUid
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.requestType == resource.data.requestType
+          && request.resource.data.vehicleType == resource.data.vehicleType
+          && request.resource.data.pickupAddress == resource.data.pickupAddress
+          && request.resource.data.destinationAddress == resource.data.destinationAddress;
+      }
+
       allow read: if isAdmin()
         || (signedIn()
           && resource.data.customerAuthUid == request.auth.uid)
@@ -307,23 +318,47 @@ service cloud.firestore {
 
       allow update: if isAdmin()
         || (rideDriverOwnsRequest()
-          && resource.data.status == 'pending'
-          && resource.data.driverResponse == 'waiting'
-          && request.resource.data.driverId == resource.data.driverId
-          && request.resource.data.customerAuthUid == resource.data.customerAuthUid
-          && request.resource.data.customerId == resource.data.customerId
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status',
-            'driverResponse',
-            'acceptedAt',
-            'rejectedAt',
-            'updatedAt'
-          ])
+          && rideIdentityUnchanged()
           && (
-            (request.resource.data.status == 'accepted'
-              && request.resource.data.driverResponse == 'accepted')
-            || (request.resource.data.status == 'rejected'
-              && request.resource.data.driverResponse == 'rejected')
+            (
+              resource.data.status == 'pending'
+              && resource.data.driverResponse == 'waiting'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'driverResponse',
+                'acceptedAt',
+                'rejectedAt',
+                'updatedAt'
+              ])
+              && (
+                (request.resource.data.status == 'accepted'
+                  && request.resource.data.driverResponse == 'accepted')
+                || (request.resource.data.status == 'rejected'
+                  && request.resource.data.driverResponse == 'rejected')
+              )
+            )
+            || (
+              resource.data.status == 'accepted'
+              && resource.data.driverResponse == 'accepted'
+              && request.resource.data.status == 'in_progress'
+              && request.resource.data.driverResponse == 'accepted'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'tripStartedAt',
+                'updatedAt'
+              ])
+            )
+            || (
+              resource.data.status == 'in_progress'
+              && resource.data.driverResponse == 'accepted'
+              && request.resource.data.status == 'completed'
+              && request.resource.data.driverResponse == 'accepted'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'tripCompletedAt',
+                'updatedAt'
+              ])
+            )
           ));
 
       allow delete: if isAdmin();

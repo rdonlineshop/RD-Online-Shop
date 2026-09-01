@@ -119,4 +119,17 @@ class RideRequestService {
 
     return ref.id;
   }
+
+  Stream<DocumentSnapshot<Map<String, dynamic>>>
+      watchRideRequest(
+    String rideRequestId,
+  ) {
+    final String cleanId = rideRequestId.trim();
+
+    if (cleanId.isEmpty) {
+      return const Stream<DocumentSnapshot<Map<String, dynamic>>>.empty();
+    }
+
+    return _rideRequests.doc(cleanId).snapshots();
+  }
 }

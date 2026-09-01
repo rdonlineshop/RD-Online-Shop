@@ -1,9 +1,14 @@
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart' as foundation;
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
 
 import 'nearby_drivers_page.dart';
-import 'services/platform_capabilities.dart';
+import 'ride_location_picker_page.dart';
+import 'services/ride_location_input_service.dart';
 
 class RideBookingPage extends StatefulWidget {
   const RideBookingPage({
@@ -28,17 +33,41 @@ class _RideBookingPageState extends State<RideBookingPage> {
   final GlobalKey<FormFieldState<String>> _destinationFieldKey =
       GlobalKey<FormFieldState<String>>();
   Geocoding? _geocoding;
+  final RideLocationInputService _locationInputService =
+      const RideLocationInputService();
 
   bool _isFindingDriver = false;
   bool _isGettingLocation = false;
+  bool _isFindingPickup = false;
   bool _isFindingDestination = false;
   double? _pickupLatitude;
   double? _pickupLongitude;
   double? _destinationLatitude;
   double? _destinationLongitude;
 
-  bool get _supportsNativeGeocoding =>
-      PlatformCapabilities.supportsNativeGeocoding;
+  bool get _supportsNativeGeocoding {
+    if (foundation.kIsWeb) {
+      return false;
+    }
+
+    return foundation.defaultTargetPlatform == foundation.TargetPlatform.android ||
+        foundation.defaultTargetPlatform == foundation.TargetPlatform.iOS ||
+        foundation.defaultTargetPlatform == foundation.TargetPlatform.macOS;
+  }
+
+
+  Map<String, String> get _nominatimHeaders {
+    final Map<String, String> headers = <String, String>{
+      'Accept': 'application/json',
+      'Accept-Language': 'en',
+    };
+
+    if (!foundation.kIsWeb) {
+      headers['User-Agent'] = 'RDOnlineShop/1.0 (Flutter)';
+    }
+
+    return headers;
+  }
 
   @override
   void initState() {
@@ -57,21 +86,24 @@ class _RideBookingPageState extends State<RideBookingPage> {
   }
 
   Future<void> _findNearbyDriver() async {
-    final bool valid = _formKey.currentState?.validate() ?? false;
+    final bool valid =
+        _formKey.currentState?.validate() ??
+            false;
 
     if (!valid) {
       return;
     }
 
-    if (_pickupLatitude == null || _pickupLongitude == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Please use Current Location for pickup first.',
-          ),
-        ),
+    if (_pickupLatitude == null ||
+        _pickupLongitude == null) {
+      final bool pickupReady =
+          await _resolvePickup(
+        showSuccessMessage: false,
       );
-      return;
+
+      if (!pickupReady) {
+        return;
+      }
     }
 
     if (_destinationLatitude == null ||
@@ -91,7 +123,7 @@ class _RideBookingPageState extends State<RideBookingPage> {
     });
 
     await Future<void>.delayed(
-      const Duration(milliseconds: 700),
+      const Duration(milliseconds: 500),
     );
 
     if (!mounted) {
@@ -109,9 +141,12 @@ class _RideBookingPageState extends State<RideBookingPage> {
           vehicleType: widget.vehicleType,
           pickupLatitude: _pickupLatitude!,
           pickupLongitude: _pickupLongitude!,
-          destinationLatitude: _destinationLatitude!,
-          destinationLongitude: _destinationLongitude!,
-          pickupAddress: _pickupController.text.trim(),
+          destinationLatitude:
+              _destinationLatitude!,
+          destinationLongitude:
+              _destinationLongitude!,
+          pickupAddress:
+              _pickupController.text.trim(),
           destinationAddress:
               _destinationController.text.trim(),
         ),
@@ -130,14 +165,16 @@ class _RideBookingPageState extends State<RideBookingPage> {
 
     try {
       final bool serviceEnabled =
-          await Geolocator.isLocationServiceEnabled();
+          await Geolocator
+              .isLocationServiceEnabled();
 
       if (!serviceEnabled) {
         if (!mounted) {
           return;
         }
 
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context)
+            .showSnackBar(
           const SnackBar(
             content: Text(
               'Please turn on Location/GPS first.',
@@ -150,17 +187,21 @@ class _RideBookingPageState extends State<RideBookingPage> {
       LocationPermission permission =
           await Geolocator.checkPermission();
 
-      if (permission == LocationPermission.denied) {
+      if (permission ==
+          LocationPermission.denied) {
         permission =
-            await Geolocator.requestPermission();
+            await Geolocator
+                .requestPermission();
       }
 
-      if (permission == LocationPermission.denied) {
+      if (permission ==
+          LocationPermission.denied) {
         if (!mounted) {
           return;
         }
 
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context)
+            .showSnackBar(
           const SnackBar(
             content: Text(
               'Location permission is required for ride pickup.',
@@ -176,14 +217,16 @@ class _RideBookingPageState extends State<RideBookingPage> {
           return;
         }
 
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context)
+            .showSnackBar(
           SnackBar(
             content: const Text(
               'Location permission is permanently denied. Open app settings to allow it.',
             ),
             action: SnackBarAction(
               label: 'Settings',
-              onPressed: Geolocator.openAppSettings,
+              onPressed:
+                  Geolocator.openAppSettings,
             ),
           ),
         );
@@ -191,61 +234,38 @@ class _RideBookingPageState extends State<RideBookingPage> {
       }
 
       final Position position =
-          await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
+          await Geolocator
+              .getCurrentPosition(
+        locationSettings:
+            const LocationSettings(
           accuracy: LocationAccuracy.high,
         ),
       );
 
-      String readableAddress =
-          '${position.latitude.toStringAsFixed(6)}, '
-          '${position.longitude.toStringAsFixed(6)}';
-
-      final Geocoding? geocoder = _geocoding;
-
-      if (geocoder != null) {
-        try {
-          final List<Placemark> placemarks =
-              await geocoder.placemarkFromCoordinates(
-            position.latitude,
-            position.longitude,
-          );
-
-          if (placemarks.isNotEmpty) {
-            final Placemark place = placemarks.first;
-
-            final List<String> parts = <String>[
-              place.street ?? '',
-              place.subLocality ?? '',
-              place.locality ?? '',
-              place.administrativeArea ?? '',
-              place.country ?? '',
-            ].where(
-              (String part) => part.trim().isNotEmpty,
-            ).toList();
-
-            if (parts.isNotEmpty) {
-              readableAddress = parts.join(', ');
-            }
-          }
-        } catch (_) {
-          // Coordinates stay valid even if reverse geocoding fails.
-        }
-      }
+      final String readableAddress =
+          await _readableAddressForCoordinates(
+        position.latitude,
+        position.longitude,
+      );
 
       if (!mounted) {
         return;
       }
 
       setState(() {
-        _pickupLatitude = position.latitude;
-        _pickupLongitude = position.longitude;
-        _pickupController.text = readableAddress;
+        _pickupLatitude =
+            position.latitude;
+        _pickupLongitude =
+            position.longitude;
+        _pickupController.text =
+            readableAddress;
       });
 
-      _pickupFieldKey.currentState?.validate();
+      _pickupFieldKey.currentState
+          ?.validate();
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
         const SnackBar(
           content: Text(
             'Current pickup location added.',
@@ -257,7 +277,8 @@ class _RideBookingPageState extends State<RideBookingPage> {
         return;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
         SnackBar(
           content: Text(
             'Could not get current location: $error',
@@ -273,28 +294,54 @@ class _RideBookingPageState extends State<RideBookingPage> {
     }
   }
 
-  ({double latitude, double longitude})? _parseCoordinates(
-    String value,
-  ) {
-    final List<String> parts = value
-        .split(',')
-        .map((String part) => part.trim())
-        .where((String part) => part.isNotEmpty)
-        .toList();
+  Future<({double latitude, double longitude})?>
+      _searchAddressWithOpenStreetMap(
+    String query,
+  ) async {
+    final Uri uri = Uri.https(
+      'nominatim.openstreetmap.org',
+      '/search',
+      <String, String>{
+        'q': query,
+        'format': 'jsonv2',
+        'limit': '1',
+        'addressdetails': '1',
+      },
+    );
 
-    if (parts.length != 2) {
+    final http.Response response = await http
+        .get(
+          uri,
+          headers: _nominatimHeaders,
+        )
+        .timeout(
+          const Duration(seconds: 12),
+        );
+
+    if (response.statusCode != 200) {
+      throw StateError(
+        'Location search service returned ${response.statusCode}.',
+      );
+    }
+
+    final dynamic decoded = jsonDecode(response.body);
+
+    if (decoded is! List<dynamic> || decoded.isEmpty) {
       return null;
     }
 
-    final double? latitude = double.tryParse(parts[0]);
-    final double? longitude = double.tryParse(parts[1]);
+    final dynamic first = decoded.first;
 
-    if (latitude == null ||
-        longitude == null ||
-        latitude < -90 ||
-        latitude > 90 ||
-        longitude < -180 ||
-        longitude > 180) {
+    if (first is! Map) {
+      return null;
+    }
+
+    final double? latitude =
+        double.tryParse(first['lat']?.toString() ?? '');
+    final double? longitude =
+        double.tryParse(first['lon']?.toString() ?? '');
+
+    if (latitude == null || longitude == null) {
       return null;
     }
 
@@ -302,6 +349,257 @@ class _RideBookingPageState extends State<RideBookingPage> {
       latitude: latitude,
       longitude: longitude,
     );
+  }
+
+  Future<String?> _reverseGeocodeWithOpenStreetMap(
+    double latitude,
+    double longitude,
+  ) async {
+    final Uri uri = Uri.https(
+      'nominatim.openstreetmap.org',
+      '/reverse',
+      <String, String>{
+        'lat': latitude.toString(),
+        'lon': longitude.toString(),
+        'format': 'jsonv2',
+        'zoom': '18',
+        'addressdetails': '1',
+      },
+    );
+
+    try {
+      final http.Response response = await http
+          .get(
+            uri,
+            headers: _nominatimHeaders,
+          )
+          .timeout(
+            const Duration(seconds: 12),
+          );
+
+      if (response.statusCode != 200) {
+        return null;
+      }
+
+      final dynamic decoded = jsonDecode(response.body);
+
+      if (decoded is! Map) {
+        return null;
+      }
+
+      final String displayName =
+          decoded['display_name']?.toString().trim() ?? '';
+
+      return displayName.isEmpty ? null : displayName;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<String> _readableAddressForCoordinates(
+    double latitude,
+    double longitude,
+  ) async {
+    String readableAddress =
+        '${latitude.toStringAsFixed(6)}, '
+        '${longitude.toStringAsFixed(6)}';
+
+    final Geocoding? geocoder =
+        _geocoding;
+
+    if (geocoder != null) {
+      try {
+        final List<Placemark> placemarks =
+            await geocoder
+                .placemarkFromCoordinates(
+          latitude,
+          longitude,
+        );
+
+        if (placemarks.isNotEmpty) {
+          final Placemark place =
+              placemarks.first;
+
+          final List<String> parts =
+              <String>[
+            place.street ?? '',
+            place.subLocality ?? '',
+            place.locality ?? '',
+            place.administrativeArea ?? '',
+            place.country ?? '',
+          ].where(
+            (String part) =>
+                part.trim().isNotEmpty,
+          ).toList();
+
+          if (parts.isNotEmpty) {
+            readableAddress =
+                parts.join(', ');
+          }
+        }
+      } catch (_) {
+        // The coordinates remain valid if reverse geocoding is unavailable.
+      }
+    } else {
+      final String? webAddress =
+          await _reverseGeocodeWithOpenStreetMap(
+        latitude,
+        longitude,
+      );
+
+      if (webAddress != null &&
+          webAddress.trim().isNotEmpty) {
+        readableAddress = webAddress;
+      }
+    }
+
+    return readableAddress;
+  }
+
+  Future<({double latitude, double longitude})?>
+      _resolveTextLocation(
+    String input,
+  ) async {
+    final String clean = input.trim();
+
+    if (clean.isEmpty) {
+      return null;
+    }
+
+    final RideSharedLocation? shared =
+        await _locationInputService
+            .resolveSharedLocation(clean);
+
+    if (shared != null) {
+      return (
+        latitude: shared.latitude,
+        longitude: shared.longitude,
+      );
+    }
+
+    final String placeQuery =
+        _locationInputService
+                .extractPlaceQuery(clean) ??
+            clean;
+
+    final Geocoding? geocoder =
+        _geocoding;
+
+    if (geocoder != null) {
+      final List<Location> locations =
+          await geocoder
+              .locationFromAddress(
+        placeQuery,
+      );
+
+      if (locations.isEmpty) {
+        return null;
+      }
+
+      final Location location =
+          locations.first;
+
+      return (
+        latitude: location.latitude,
+        longitude: location.longitude,
+      );
+    }
+
+    return _searchAddressWithOpenStreetMap(
+      placeQuery,
+    );
+  }
+
+  Future<bool> _resolvePickup({
+    bool showSuccessMessage = true,
+  }) async {
+    if (_isFindingPickup) {
+      return false;
+    }
+
+    final bool valid =
+        _pickupFieldKey.currentState
+                ?.validate() ??
+            false;
+
+    if (!valid) {
+      return false;
+    }
+
+    setState(() {
+      _isFindingPickup = true;
+    });
+
+    try {
+      final ({double latitude, double longitude})?
+          coordinates =
+          await _resolveTextLocation(
+        _pickupController.text,
+      );
+
+      if (coordinates == null) {
+        if (!mounted) {
+          return false;
+        }
+
+        ScaffoldMessenger.of(context)
+            .showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Pickup was not found. Use Current Location, select it on the map, paste a shared GPS link, or enter a more specific place.',
+            ),
+          ),
+        );
+        return false;
+      }
+
+      if (!mounted) {
+        return false;
+      }
+
+      setState(() {
+        _pickupLatitude =
+            coordinates.latitude;
+        _pickupLongitude =
+            coordinates.longitude;
+      });
+
+      _pickupFieldKey.currentState
+          ?.validate();
+
+      if (showSuccessMessage) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Pickup location added.',
+            ),
+          ),
+        );
+      }
+
+      return true;
+    } catch (error) {
+      if (!mounted) {
+        return false;
+      }
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not find pickup: $error',
+          ),
+        ),
+      );
+      return false;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isFindingPickup = false;
+        });
+      }
+    }
   }
 
   Future<bool> _resolveDestination({
@@ -312,86 +610,58 @@ class _RideBookingPageState extends State<RideBookingPage> {
     }
 
     final bool valid =
-        _destinationFieldKey.currentState?.validate() ?? false;
+        _destinationFieldKey.currentState
+                ?.validate() ??
+            false;
 
     if (!valid) {
       return false;
     }
-
-    final String destination =
-        _destinationController.text.trim();
 
     setState(() {
       _isFindingDestination = true;
     });
 
     try {
-      final Geocoding? geocoder = _geocoding;
+      final ({double latitude, double longitude})?
+          coordinates =
+          await _resolveTextLocation(
+        _destinationController.text,
+      );
 
-      if (geocoder == null) {
-        final ({double latitude, double longitude})? coordinates =
-            _parseCoordinates(destination);
-
-        if (coordinates == null) {
-          if (!mounted) {
-            return false;
-          }
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'On browser/Windows, enter destination as latitude, longitude for now.',
-              ),
-            ),
-          );
-          return false;
-        }
-
+      if (coordinates == null) {
         if (!mounted) {
           return false;
         }
 
-        setState(() {
-          _destinationLatitude = coordinates.latitude;
-          _destinationLongitude = coordinates.longitude;
-        });
-      } else {
-        final List<Location> locations =
-            await geocoder.locationFromAddress(
-          destination,
+        ScaffoldMessenger.of(context)
+            .showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Destination was not found. Select it on the map, paste a shared GPS link, or enter a more specific place.',
+            ),
+          ),
         );
-
-        if (locations.isEmpty) {
-          if (!mounted) {
-            return false;
-          }
-
-          ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(
-              content: Text(
-                'Destination was not found. Please enter a more specific place.',
-              ),
-            ),
-          );
-          return false;
-        }
-
-        final Location location = locations.first;
-
-        if (!mounted) {
-          return false;
-        }
-
-        setState(() {
-          _destinationLatitude = location.latitude;
-          _destinationLongitude = location.longitude;
-        });
+        return false;
       }
 
-      _destinationFieldKey.currentState?.validate();
+      if (!mounted) {
+        return false;
+      }
+
+      setState(() {
+        _destinationLatitude =
+            coordinates.latitude;
+        _destinationLongitude =
+            coordinates.longitude;
+      });
+
+      _destinationFieldKey.currentState
+          ?.validate();
 
       if (showSuccessMessage) {
-        ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context)
+            .showSnackBar(
           const SnackBar(
             content: Text(
               'Destination location added.',
@@ -406,7 +676,8 @@ class _RideBookingPageState extends State<RideBookingPage> {
         return false;
       }
 
-      ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
         SnackBar(
           content: Text(
             'Could not find destination: $error',
@@ -422,6 +693,82 @@ class _RideBookingPageState extends State<RideBookingPage> {
         });
       }
     }
+  }
+
+  Future<void> _chooseLocationOnMap({
+    required bool pickup,
+  }) async {
+    final RidePickedLocation? result =
+        await Navigator.push<
+            RidePickedLocation>(
+      context,
+      MaterialPageRoute<
+          RidePickedLocation>(
+        builder: (_) =>
+            RideLocationPickerPage(
+          title: pickup
+              ? 'Choose Pickup'
+              : 'Choose Destination',
+          initialLatitude: pickup
+              ? _pickupLatitude
+              : _destinationLatitude,
+          initialLongitude: pickup
+              ? _pickupLongitude
+              : _destinationLongitude,
+        ),
+      ),
+    );
+
+    if (result == null || !mounted) {
+      return;
+    }
+
+    final String address =
+        await _readableAddressForCoordinates(
+      result.latitude,
+      result.longitude,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      if (pickup) {
+        _pickupLatitude =
+            result.latitude;
+        _pickupLongitude =
+            result.longitude;
+        _pickupController.text =
+            address;
+      } else {
+        _destinationLatitude =
+            result.latitude;
+        _destinationLongitude =
+            result.longitude;
+        _destinationController.text =
+            address;
+      }
+    });
+
+    if (pickup) {
+      _pickupFieldKey.currentState
+          ?.validate();
+    } else {
+      _destinationFieldKey.currentState
+          ?.validate();
+    }
+
+    ScaffoldMessenger.of(context)
+        .showSnackBar(
+      SnackBar(
+        content: Text(
+          pickup
+              ? 'Pickup selected from map / shared GPS.'
+              : 'Destination selected from map / shared GPS.',
+        ),
+      ),
+    );
   }
 
   @override
@@ -489,7 +836,7 @@ class _RideBookingPageState extends State<RideBookingPage> {
                     ),
                     const SizedBox(height: 12),
                     Text(
-                      'Only nearby ${widget.vehicleType} drivers will be shown. Browser/Windows currently uses GPS coordinates for destination entry.',
+                      'Only nearby ${widget.vehicleType} drivers will be shown after pickup and destination are ready.',
                       textAlign: TextAlign.center,
                       style: TextStyle(
                         color: Colors.grey.shade700,
@@ -591,61 +938,134 @@ class _RideBookingPageState extends State<RideBookingPage> {
             TextFormField(
               key: _pickupFieldKey,
               controller: _pickupController,
-              textInputAction: TextInputAction.next,
+              textInputAction:
+                  TextInputAction.search,
+              onChanged: (_) {
+                if (_pickupLatitude != null ||
+                    _pickupLongitude != null) {
+                  setState(() {
+                    _pickupLatitude = null;
+                    _pickupLongitude = null;
+                  });
+                }
+              },
+              onFieldSubmitted: (_) {
+                _resolvePickup();
+              },
               decoration: InputDecoration(
                 labelText: 'Pickup Location',
-                hintText: 'Enter pickup location',
+                hintText:
+                    'Current GPS, place name, coordinates, or shared map link',
                 prefixIcon: const Icon(
                   Icons.my_location_rounded,
                 ),
+                suffixIcon:
+                    _pickupLatitude != null &&
+                            _pickupLongitude !=
+                                null
+                        ? const Icon(
+                            Icons
+                                .check_circle_rounded,
+                            color: Colors.green,
+                          )
+                        : null,
                 border: OutlineInputBorder(
                   borderRadius:
-                      BorderRadius.circular(14),
+                      BorderRadius.circular(
+                    14,
+                  ),
                 ),
               ),
               validator: (String? value) {
                 if (value == null ||
                     value.trim().isEmpty) {
-                  return 'Please enter pickup location';
+                  return 'Please enter or select pickup location';
                 }
                 return null;
               },
             ),
             const SizedBox(height: 10),
-            OutlinedButton.icon(
-              onPressed:
-                  _isGettingLocation ? null : _useCurrentLocation,
-              icon: _isGettingLocation
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                      ),
-                    )
-                  : const Icon(
-                      Icons.gps_fixed_rounded,
-                    ),
-              label: Text(
-                _isGettingLocation
-                    ? 'Getting Location...'
-                    : 'Use Current Location',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w800,
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                OutlinedButton.icon(
+                  onPressed:
+                      _isGettingLocation
+                          ? null
+                          : _useCurrentLocation,
+                  icon: _isGettingLocation
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.gps_fixed_rounded,
+                        ),
+                  label: Text(
+                    _isGettingLocation
+                        ? 'Getting GPS...'
+                        : 'Current Location',
+                  ),
                 ),
-              ),
+                OutlinedButton.icon(
+                  onPressed:
+                      _isFindingPickup
+                          ? null
+                          : _resolvePickup,
+                  icon: _isFindingPickup
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons
+                              .location_searching_rounded,
+                        ),
+                  label: const Text(
+                    'Set Pickup',
+                  ),
+                ),
+                FilledButton.tonalIcon(
+                  onPressed: () {
+                    _chooseLocationOnMap(
+                      pickup: true,
+                    );
+                  },
+                  icon: const Icon(
+                    Icons.map_rounded,
+                  ),
+                  label: const Text(
+                    'Map / Shared GPS',
+                  ),
+                ),
+              ],
             ),
-            const SizedBox(height: 14),
+            const SizedBox(height: 18),
             TextFormField(
               key: _destinationFieldKey,
-              controller: _destinationController,
-              textInputAction: TextInputAction.search,
+              controller:
+                  _destinationController,
+              textInputAction:
+                  TextInputAction.search,
               onChanged: (_) {
-                if (_destinationLatitude != null ||
-                    _destinationLongitude != null) {
+                if (_destinationLatitude !=
+                        null ||
+                    _destinationLongitude !=
+                        null) {
                   setState(() {
-                    _destinationLatitude = null;
-                    _destinationLongitude = null;
+                    _destinationLatitude =
+                        null;
+                    _destinationLongitude =
+                        null;
                   });
                 }
               },
@@ -654,57 +1074,88 @@ class _RideBookingPageState extends State<RideBookingPage> {
               },
               decoration: InputDecoration(
                 labelText: 'Destination',
-                hintText: _supportsNativeGeocoding
-                    ? 'Example: Riyadh Airport'
-                    : 'Example: 24.94549, 46.70891',
+                hintText:
+                    'Place name, coordinates, or shared map link',
                 prefixIcon: const Icon(
                   Icons.location_on_rounded,
                 ),
-                suffixIcon: _destinationLatitude != null &&
-                        _destinationLongitude != null
-                    ? const Icon(
-                        Icons.check_circle_rounded,
-                        color: Colors.green,
-                      )
-                    : null,
+                suffixIcon:
+                    _destinationLatitude !=
+                                null &&
+                            _destinationLongitude !=
+                                null
+                        ? const Icon(
+                            Icons
+                                .check_circle_rounded,
+                            color: Colors.green,
+                          )
+                        : null,
                 border: OutlineInputBorder(
                   borderRadius:
-                      BorderRadius.circular(14),
+                      BorderRadius.circular(
+                    14,
+                  ),
                 ),
               ),
               validator: (String? value) {
                 if (value == null ||
                     value.trim().isEmpty) {
-                  return 'Please enter destination';
+                  return 'Please enter or select destination';
                 }
                 return null;
               },
             ),
             const SizedBox(height: 10),
-            FilledButton.tonalIcon(
-              onPressed: _isFindingDestination
-                  ? null
-                  : _resolveDestination,
-              icon: _isFindingDestination
-                  ? const SizedBox(
-                      width: 18,
-                      height: 18,
-                      child: CircularProgressIndicator(
-                        strokeWidth: 2,
-                      ),
-                    )
-                  : const Icon(
-                      Icons.location_searching_rounded,
-                    ),
-              label: Text(
-                _isFindingDestination
-                    ? 'Finding Destination...'
-                    : _supportsNativeGeocoding
-                          ? 'Set Destination'
-                          : 'Set Destination GPS',
-                style: const TextStyle(
-                  fontWeight: FontWeight.w800,
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                FilledButton.tonalIcon(
+                  onPressed:
+                      _isFindingDestination
+                          ? null
+                          : _resolveDestination,
+                  icon: _isFindingDestination
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons
+                              .location_searching_rounded,
+                        ),
+                  label: const Text(
+                    'Set Destination',
+                  ),
                 ),
+                FilledButton.tonalIcon(
+                  onPressed: () {
+                    _chooseLocationOnMap(
+                      pickup: false,
+                    );
+                  },
+                  icon: const Icon(
+                    Icons.map_rounded,
+                  ),
+                  label: const Text(
+                    'Map / Shared GPS',
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              'Shared GPS supports latitude/longitude and full Google Maps links. '
+              'On Android/iPhone/Windows/macOS, many shortened Maps links can also be resolved. '
+              'On Web, browser CORS may require a full link or coordinates.',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 11.5,
+                height: 1.35,
               ),
             ),
           ],

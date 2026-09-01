@@ -1,7 +1,15 @@
+import 'dart:async';
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart' as foundation;
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:http/http.dart' as http;
+import 'package:url_launcher/url_launcher.dart';
 
 import 'ride_driver_auth_page.dart';
 
@@ -18,33 +26,99 @@ class RideDriverRequestsPage extends StatefulWidget {
       _RideDriverRequestsPageState();
 }
 
-class _RideDriverRequestsPageState
-    extends State<RideDriverRequestsPage> {
+class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
   bool _updatingOnlineStatus = false;
+  bool _updatingRideStatus = false;
+  String? _activeRideRequestId;
 
-  CollectionReference<Map<String, dynamic>>
-      get _rideRequests =>
-          FirebaseFirestore.instance
-              .collection('ride_requests');
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+      _rideWatchSubscription;
+  StreamSubscription<Position>? _positionSubscription;
 
-  DocumentReference<Map<String, dynamic>>
-      get _driverRef =>
-          FirebaseFirestore.instance
-              .collection('ride_drivers')
-              .doc(widget.driverId.trim());
+  String get _driverId => widget.driverId.trim();
 
-  Stream<QuerySnapshot<Map<String, dynamic>>>
-      _requestsStream() {
+
+
+  CollectionReference<Map<String, dynamic>> get _rideRequests =>
+      FirebaseFirestore.instance.collection('ride_requests');
+
+  DocumentReference<Map<String, dynamic>> get _driverRef =>
+      FirebaseFirestore.instance.collection('ride_drivers').doc(_driverId);
+
+  @override
+  void initState() {
+    super.initState();
+    _watchForActiveRide();
+  }
+
+  @override
+  void dispose() {
+    _rideWatchSubscription?.cancel();
+    _positionSubscription?.cancel();
+    super.dispose();
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _pendingRequestsStream() {
     return _rideRequests
-        .where(
-          'driverId',
-          isEqualTo: widget.driverId.trim(),
-        )
-        .where(
-          'status',
-          isEqualTo: 'pending',
-        )
+        .where('driverId', isEqualTo: _driverId)
+        .where('status', isEqualTo: 'pending')
         .snapshots();
+  }
+
+  Stream<QuerySnapshot<Map<String, dynamic>>> _allDriverRidesStream() {
+    return _rideRequests.where('driverId', isEqualTo: _driverId).snapshots();
+  }
+
+  void _watchForActiveRide() {
+    if (_driverId.isEmpty) {
+      return;
+    }
+
+    _rideWatchSubscription = _allDriverRidesStream().listen(
+      (QuerySnapshot<Map<String, dynamic>> snapshot) {
+        QueryDocumentSnapshot<Map<String, dynamic>>? activeRide;
+
+        for (final QueryDocumentSnapshot<Map<String, dynamic>> document
+            in snapshot.docs) {
+          final String status = document
+                  .data()['status']
+                  ?.toString()
+                  .trim()
+                  .toLowerCase() ??
+              '';
+
+          if (status == 'accepted' || status == 'in_progress') {
+            activeRide = document;
+            break;
+          }
+        }
+
+        final String? nextRideId = activeRide?.id;
+
+        if (nextRideId == null) {
+          if (_activeRideRequestId != null) {
+            _activeRideRequestId = null;
+            unawaited(_stopLiveLocationTracking(clearCurrentRide: true));
+            if (mounted) {
+              setState(() {});
+            }
+          }
+          return;
+        }
+
+        if (_activeRideRequestId != nextRideId) {
+          _activeRideRequestId = nextRideId;
+          if (mounted) {
+            setState(() {});
+          }
+        }
+
+        unawaited(_startLiveLocationTracking(nextRideId));
+      },
+      onError: (_) {
+        // The visible StreamBuilders show Firestore errors to the user.
+      },
+    );
   }
 
   Future<Position?> _getCurrentPosition() async {
@@ -66,12 +140,10 @@ class _RideDriverRequestsPageState
       return null;
     }
 
-    LocationPermission permission =
-        await Geolocator.checkPermission();
+    LocationPermission permission = await Geolocator.checkPermission();
 
     if (permission == LocationPermission.denied) {
-      permission =
-          await Geolocator.requestPermission();
+      permission = await Geolocator.requestPermission();
     }
 
     if (permission == LocationPermission.denied) {
@@ -82,15 +154,14 @@ class _RideDriverRequestsPageState
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Location permission is required to go online.',
+            'Location permission is required for Ride Driver GPS.',
           ),
         ),
       );
       return null;
     }
 
-    if (permission ==
-        LocationPermission.deniedForever) {
+    if (permission == LocationPermission.deniedForever) {
       if (!mounted) {
         return null;
       }
@@ -102,9 +173,7 @@ class _RideDriverRequestsPageState
           ),
           action: SnackBarAction(
             label: 'Settings',
-            onPressed: () {
-              Geolocator.openAppSettings();
-            },
+            onPressed: Geolocator.openAppSettings,
           ),
         ),
       );
@@ -112,17 +181,107 @@ class _RideDriverRequestsPageState
     }
 
     return Geolocator.getCurrentPosition(
-      locationSettings:
-          const LocationSettings(
+      locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
       ),
     );
   }
 
-  Future<void> _setOnlineStatus(
-    bool goOnline,
+  Future<void> _writeDriverPosition(
+    Position position,
+    String rideRequestId,
   ) async {
+    try {
+      await _driverRef.update(
+        <String, dynamic>{
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'locationUpdatedAt': FieldValue.serverTimestamp(),
+          'currentRideRequestId': rideRequestId,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+    } catch (_) {
+      // A later GPS update retries automatically while the stream is active.
+    }
+  }
+
+  Future<void> _startLiveLocationTracking(String rideRequestId) async {
+    final String cleanRideId = rideRequestId.trim();
+    if (cleanRideId.isEmpty) {
+      return;
+    }
+
+    if (_positionSubscription != null &&
+        _activeRideRequestId == cleanRideId) {
+      return;
+    }
+
+    await _positionSubscription?.cancel();
+    _positionSubscription = null;
+
+    final Position? currentPosition = await _getCurrentPosition();
+    if (currentPosition == null) {
+      return;
+    }
+
+    await _writeDriverPosition(currentPosition, cleanRideId);
+
+    _positionSubscription = Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 5,
+      ),
+    ).listen(
+      (Position position) {
+        unawaited(_writeDriverPosition(position, cleanRideId));
+      },
+      onError: (Object error) {
+        if (!mounted) {
+          return;
+        }
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Live GPS temporarily stopped: $error'),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _stopLiveLocationTracking({
+    bool clearCurrentRide = false,
+  }) async {
+    await _positionSubscription?.cancel();
+    _positionSubscription = null;
+
+    if (clearCurrentRide && _driverId.isNotEmpty) {
+      try {
+        await _driverRef.update(
+          <String, dynamic>{
+            'currentRideRequestId': null,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+      } catch (_) {
+        // The trip lifecycle should not fail only because this cleanup failed.
+      }
+    }
+  }
+
+  Future<void> _setOnlineStatus(bool goOnline) async {
     if (_updatingOnlineStatus) {
+      return;
+    }
+
+    if (!goOnline && _activeRideRequestId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Complete the active ride before going offline.',
+          ),
+        ),
+      );
       return;
     }
 
@@ -132,9 +291,7 @@ class _RideDriverRequestsPageState
 
     try {
       if (goOnline) {
-        final Position? position =
-            await _getCurrentPosition();
-
+        final Position? position = await _getCurrentPosition();
         if (position == null) {
           return;
         }
@@ -144,10 +301,8 @@ class _RideDriverRequestsPageState
             'isOnline': true,
             'latitude': position.latitude,
             'longitude': position.longitude,
-            'locationUpdatedAt':
-                FieldValue.serverTimestamp(),
-            'updatedAt':
-                FieldValue.serverTimestamp(),
+            'locationUpdatedAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
           },
         );
 
@@ -163,11 +318,12 @@ class _RideDriverRequestsPageState
           ),
         );
       } else {
+        await _stopLiveLocationTracking();
+
         await _driverRef.update(
           <String, dynamic>{
             'isOnline': false,
-            'updatedAt':
-                FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
           },
         );
 
@@ -177,9 +333,7 @@ class _RideDriverRequestsPageState
 
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text(
-              'You are offline.',
-            ),
+            content: Text('You are offline.'),
           ),
         );
       }
@@ -190,9 +344,7 @@ class _RideDriverRequestsPageState
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Could not update online status: $error',
-          ),
+          content: Text('Could not update online status: $error'),
         ),
       );
     } finally {
@@ -206,20 +358,52 @@ class _RideDriverRequestsPageState
 
   Future<void> _acceptRequest(
     BuildContext context,
-    QueryDocumentSnapshot<Map<String, dynamic>>
-        request,
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
   ) async {
+    if (_updatingRideStatus) {
+      return;
+    }
+
+    if (_activeRideRequestId != null &&
+        _activeRideRequestId != request.id) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Complete your current ride before accepting another request.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    setState(() {
+      _updatingRideStatus = true;
+    });
+
     try {
-      await request.reference.update(
+      final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+      batch.update(
+        request.reference,
         <String, dynamic>{
           'status': 'accepted',
           'driverResponse': 'accepted',
-          'acceptedAt':
-              FieldValue.serverTimestamp(),
-          'updatedAt':
-              FieldValue.serverTimestamp(),
+          'acceptedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
         },
       );
+
+      batch.update(
+        _driverRef,
+        <String, dynamic>{
+          'currentRideRequestId': request.id,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      await batch.commit();
+      _activeRideRequestId = request.id;
+      await _startLiveLocationTracking(request.id);
 
       if (!context.mounted) {
         return;
@@ -228,7 +412,7 @@ class _RideDriverRequestsPageState
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Ride request accepted.',
+            'Ride accepted. Live GPS tracking started.',
           ),
         ),
       );
@@ -239,28 +423,37 @@ class _RideDriverRequestsPageState
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Could not accept ride request: $error',
-          ),
+          content: Text('Could not accept ride request: $error'),
         ),
       );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingRideStatus = false;
+        });
+      }
     }
   }
 
   Future<void> _rejectRequest(
     BuildContext context,
-    QueryDocumentSnapshot<Map<String, dynamic>>
-        request,
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
   ) async {
+    if (_updatingRideStatus) {
+      return;
+    }
+
+    setState(() {
+      _updatingRideStatus = true;
+    });
+
     try {
       await request.reference.update(
         <String, dynamic>{
           'status': 'rejected',
           'driverResponse': 'rejected',
-          'rejectedAt':
-              FieldValue.serverTimestamp(),
-          'updatedAt':
-              FieldValue.serverTimestamp(),
+          'rejectedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
         },
       );
 
@@ -269,11 +462,7 @@ class _RideDriverRequestsPageState
       }
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text(
-            'Ride request rejected.',
-          ),
-        ),
+        const SnackBar(content: Text('Ride request rejected.')),
       );
     } catch (error) {
       if (!context.mounted) {
@@ -282,34 +471,169 @@ class _RideDriverRequestsPageState
 
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
+          content: Text('Could not reject ride request: $error'),
+        ),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingRideStatus = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _startTrip(
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
+  ) async {
+    if (_updatingRideStatus) {
+      return;
+    }
+
+    setState(() {
+      _updatingRideStatus = true;
+    });
+
+    try {
+      await request.reference.update(
+        <String, dynamic>{
+          'status': 'in_progress',
+          'tripStartedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      await _startLiveLocationTracking(request.id);
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
           content: Text(
-            'Could not reject ride request: $error',
+            'Trip started. Customer can see your live location.',
           ),
         ),
       );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not start trip: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingRideStatus = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _completeTrip(
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
+  ) async {
+    if (_updatingRideStatus) {
+      return;
+    }
+
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              title: const Text('Complete Trip?'),
+              content: const Text(
+                'Confirm only after the passenger has reached the destination.',
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Not Yet'),
+                ),
+                FilledButton.icon(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  icon: const Icon(Icons.flag_rounded),
+                  label: const Text('Complete'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+
+    if (!confirmed || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _updatingRideStatus = true;
+    });
+
+    try {
+      final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+      batch.update(
+        request.reference,
+        <String, dynamic>{
+          'status': 'completed',
+          'tripCompletedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      batch.update(
+        _driverRef,
+        <String, dynamic>{
+          'currentRideRequestId': null,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      await batch.commit();
+      _activeRideRequestId = null;
+      await _stopLiveLocationTracking();
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Trip completed successfully.'),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not complete trip: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingRideStatus = false;
+        });
+      }
     }
   }
 
   Widget _onlineStatusCard() {
-    return StreamBuilder<
-        DocumentSnapshot<Map<String, dynamic>>>(
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
       stream: _driverRef.snapshots(),
       builder: (
         BuildContext context,
-        AsyncSnapshot<
-                DocumentSnapshot<
-                    Map<String, dynamic>>>
-            snapshot,
+        AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> snapshot,
       ) {
         if (snapshot.hasError) {
-          return Card(
-            child: Padding(
-              padding:
-                  const EdgeInsets.all(16),
-              child: Text(
-                'Could not load driver status: ${snapshot.error}',
-              ),
-            ),
+          return _MessageCard(
+            icon: Icons.error_outline_rounded,
+            title: 'Could not load driver status',
+            message: snapshot.error.toString(),
           );
         }
 
@@ -317,248 +641,133 @@ class _RideDriverRequestsPageState
           return const Card(
             child: Padding(
               padding: EdgeInsets.all(20),
-              child: Center(
-                child:
-                    CircularProgressIndicator(),
-              ),
+              child: Center(child: CircularProgressIndicator()),
             ),
           );
         }
 
-        final DocumentSnapshot<
-                Map<String, dynamic>>
-            document = snapshot.data!;
+        final DocumentSnapshot<Map<String, dynamic>> document =
+            snapshot.data!;
 
         if (!document.exists) {
-          return const Card(
-            child: Padding(
-              padding: EdgeInsets.all(18),
-              child: Text(
-                'Ride Driver profile was not found.',
-              ),
-            ),
+          return const _MessageCard(
+            icon: Icons.person_off_rounded,
+            title: 'Ride Driver profile not found',
+            message: 'Please log in again or contact Admin.',
           );
         }
 
         final Map<String, dynamic> data =
-            document.data() ??
-                <String, dynamic>{};
+            document.data() ?? <String, dynamic>{};
 
-        final bool isApproved =
-            data['isApproved'] == true;
-        final bool isActive =
-            data['isActive'] == true;
+        final bool isApproved = data['isApproved'] == true;
+        final bool isActive = data['isActive'] == true;
         final bool licenceVerified =
-            data['drivingLicenseVerified'] ==
-                true;
-        final bool isOnline =
-            data['isOnline'] == true;
+            data['drivingLicenseVerified'] == true;
+        final bool isOnline = data['isOnline'] == true;
+        final bool canGoOnline =
+            isApproved && isActive && licenceVerified;
 
         final String vehicleType =
-            data['vehicleType']
-                    ?.toString()
-                    .trim() ??
-                '';
+            data['vehicleType']?.toString().trim() ?? '';
         final String vehicleNumber =
-            data['vehicleNumber']
-                    ?.toString()
-                    .trim() ??
-                '';
-
-        final bool canGoOnline =
-            isApproved &&
-                isActive &&
-                licenceVerified;
+            data['vehicleNumber']?.toString().trim() ?? '';
 
         return Card(
           elevation: 1.5,
           child: Padding(
-            padding:
-                const EdgeInsets.all(16),
+            padding: const EdgeInsets.all(16),
             child: Column(
-              crossAxisAlignment:
-                  CrossAxisAlignment.stretch,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
               children: <Widget>[
                 Row(
                   children: <Widget>[
                     CircleAvatar(
                       radius: 27,
-                      backgroundColor: isOnline
-                          ? Colors.green
-                              .withValues(
-                                alpha: 0.14,
-                              )
-                          : Colors.grey
-                              .withValues(
-                                alpha: 0.14,
-                              ),
+                      backgroundColor: (isOnline ? Colors.green : Colors.grey)
+                          .withValues(alpha: 0.14),
                       child: Icon(
                         Icons.drive_eta_rounded,
-                        color: isOnline
-                            ? Colors.green
-                            : Colors.grey.shade700,
+                        color: isOnline ? Colors.green : Colors.grey.shade700,
                         size: 29,
                       ),
                     ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
-                        crossAxisAlignment:
-                            CrossAxisAlignment
-                                .start,
+                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
                           Text(
-                            isOnline
-                                ? 'Driver Online'
-                                : 'Driver Offline',
-                            style:
-                                const TextStyle(
+                            isOnline ? 'Driver Online' : 'Driver Offline',
+                            style: const TextStyle(
                               fontSize: 18,
-                              fontWeight:
-                                  FontWeight.w900,
+                              fontWeight: FontWeight.w900,
                             ),
                           ),
-                          const SizedBox(
-                            height: 3,
-                          ),
+                          const SizedBox(height: 3),
                           Text(
                             <String>[
                               vehicleType,
                               vehicleNumber,
-                            ]
-                                .where(
-                                  (
-                                    String value,
-                                  ) =>
-                                      value
-                                          .isNotEmpty,
-                                )
-                                .join(' • '),
+                            ].where((String value) => value.isNotEmpty).join(
+                                  ' • ',
+                                ),
                             style: TextStyle(
-                              color: Colors
-                                  .grey.shade700,
-                              fontWeight:
-                                  FontWeight.w700,
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w700,
                             ),
                           ),
                         ],
                       ),
                     ),
-                    Container(
-                      padding:
-                          const EdgeInsets
-                              .symmetric(
-                        horizontal: 10,
-                        vertical: 6,
-                      ),
-                      decoration:
-                          BoxDecoration(
-                        color: isOnline
-                            ? Colors.green
-                                .withValues(
-                                  alpha: 0.12,
-                                )
-                            : Colors.grey
-                                .withValues(
-                                  alpha: 0.12,
-                                ),
-                        borderRadius:
-                            BorderRadius
-                                .circular(16),
-                      ),
-                      child: Text(
-                        isOnline
-                            ? 'ONLINE'
-                            : 'OFFLINE',
-                        style: TextStyle(
-                          color: isOnline
-                              ? Colors.green
-                              : Colors
-                                  .grey.shade700,
-                          fontSize: 11.5,
-                          fontWeight:
-                              FontWeight.w900,
-                        ),
-                      ),
+                    _statusChip(
+                      isOnline ? 'ONLINE' : 'OFFLINE',
+                      isOnline ? Colors.green : Colors.grey,
                     ),
                   ],
                 ),
                 const SizedBox(height: 14),
                 if (!canGoOnline)
-                  Container(
-                    padding:
-                        const EdgeInsets
-                            .all(12),
-                    decoration:
-                        BoxDecoration(
-                      color: Colors.orange
-                          .withValues(
-                            alpha: 0.10,
-                          ),
-                      borderRadius:
-                          BorderRadius
-                              .circular(12),
-                    ),
-                    child: const Text(
-                      'Admin approval, active account and verified driving licence are required before going online.',
-                      style: TextStyle(
-                        fontWeight:
-                            FontWeight.w700,
-                        height: 1.35,
-                      ),
-                    ),
-                  ),
-                if (!canGoOnline)
-                  const SizedBox(height: 12),
-                FilledButton.icon(
-                  onPressed:
-                      _updatingOnlineStatus ||
-                              (!canGoOnline &&
-                                  !isOnline)
-                          ? null
-                          : () {
-                              _setOnlineStatus(
-                                !isOnline,
-                              );
-                            },
-                  icon: _updatingOnlineStatus
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child:
-                              CircularProgressIndicator(
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : Icon(
-                          isOnline
-                              ? Icons
-                                  .toggle_off_rounded
-                              : Icons
-                                  .my_location_rounded,
-                        ),
-                  label: Text(
-                    _updatingOnlineStatus
-                        ? 'Please wait...'
-                        : isOnline
-                            ? 'Go Offline'
-                            : 'Go Online with GPS',
-                    style: const TextStyle(
-                      fontWeight:
-                          FontWeight.w900,
-                    ),
-                  ),
-                ),
-                if (isOnline) ...<Widget>[
-                  const SizedBox(height: 8),
                   Text(
-                    'Your current GPS location is available to the nearby-driver search while you are online.',
+                    'Admin approval and driving licence verification are required before going online.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color:
-                          Colors.grey.shade700,
-                      fontSize: 12.5,
-                      height: 1.3,
+                      color: Colors.orange.shade800,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed: _updatingOnlineStatus
+                        ? null
+                        : () => _setOnlineStatus(!isOnline),
+                    icon: _updatingOnlineStatus
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : Icon(
+                            isOnline
+                                ? Icons.toggle_off_rounded
+                                : Icons.toggle_on_rounded,
+                          ),
+                    label: Text(
+                      _updatingOnlineStatus
+                          ? 'Updating...'
+                          : isOnline
+                              ? 'Go Offline'
+                              : 'Go Online',
+                    ),
+                  ),
+                if (_activeRideRequestId != null) ...<Widget>[
+                  const SizedBox(height: 10),
+                  const Text(
+                    'Live GPS is active for your current ride.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.green,
+                      fontWeight: FontWeight.w800,
                     ),
                   ),
                 ],
@@ -570,77 +779,198 @@ class _RideDriverRequestsPageState
     );
   }
 
-  Widget _requestsSection() {
-    return StreamBuilder<
-        QuerySnapshot<Map<String, dynamic>>>(
-      stream: _requestsStream(),
+  Widget _activeRideMap(
+    Map<String, dynamic> rideData,
+  ) {
+    return _RideDriverLiveRouteMap(
+      driverId: _driverId,
+      rideData: rideData,
+    );
+  }
+
+  Widget _activeRideSection() {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _allDriverRidesStream(),
       builder: (
         BuildContext context,
-        AsyncSnapshot<
-                QuerySnapshot<
-                    Map<String, dynamic>>>
-            snapshot,
+        AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot,
       ) {
-        if (snapshot.connectionState ==
-                ConnectionState.waiting &&
+        if (snapshot.hasError) {
+          return _MessageCard(
+            icon: Icons.error_outline_rounded,
+            title: 'Could not load active ride',
+            message: snapshot.error.toString(),
+          );
+        }
+
+        final List<QueryDocumentSnapshot<Map<String, dynamic>>> activeRides =
+            (snapshot.data?.docs ??
+                    <QueryDocumentSnapshot<Map<String, dynamic>>>[])
+                .where(
+          (QueryDocumentSnapshot<Map<String, dynamic>> document) {
+            final String status = document
+                    .data()['status']
+                    ?.toString()
+                    .trim()
+                    .toLowerCase() ??
+                '';
+            return status == 'accepted' || status == 'in_progress';
+          },
+        ).toList();
+
+        if (activeRides.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        final QueryDocumentSnapshot<Map<String, dynamic>> ride =
+            activeRides.first;
+        final Map<String, dynamic> data = ride.data();
+        final String status =
+            data['status']?.toString().trim().toLowerCase() ?? 'accepted';
+        final String pickup =
+            data['pickupAddress']?.toString().trim() ?? '';
+        final String destination =
+            data['destinationAddress']?.toString().trim() ?? '';
+        final String vehicleType =
+            data['vehicleType']?.toString().trim() ?? '';
+
+        return Card(
+          elevation: 2,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    const CircleAvatar(
+                      radius: 26,
+                      backgroundColor: Color(0xFFE3F2FD),
+                      child: Icon(
+                        Icons.route_rounded,
+                        color: Color(0xFF1565C0),
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          const Text(
+                            'Active Ride',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          Text(
+                            vehicleType.isEmpty ? 'Ride' : vehicleType,
+                            style: TextStyle(
+                              color: Colors.grey.shade700,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    _statusChip(
+                      status == 'in_progress' ? 'IN PROGRESS' : 'ACCEPTED',
+                      status == 'in_progress' ? Colors.blue : Colors.green,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 16),
+                _locationRow(
+                  icon: Icons.my_location_rounded,
+                  label: 'Pickup',
+                  value: pickup,
+                ),
+                const Divider(height: 24),
+                _locationRow(
+                  icon: Icons.location_on_rounded,
+                  label: 'Destination',
+                  value: destination,
+                ),
+                const SizedBox(height: 16),
+                _activeRideMap(data),
+                const SizedBox(height: 16),
+                if (status == 'accepted')
+                  FilledButton.icon(
+                    onPressed:
+                        _updatingRideStatus ? null : () => _startTrip(ride),
+                    icon: const Icon(Icons.play_arrow_rounded),
+                    label: const Text(
+                      'Start Trip',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed:
+                        _updatingRideStatus ? null : () => _completeTrip(ride),
+                    icon: const Icon(Icons.flag_rounded),
+                    label: const Text(
+                      'Complete Trip',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Keep this screen open while driving so the customer receives foreground live GPS updates.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(fontSize: 12.5),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Widget _requestsSection() {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: _pendingRequestsStream(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot,
+      ) {
+        if (snapshot.connectionState == ConnectionState.waiting &&
             !snapshot.hasData) {
           return const Padding(
             padding: EdgeInsets.all(28),
-            child: Center(
-              child: CircularProgressIndicator(),
-            ),
+            child: Center(child: CircularProgressIndicator()),
           );
         }
 
         if (snapshot.hasError) {
           return _MessageCard(
-            icon:
-                Icons.error_outline_rounded,
-            title:
-                'Could not load ride requests',
-            message:
-                snapshot.error.toString(),
+            icon: Icons.error_outline_rounded,
+            title: 'Could not load ride requests',
+            message: snapshot.error.toString(),
           );
         }
 
-        final List<
-                QueryDocumentSnapshot<
-                    Map<String, dynamic>>>
-            requests =
+        final List<QueryDocumentSnapshot<Map<String, dynamic>>> requests =
             snapshot.data?.docs ??
-                <QueryDocumentSnapshot<
-                    Map<String, dynamic>>>[];
+                <QueryDocumentSnapshot<Map<String, dynamic>>>[];
 
         requests.sort(
           (
-            QueryDocumentSnapshot<
-                    Map<String, dynamic>>
-                first,
-            QueryDocumentSnapshot<
-                    Map<String, dynamic>>
-                second,
+            QueryDocumentSnapshot<Map<String, dynamic>> first,
+            QueryDocumentSnapshot<Map<String, dynamic>> second,
           ) {
             final Timestamp? firstTime =
-                first.data()['createdAt']
-                        is Timestamp
-                    ? first.data()['createdAt']
-                        as Timestamp
+                first.data()['createdAt'] is Timestamp
+                    ? first.data()['createdAt'] as Timestamp
                     : null;
-
             final Timestamp? secondTime =
-                second.data()['createdAt']
-                        is Timestamp
-                    ? second.data()['createdAt']
-                        as Timestamp
+                second.data()['createdAt'] is Timestamp
+                    ? second.data()['createdAt'] as Timestamp
                     : null;
 
-            return (secondTime
-                        ?.millisecondsSinceEpoch ??
-                    0)
-                .compareTo(
-              firstTime
-                      ?.millisecondsSinceEpoch ??
-                  0,
+            return (secondTime?.millisecondsSinceEpoch ?? 0).compareTo(
+              firstTime?.millisecondsSinceEpoch ?? 0,
             );
           },
         );
@@ -648,39 +978,24 @@ class _RideDriverRequestsPageState
         if (requests.isEmpty) {
           return const _MessageCard(
             icon: Icons.inbox_rounded,
-            title:
-                'No pending ride requests',
-            message:
-                'New customer ride requests will appear here.',
+            title: 'No pending ride requests',
+            message: 'New customer ride requests will appear here.',
           );
         }
 
         return Column(
           children: requests
               .map(
-                (
-                  QueryDocumentSnapshot<
-                          Map<String, dynamic>>
-                      request,
-                ) =>
+                (QueryDocumentSnapshot<Map<String, dynamic>> request) =>
                     Padding(
-                  padding:
-                      const EdgeInsets.only(
-                    bottom: 12,
-                  ),
-                  child:
-                      _RideRequestCard(
+                  padding: const EdgeInsets.only(bottom: 12),
+                  child: _RideRequestCard(
                     request: request,
-                    onAccept: () =>
-                        _acceptRequest(
-                      context,
-                      request,
-                    ),
-                    onReject: () =>
-                        _rejectRequest(
-                      context,
-                      request,
-                    ),
+                    actionsEnabled: !_updatingRideStatus &&
+                        (_activeRideRequestId == null ||
+                            _activeRideRequestId == request.id),
+                    onAccept: () => _acceptRequest(context, request),
+                    onReject: () => _rejectRequest(context, request),
                   ),
                 ),
               )
@@ -691,62 +1006,56 @@ class _RideDriverRequestsPageState
   }
 
   Future<void> _logout() async {
-    final bool confirmed =
-        await showDialog<bool>(
-              context: context,
-              builder: (
-                BuildContext dialogContext,
-              ) {
-                return AlertDialog(
-                  title: const Text(
-                    'Logout Ride Driver?',
-                  ),
-                  content: const Text(
-                    'You will be taken back to the Ride Driver login page.',
-                  ),
-                  actions: <Widget>[
-                    TextButton(
-                      onPressed: () {
-                        Navigator.pop(
-                          dialogContext,
-                          false,
-                        );
-                      },
-                      child: const Text('Cancel'),
-                    ),
-                    FilledButton.icon(
-                      onPressed: () {
-                        Navigator.pop(
-                          dialogContext,
-                          true,
-                        );
-                      },
-                      icon: const Icon(
-                        Icons.logout_rounded,
-                      ),
-                      label: const Text('Logout'),
-                    ),
-                  ],
-                );
-              },
-            ) ??
-            false;
+    if (_activeRideRequestId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Complete the active ride before logging out.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              title: const Text('Logout Ride Driver?'),
+              content: const Text(
+                'You will be taken back to the Ride Driver login page.',
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  icon: const Icon(Icons.logout_rounded),
+                  label: const Text('Logout'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
 
     if (!confirmed || !mounted) {
       return;
     }
 
+    await _stopLiveLocationTracking(clearCurrentRide: true);
+
     try {
       await _driverRef.update(
         <String, dynamic>{
           'isOnline': false,
-          'updatedAt':
-              FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
         },
       );
     } catch (_) {
-      // Logout should still continue even if
-      // the offline status update fails.
+      // Logout still continues if offline status cannot be updated.
     }
 
     await FirebaseAuth.instance.signOut();
@@ -757,8 +1066,7 @@ class _RideDriverRequestsPageState
 
     Navigator.of(context).pushAndRemoveUntil(
       MaterialPageRoute<void>(
-        builder: (_) =>
-            const RideDriverAuthPage(),
+        builder: (_) => const RideDriverAuthPage(),
       ),
       (Route<dynamic> route) => false,
     );
@@ -766,67 +1074,48 @@ class _RideDriverRequestsPageState
 
   @override
   Widget build(BuildContext context) {
-    final String cleanDriverId =
-        widget.driverId.trim();
-
     return Scaffold(
-      backgroundColor:
-          const Color(0xFFF7F8FA),
+      backgroundColor: const Color(0xFFF7F8FA),
       appBar: AppBar(
         title: const Text(
           'Ride Requests',
-          style: TextStyle(
-            fontWeight: FontWeight.w900,
-          ),
+          style: TextStyle(fontWeight: FontWeight.w900),
         ),
         centerTitle: true,
         actions: <Widget>[
           IconButton(
             tooltip: 'Logout',
             onPressed: _logout,
-            icon: const Icon(
-              Icons.logout_rounded,
-            ),
+            icon: const Icon(Icons.logout_rounded),
           ),
         ],
       ),
       body: SafeArea(
         child: Center(
           child: ConstrainedBox(
-            constraints:
-                const BoxConstraints(
-              maxWidth: 820,
-            ),
-            child: cleanDriverId.isEmpty
+            constraints: const BoxConstraints(maxWidth: 820),
+            child: _driverId.isEmpty
                 ? const _MessageCard(
-                    icon: Icons
-                        .error_outline_rounded,
-                    title:
-                        'Driver ID missing',
-                    message:
-                        'A valid ride driver ID is required.',
+                    icon: Icons.error_outline_rounded,
+                    title: 'Driver ID missing',
+                    message: 'A valid ride driver ID is required.',
                   )
                 : ListView(
-                    padding:
-                        const EdgeInsets.all(
-                      16,
-                    ),
+                    padding: const EdgeInsets.all(16),
                     children: <Widget>[
                       _onlineStatusCard(),
-                      const SizedBox(
-                        height: 18,
-                      ),
+                      const SizedBox(height: 18),
+                      _activeRideSection(),
+                      if (_activeRideRequestId != null)
+                        const SizedBox(height: 18),
                       const Text(
                         'Incoming Ride Requests',
                         style: TextStyle(
                           fontSize: 20,
-                          fontWeight:
-                              FontWeight.w900,
+                          fontWeight: FontWeight.w900,
                         ),
                       ),
-                      const SizedBox(
-                        height: 10,
-                      ),
+                      const SizedBox(height: 12),
                       _requestsSection(),
                     ],
                   ),
@@ -835,189 +1124,20 @@ class _RideDriverRequestsPageState
       ),
     );
   }
-}
 
-class _RideRequestCard
-    extends StatelessWidget {
-  const _RideRequestCard({
-    required this.request,
-    required this.onAccept,
-    required this.onReject,
-  });
-
-  final QueryDocumentSnapshot<
-      Map<String, dynamic>> request;
-  final VoidCallback onAccept;
-  final VoidCallback onReject;
-
-  @override
-  Widget build(BuildContext context) {
-    final Map<String, dynamic> data =
-        request.data();
-
-    final String vehicleType =
-        data['vehicleType']
-                ?.toString()
-                .trim() ??
-            '';
-    final String pickupAddress =
-        data['pickupAddress']
-                ?.toString()
-                .trim() ??
-            '';
-    final String destinationAddress =
-        data['destinationAddress']
-                ?.toString()
-                .trim() ??
-            '';
-    final String customerId =
-        data['customerId']
-                ?.toString()
-                .trim() ??
-            '';
-
-    return Card(
-      elevation: 1.5,
-      child: Padding(
-        padding:
-            const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment:
-              CrossAxisAlignment.stretch,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                const CircleAvatar(
-                  radius: 27,
-                  child: Icon(
-                    Icons
-                        .person_pin_circle_rounded,
-                    size: 29,
-                  ),
-                ),
-                const SizedBox(width: 12),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment:
-                        CrossAxisAlignment
-                            .start,
-                    children: <Widget>[
-                      Text(
-                        vehicleType.isEmpty
-                            ? 'Ride Request'
-                            : '$vehicleType Ride Request',
-                        style:
-                            const TextStyle(
-                          fontSize: 18,
-                          fontWeight:
-                              FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(
-                        height: 3,
-                      ),
-                      Text(
-                        customerId.isEmpty
-                            ? 'Customer'
-                            : 'Customer: $customerId',
-                        maxLines: 1,
-                        overflow:
-                            TextOverflow
-                                .ellipsis,
-                        style: TextStyle(
-                          color: Colors
-                              .grey.shade700,
-                          fontSize: 12,
-                          fontWeight:
-                              FontWeight.w700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Container(
-                  padding:
-                      const EdgeInsets
-                          .symmetric(
-                    horizontal: 9,
-                    vertical: 5,
-                  ),
-                  decoration:
-                      BoxDecoration(
-                    color: Colors.orange
-                        .withValues(
-                          alpha: 0.12,
-                        ),
-                    borderRadius:
-                        BorderRadius
-                            .circular(16),
-                  ),
-                  child: const Text(
-                    'Pending',
-                    style: TextStyle(
-                      color: Colors.orange,
-                      fontWeight:
-                          FontWeight.w800,
-                      fontSize: 11.5,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            const SizedBox(height: 16),
-            _locationRow(
-              icon:
-                  Icons.my_location_rounded,
-              label: 'Pickup',
-              value: pickupAddress,
-            ),
-            const Divider(height: 24),
-            _locationRow(
-              icon:
-                  Icons.location_on_rounded,
-              label: 'Destination',
-              value:
-                  destinationAddress,
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child:
-                      OutlinedButton.icon(
-                    onPressed: onReject,
-                    icon: const Icon(
-                      Icons.close_rounded,
-                    ),
-                    label: const Text(
-                      'Reject',
-                      style: TextStyle(
-                        fontWeight:
-                            FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                ),
-                const SizedBox(width: 10),
-                Expanded(
-                  child:
-                      FilledButton.icon(
-                    onPressed: onAccept,
-                    icon: const Icon(
-                      Icons.check_rounded,
-                    ),
-                    label: const Text(
-                      'Accept',
-                      style: TextStyle(
-                        fontWeight:
-                            FontWeight.w900,
-                      ),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ],
+  Widget _statusChip(String text, Color color) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(18),
+      ),
+      child: Text(
+        text,
+        style: TextStyle(
+          color: color,
+          fontSize: 11.5,
+          fontWeight: FontWeight.w900,
         ),
       ),
     );
@@ -1029,37 +1149,1462 @@ class _RideRequestCard
     required String value,
   }) {
     return Row(
-      crossAxisAlignment:
-          CrossAxisAlignment.start,
+      crossAxisAlignment: CrossAxisAlignment.start,
       children: <Widget>[
-        Icon(
-          icon,
-          color:
-              const Color(0xFF1565C0),
-        ),
+        Icon(icon, color: const Color(0xFF1565C0)),
         const SizedBox(width: 10),
         Expanded(
           child: Column(
-            crossAxisAlignment:
-                CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: <Widget>[
               Text(
                 label,
                 style: TextStyle(
-                  color:
-                      Colors.grey.shade700,
-                  fontWeight:
-                      FontWeight.w800,
+                  color: Colors.grey.shade700,
+                  fontWeight: FontWeight.w800,
                 ),
               ),
               const SizedBox(height: 3),
               Text(
-                value.isEmpty
-                    ? '-'
-                    : value,
+                value.isEmpty ? 'Not available' : value,
                 style: const TextStyle(
+                  fontWeight: FontWeight.w700,
+                  height: 1.3,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+
+class _RideDriverLiveRouteMap extends StatefulWidget {
+  const _RideDriverLiveRouteMap({
+    required this.driverId,
+    required this.rideData,
+  });
+
+  final String driverId;
+  final Map<String, dynamic> rideData;
+
+  @override
+  State<_RideDriverLiveRouteMap> createState() =>
+      _RideDriverLiveRouteMapState();
+}
+
+class _RideDriverLiveRouteMapState
+    extends State<_RideDriverLiveRouteMap> {
+  final MapController _mapController = MapController();
+
+  StreamSubscription<DocumentSnapshot<Map<String, dynamic>>>?
+      _driverSubscription;
+
+  LatLng? _driverLocation;
+  LatLng? _pickup;
+  LatLng? _destination;
+
+  List<LatLng> _roadRoute = <LatLng>[];
+
+  LatLng? _lastRouteFrom;
+  LatLng? _lastRouteTo;
+  DateTime? _lastRouteAt;
+
+  bool _isLoadingRoute = false;
+  String? _routeError;
+
+  double? _routeDistanceKm;
+  int? _routeDurationMinutes;
+
+  String _primaryInstruction = 'Route ready';
+  String _secondaryInstruction = '';
+  String _primaryManeuver = 'straight';
+
+  double? _asDouble(dynamic value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    return double.tryParse(
+      value?.toString().trim() ?? '',
+    );
+  }
+
+  LatLng? _latLngFrom(
+    dynamic latitude,
+    dynamic longitude,
+  ) {
+    final double? lat = _asDouble(latitude);
+    final double? lng = _asDouble(longitude);
+
+    if (lat == null || lng == null) {
+      return null;
+    }
+
+    return LatLng(lat, lng);
+  }
+
+  String get _status =>
+      widget.rideData['status']
+          ?.toString()
+          .trim()
+          .toLowerCase() ??
+      'accepted';
+
+  LatLng? get _routeTarget {
+    if (_status == 'in_progress') {
+      return _destination ?? _pickup;
+    }
+
+    return _pickup ?? _destination;
+  }
+
+  String get _routeTargetLabel =>
+      _status == 'in_progress'
+          ? 'Destination'
+          : 'Pickup';
+
+  @override
+  void initState() {
+    super.initState();
+    _readRideCoordinates();
+    _listenToDriverLocation();
+  }
+
+  @override
+  void didUpdateWidget(
+    covariant _RideDriverLiveRouteMap oldWidget,
+  ) {
+    super.didUpdateWidget(oldWidget);
+
+    final String oldStatus =
+        oldWidget.rideData['status']
+            ?.toString()
+            .trim()
+            .toLowerCase() ??
+        '';
+    final String newStatus = _status;
+
+    final dynamic oldPickupLat =
+        oldWidget.rideData['pickupLatitude'];
+    final dynamic oldPickupLng =
+        oldWidget.rideData['pickupLongitude'];
+    final dynamic oldDestinationLat =
+        oldWidget.rideData['destinationLatitude'];
+    final dynamic oldDestinationLng =
+        oldWidget.rideData['destinationLongitude'];
+
+    if (oldStatus != newStatus ||
+        oldPickupLat !=
+            widget.rideData['pickupLatitude'] ||
+        oldPickupLng !=
+            widget.rideData['pickupLongitude'] ||
+        oldDestinationLat !=
+            widget.rideData['destinationLatitude'] ||
+        oldDestinationLng !=
+            widget.rideData['destinationLongitude']) {
+      _readRideCoordinates();
+      _lastRouteFrom = null;
+      _lastRouteTo = null;
+      _roadRoute = <LatLng>[];
+      unawaited(
+        _refreshRoadRoute(
+          force: true,
+        ),
+      );
+    }
+
+    if (oldWidget.driverId != widget.driverId) {
+      _driverSubscription?.cancel();
+      _listenToDriverLocation();
+    }
+  }
+
+  @override
+  void dispose() {
+    _driverSubscription?.cancel();
+    super.dispose();
+  }
+
+  void _readRideCoordinates() {
+    _pickup = _latLngFrom(
+      widget.rideData['pickupLatitude'],
+      widget.rideData['pickupLongitude'],
+    );
+
+    _destination = _latLngFrom(
+      widget.rideData['destinationLatitude'],
+      widget.rideData['destinationLongitude'],
+    );
+  }
+
+  void _listenToDriverLocation() {
+    final String cleanDriverId =
+        widget.driverId.trim();
+
+    if (cleanDriverId.isEmpty) {
+      return;
+    }
+
+    _driverSubscription = FirebaseFirestore.instance
+        .collection('ride_drivers')
+        .doc(cleanDriverId)
+        .snapshots()
+        .listen(
+      (
+        DocumentSnapshot<Map<String, dynamic>>
+            snapshot,
+      ) {
+        final Map<String, dynamic> data =
+            snapshot.data() ??
+                <String, dynamic>{};
+
+        final LatLng? nextLocation =
+            _latLngFrom(
+          data['latitude'] ?? data['lat'],
+          data['longitude'] ?? data['lng'],
+        );
+
+        if (nextLocation == null) {
+          return;
+        }
+
+        if (mounted) {
+          setState(() {
+            _driverLocation = nextLocation;
+          });
+        } else {
+          _driverLocation = nextLocation;
+        }
+
+        unawaited(_refreshRoadRoute());
+      },
+      onError: (_) {
+        // Driver GPS errors are shown by the parent page.
+      },
+    );
+  }
+
+  bool _sameTarget(
+    LatLng? first,
+    LatLng? second,
+  ) {
+    if (first == null || second == null) {
+      return false;
+    }
+
+    return Geolocator.distanceBetween(
+          first.latitude,
+          first.longitude,
+          second.latitude,
+          second.longitude,
+        ) <
+        5;
+  }
+
+  bool _shouldRefreshRoute({
+    required LatLng from,
+    required LatLng to,
+    required bool force,
+  }) {
+    if (force || _roadRoute.isEmpty) {
+      return true;
+    }
+
+    if (!_sameTarget(_lastRouteTo, to)) {
+      return true;
+    }
+
+    final LatLng? lastFrom = _lastRouteFrom;
+
+    if (lastFrom == null) {
+      return true;
+    }
+
+    final double movedMeters =
+        Geolocator.distanceBetween(
+      lastFrom.latitude,
+      lastFrom.longitude,
+      from.latitude,
+      from.longitude,
+    );
+
+    final DateTime? lastAt = _lastRouteAt;
+    final bool enoughTimePassed =
+        lastAt == null ||
+        DateTime.now()
+                .difference(lastAt)
+                .inSeconds >=
+            12;
+
+    return movedMeters >= 35 &&
+        enoughTimePassed;
+  }
+
+  String _cardinalDirection(
+    double bearing,
+  ) {
+    final double normalized =
+        ((bearing % 360) + 360) % 360;
+
+    if (normalized >= 337.5 ||
+        normalized < 22.5) {
+      return 'north';
+    }
+    if (normalized < 67.5) {
+      return 'north-east';
+    }
+    if (normalized < 112.5) {
+      return 'east';
+    }
+    if (normalized < 157.5) {
+      return 'south-east';
+    }
+    if (normalized < 202.5) {
+      return 'south';
+    }
+    if (normalized < 247.5) {
+      return 'south-west';
+    }
+    if (normalized < 292.5) {
+      return 'west';
+    }
+    return 'north-west';
+  }
+
+  String _instructionForStep(
+    Map<String, dynamic> step,
+  ) {
+    final Map<String, dynamic> maneuver =
+        step['maneuver'] is Map
+            ? Map<String, dynamic>.from(
+                step['maneuver'] as Map,
+              )
+            : <String, dynamic>{};
+
+    final String type =
+        maneuver['type']
+                ?.toString()
+                .trim()
+                .toLowerCase() ??
+            '';
+    final String modifier =
+        maneuver['modifier']
+                ?.toString()
+                .trim()
+                .toLowerCase() ??
+            '';
+
+    final double bearingAfter =
+        _asDouble(
+              maneuver['bearing_after'],
+            ) ??
+            0;
+
+    final String roadName =
+        step['name']
+                ?.toString()
+                .trim() ??
+            '';
+
+    String instruction;
+
+    switch (type) {
+      case 'depart':
+        instruction =
+            'Head ${_cardinalDirection(bearingAfter)}';
+        break;
+      case 'arrive':
+        instruction =
+            'Arrive at $_routeTargetLabel';
+        break;
+      case 'turn':
+      case 'end of road':
+        instruction = modifier.isEmpty
+            ? 'Turn'
+            : 'Turn ${modifier.replaceAll('-', ' ')}';
+        break;
+      case 'continue':
+      case 'new name':
+        instruction = modifier.isEmpty
+            ? 'Continue straight'
+            : 'Continue ${modifier.replaceAll('-', ' ')}';
+        break;
+      case 'merge':
+        instruction = modifier.isEmpty
+            ? 'Merge'
+            : 'Merge ${modifier.replaceAll('-', ' ')}';
+        break;
+      case 'fork':
+        instruction = modifier.isEmpty
+            ? 'Keep ahead'
+            : 'Keep ${modifier.replaceAll('-', ' ')}';
+        break;
+      case 'roundabout':
+      case 'rotary':
+        instruction =
+            'Enter the roundabout';
+        break;
+      case 'exit roundabout':
+      case 'exit rotary':
+        instruction =
+            'Exit the roundabout';
+        break;
+      default:
+        instruction = modifier.isEmpty
+            ? 'Continue on route'
+            : 'Go ${modifier.replaceAll('-', ' ')}';
+        break;
+    }
+
+    if (roadName.isNotEmpty &&
+        type != 'arrive') {
+      return '$instruction onto $roadName';
+    }
+
+    return instruction;
+  }
+
+  String _maneuverForStep(
+    Map<String, dynamic> step,
+  ) {
+    final dynamic rawManeuver =
+        step['maneuver'];
+
+    if (rawManeuver is! Map) {
+      return 'straight';
+    }
+
+    final String type =
+        rawManeuver['type']
+                ?.toString()
+                .trim()
+                .toLowerCase() ??
+            '';
+    final String modifier =
+        rawManeuver['modifier']
+                ?.toString()
+                .trim()
+                .toLowerCase() ??
+            '';
+
+    if (type == 'arrive') {
+      return 'arrive';
+    }
+
+    if (type == 'roundabout' ||
+        type == 'rotary' ||
+        type == 'exit roundabout' ||
+        type == 'exit rotary') {
+      return 'roundabout';
+    }
+
+    if (modifier.contains('left')) {
+      return 'left';
+    }
+
+    if (modifier.contains('right')) {
+      return 'right';
+    }
+
+    return 'straight';
+  }
+
+  IconData _maneuverIcon(
+    String maneuver,
+  ) {
+    switch (maneuver) {
+      case 'left':
+        return Icons.turn_left_rounded;
+      case 'right':
+        return Icons.turn_right_rounded;
+      case 'roundabout':
+        return Icons.sync_rounded;
+      case 'arrive':
+        return Icons.flag_rounded;
+      default:
+        return Icons.arrow_upward_rounded;
+    }
+  }
+
+  Future<void> _refreshRoadRoute({
+    bool force = false,
+  }) async {
+    if (_isLoadingRoute) {
+      return;
+    }
+
+    final LatLng? from = _driverLocation;
+    final LatLng? to = _routeTarget;
+
+    if (from == null || to == null) {
+      return;
+    }
+
+    if (!_shouldRefreshRoute(
+      from: from,
+      to: to,
+      force: force,
+    )) {
+      return;
+    }
+
+    _isLoadingRoute = true;
+
+    if (mounted) {
+      setState(() {
+        _routeError = null;
+      });
+    }
+
+    try {
+      final Uri uri = Uri.parse(
+        'https://router.project-osrm.org/'
+        'route/v1/driving/'
+        '${from.longitude},${from.latitude};'
+        '${to.longitude},${to.latitude}'
+        '?overview=full'
+        '&geometries=geojson'
+        '&steps=true',
+      );
+
+      final Map<String, String> headers =
+          <String, String>{
+        'Accept': 'application/json',
+      };
+
+      if (!foundation.kIsWeb) {
+        headers['User-Agent'] =
+            'RDOnlineShop/1.0';
+      }
+
+      final http.Response response =
+          await http
+              .get(
+                uri,
+                headers: headers,
+              )
+              .timeout(
+                const Duration(
+                  seconds: 12,
+                ),
+              );
+
+      if (response.statusCode != 200) {
+        throw StateError(
+          'Road route service returned '
+          '${response.statusCode}.',
+        );
+      }
+
+      final dynamic decoded =
+          jsonDecode(response.body);
+
+      if (decoded is! Map<String, dynamic>) {
+        throw StateError(
+          'Road route response is invalid.',
+        );
+      }
+
+      final dynamic routes =
+          decoded['routes'];
+
+      if (routes is! List<dynamic> ||
+          routes.isEmpty) {
+        throw StateError(
+          'No road route was found.',
+        );
+      }
+
+      final dynamic firstRoute =
+          routes.first;
+
+      if (firstRoute
+          is! Map<String, dynamic>) {
+        throw StateError(
+          'Road route data is invalid.',
+        );
+      }
+
+      final dynamic geometry =
+          firstRoute['geometry'];
+
+      if (geometry
+          is! Map<String, dynamic>) {
+        throw StateError(
+          'Road route geometry is missing.',
+        );
+      }
+
+      final dynamic coordinates =
+          geometry['coordinates'];
+
+      if (coordinates
+          is! List<dynamic>) {
+        throw StateError(
+          'Road route coordinates are missing.',
+        );
+      }
+
+      final List<LatLng> routePoints =
+          <LatLng>[];
+
+      for (final dynamic item
+          in coordinates) {
+        if (item is! List<dynamic> ||
+            item.length < 2) {
+          continue;
+        }
+
+        final double? longitude =
+            _asDouble(item[0]);
+        final double? latitude =
+            _asDouble(item[1]);
+
+        if (latitude == null ||
+            longitude == null) {
+          continue;
+        }
+
+        routePoints.add(
+          LatLng(
+            latitude,
+            longitude,
+          ),
+        );
+      }
+
+      if (routePoints.length < 2) {
+        throw StateError(
+          'Road route does not contain enough points.',
+        );
+      }
+
+      final double? distanceMeters =
+          _asDouble(
+        firstRoute['distance'],
+      );
+      final double? durationSeconds =
+          _asDouble(
+        firstRoute['duration'],
+      );
+
+      String primaryInstruction =
+          'Continue toward $_routeTargetLabel';
+      String secondaryInstruction = '';
+      String primaryManeuver =
+          'straight';
+
+      final dynamic legsRaw =
+          firstRoute['legs'];
+
+      if (legsRaw is List<dynamic> &&
+          legsRaw.isNotEmpty &&
+          legsRaw.first is Map) {
+        final Map<String, dynamic> firstLeg =
+            Map<String, dynamic>.from(
+          legsRaw.first as Map,
+        );
+        final dynamic stepsRaw =
+            firstLeg['steps'];
+
+        if (stepsRaw is List<dynamic> &&
+            stepsRaw.isNotEmpty) {
+          final List<Map<String, dynamic>>
+              navigationSteps =
+              stepsRaw
+                  .whereType<Map>()
+                  .map(
+                    (Map step) =>
+                        Map<String, dynamic>.from(
+                      step,
+                    ),
+                  )
+                  .toList();
+
+          if (navigationSteps.isNotEmpty) {
+            primaryInstruction =
+                _instructionForStep(
+              navigationSteps.first,
+            );
+            primaryManeuver =
+                _maneuverForStep(
+              navigationSteps.first,
+            );
+          }
+
+          if (navigationSteps.length > 1) {
+            secondaryInstruction =
+                _instructionForStep(
+              navigationSteps[1],
+            );
+          }
+        }
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _roadRoute = routePoints;
+        _lastRouteFrom = from;
+        _lastRouteTo = to;
+        _lastRouteAt = DateTime.now();
+
+        _routeDistanceKm =
+            distanceMeters == null
+                ? null
+                : distanceMeters / 1000;
+
+        _routeDurationMinutes =
+            durationSeconds == null
+                ? null
+                : (durationSeconds / 60)
+                    .ceil();
+
+        _primaryInstruction =
+            primaryInstruction;
+        _secondaryInstruction =
+            secondaryInstruction;
+        _primaryManeuver =
+            primaryManeuver;
+
+        _routeError = null;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _routeError =
+            error.toString();
+      });
+    } finally {
+      _isLoadingRoute = false;
+    }
+  }
+
+  void _zoomIn() {
+    final MapCamera camera = _mapController.camera;
+    final double nextZoom =
+        camera.zoom >= 19 ? 19 : camera.zoom + 1;
+
+    _mapController.move(
+      camera.center,
+      nextZoom,
+    );
+  }
+
+  void _zoomOut() {
+    final MapCamera camera = _mapController.camera;
+    final double nextZoom =
+        camera.zoom <= 2 ? 2 : camera.zoom - 1;
+
+    _mapController.move(
+      camera.center,
+      nextZoom,
+    );
+  }
+
+  void _recenterOnDriver() {
+    final LatLng? driver = _driverLocation;
+
+    if (driver == null) {
+      return;
+    }
+
+    final double currentZoom =
+        _mapController.camera.zoom;
+
+    _mapController.move(
+      driver,
+      currentZoom < 15 ? 15 : currentZoom,
+    );
+  }
+
+  Future<void> _open3DNavigation() async {
+    final LatLng? target = _routeTarget;
+
+    if (target == null) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Destination GPS is not available yet.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final LatLng? origin = _driverLocation;
+
+    final Map<String, String> query = <String, String>{
+      'api': '1',
+      'destination': '${target.latitude},${target.longitude}',
+      'travelmode': 'driving',
+      'dir_action': 'navigate',
+    };
+
+    if (origin != null) {
+      query['origin'] =
+          '${origin.latitude},${origin.longitude}';
+    }
+
+    final Uri uri = Uri.https(
+      'www.google.com',
+      '/maps/dir/',
+      query,
+    );
+
+    try {
+      final bool opened = await launchUrl(
+        uri,
+        mode: foundation.kIsWeb
+            ? LaunchMode.platformDefault
+            : LaunchMode.externalApplication,
+      );
+
+      if (!opened && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Could not open Google Maps navigation.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not open navigation: $error',
+          ),
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final LatLng? driver =
+        _driverLocation;
+
+    final List<LatLng> fitPoints =
+        _roadRoute.isNotEmpty
+            ? _roadRoute
+            : <LatLng>[
+                if (driver != null)
+                  driver,
+                if (_pickup != null)
+                  _pickup!,
+                if (_destination != null)
+                  _destination!,
+              ];
+
+    if (fitPoints.isEmpty) {
+      return const _MessageCard(
+        icon: Icons.map_outlined,
+        title: 'Live map is waiting',
+        message:
+            'Driver, pickup, or destination GPS is not available yet.',
+      );
+    }
+
+    final String routeSummary =
+        _routeDistanceKm != null
+            ? '${_routeDistanceKm!.toStringAsFixed(1)} km'
+                '${_routeDurationMinutes != null ? ' • about ${_routeDurationMinutes!} min' : ''}'
+            : '';
+
+    return Card(
+      elevation: 1.5,
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Padding(
+            padding:
+                const EdgeInsets.fromLTRB(
+              14,
+              12,
+              14,
+              10,
+            ),
+            child: Row(
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
+              children: <Widget>[
+                Icon(
+                  driver != null
+                      ? Icons.gps_fixed_rounded
+                      : Icons.gps_not_fixed_rounded,
+                  color: driver != null
+                      ? Colors.green
+                      : Colors.orange,
+                ),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        driver != null
+                            ? 'Live GPS + road route connected'
+                            : 'Waiting for your GPS location',
+                        style:
+                            const TextStyle(
+                          fontWeight:
+                              FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(
+                        height: 3,
+                      ),
+                      Text(
+                        'Routing to $_routeTargetLabel'
+                        '${routeSummary.isEmpty ? '' : ' • $routeSummary'}',
+                        style: TextStyle(
+                          color:
+                              Colors.grey.shade700,
+                          fontSize: 12,
+                          fontWeight:
+                              FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                if (_isLoadingRoute)
+                  const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child:
+                        CircularProgressIndicator(
+                      strokeWidth: 2,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          if (_routeError != null &&
+              _roadRoute.isEmpty)
+            Padding(
+              padding:
+                  const EdgeInsets.fromLTRB(
+                14,
+                0,
+                14,
+                10,
+              ),
+              child: Text(
+                'Road route is temporarily unavailable. '
+                'Live GPS marker is still working.',
+                style: TextStyle(
+                  color: Colors.orange.shade800,
+                  fontSize: 12,
                   fontWeight:
                       FontWeight.w700,
+                ),
+              ),
+            ),
+          Container(
+            margin: const EdgeInsets.fromLTRB(
+              10,
+              0,
+              10,
+              10,
+            ),
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              color: const Color(0xFF00695C),
+              borderRadius:
+                  BorderRadius.circular(18),
+            ),
+            child: Row(
+              children: <Widget>[
+                Container(
+                  width: 54,
+                  height: 54,
+                  decoration:
+                      const BoxDecoration(
+                    color: Colors.white12,
+                    shape: BoxShape.circle,
+                  ),
+                  child: Icon(
+                    _maneuverIcon(
+                      _primaryManeuver,
+                    ),
+                    color: Colors.white,
+                    size: 34,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        _primaryInstruction,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 20,
+                          fontWeight:
+                              FontWeight.w900,
+                        ),
+                      ),
+                      if (_secondaryInstruction
+                          .isNotEmpty) ...<Widget>[
+                        const SizedBox(height: 4),
+                        Text(
+                          'Then $_secondaryInstruction',
+                          style: const TextStyle(
+                            color:
+                                Colors.white70,
+                            fontSize: 13,
+                            fontWeight:
+                                FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SizedBox(
+            height: 340,
+            child: Stack(
+              children: <Widget>[
+                Positioned.fill(
+                  child: FlutterMap(
+                    mapController: _mapController,
+                    options: MapOptions(
+                      initialCenter: fitPoints.first,
+                      initialZoom: 14,
+                      initialCameraFit: fitPoints.length > 1
+                          ? CameraFit.coordinates(
+                              coordinates: fitPoints,
+                              padding: const EdgeInsets.all(48),
+                            )
+                          : null,
+                      minZoom: 2,
+                      maxZoom: 19,
+                      interactionOptions:
+                          const InteractionOptions(
+                        flags: InteractiveFlag.all,
+                      ),
+                    ),
+                    children: <Widget>[
+                      TileLayer(
+                        urlTemplate:
+                            'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                        userAgentPackageName:
+                            'com.rd.onlineshop',
+                      ),
+                      if (_roadRoute.length >= 2)
+                        PolylineLayer(
+                          polylines: <Polyline>[
+                            Polyline(
+                              points: _roadRoute,
+                              strokeWidth: 6,
+                              color: const Color(
+                                0xFF1565C0,
+                              ),
+                              borderStrokeWidth: 2,
+                              borderColor: Colors.white,
+                            ),
+                          ],
+                        ),
+                      MarkerLayer(
+                        markers: <Marker>[
+                          if (_pickup != null)
+                            Marker(
+                              point: _pickup!,
+                              width: 48,
+                              height: 48,
+                              child:
+                                  const _RideDriverMapPin(
+                                icon: Icons
+                                    .my_location_rounded,
+                                color: Colors.blue,
+                                tooltip: 'Pickup',
+                              ),
+                            ),
+                          if (_destination != null)
+                            Marker(
+                              point: _destination!,
+                              width: 48,
+                              height: 48,
+                              child:
+                                  const _RideDriverMapPin(
+                                icon: Icons
+                                    .location_on_rounded,
+                                color: Colors.red,
+                                tooltip: 'Destination',
+                              ),
+                            ),
+                          if (driver != null)
+                            Marker(
+                              point: driver,
+                              width: 56,
+                              height: 56,
+                              child:
+                                  const _RideDriverMapPin(
+                                icon: Icons
+                                    .two_wheeler_rounded,
+                                color: Colors.green,
+                                tooltip:
+                                    'Your live location',
+                              ),
+                            ),
+                        ],
+                      ),
+                      const RichAttributionWidget(
+                        attributions:
+                            <SourceAttribution>[
+                          TextSourceAttribution(
+                            'OpenStreetMap contributors',
+                          ),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                Positioned(
+                  right: 12,
+                  top: 12,
+                  child: Column(
+                    children: <Widget>[
+                      _MapRoundButton(
+                        tooltip: 'Zoom in',
+                        icon: Icons.add_rounded,
+                        onPressed: _zoomIn,
+                      ),
+                      const SizedBox(height: 8),
+                      _MapRoundButton(
+                        tooltip: 'Zoom out',
+                        icon: Icons.remove_rounded,
+                        onPressed: _zoomOut,
+                      ),
+                      const SizedBox(height: 8),
+                      _MapRoundButton(
+                        tooltip: 'Re-centre on driver',
+                        icon: Icons.my_location_rounded,
+                        onPressed: _recenterOnDriver,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              12,
+              10,
+              12,
+              4,
+            ),
+            child: FilledButton.icon(
+              onPressed: _open3DNavigation,
+              icon: const Icon(
+                Icons.navigation_rounded,
+              ),
+              label: const Text(
+                'Open 3D Turn-by-Turn Navigation',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+            ),
+          ),
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              14,
+              4,
+              14,
+              12,
+            ),
+            child: Text(
+              'In-app map supports pinch/scroll zoom and drag. '
+              'For full 3D map, voice directions, lane guidance, and turn-by-turn navigation, open Google Maps.',
+              textAlign: TextAlign.center,
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 11.5,
+                height: 1.3,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _MapRoundButton extends StatelessWidget {
+  const _MapRoundButton({
+    required this.tooltip,
+    required this.icon,
+    required this.onPressed,
+  });
+
+  final String tooltip;
+  final IconData icon;
+  final VoidCallback onPressed;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Material(
+        color: Colors.white,
+        elevation: 3,
+        shape: const CircleBorder(),
+        child: InkWell(
+          customBorder: const CircleBorder(),
+          onTap: onPressed,
+          child: SizedBox(
+            width: 46,
+            height: 46,
+            child: Icon(
+              icon,
+              color: const Color(0xFF1565C0),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _RideDriverMapPin extends StatelessWidget {
+  const _RideDriverMapPin({
+    required this.icon,
+    required this.color,
+    required this.tooltip,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String tooltip;
+
+  @override
+  Widget build(BuildContext context) {
+    return Tooltip(
+      message: tooltip,
+      child: Container(
+        decoration: BoxDecoration(
+          color: Colors.white,
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: color,
+            width: 3,
+          ),
+          boxShadow: const <BoxShadow>[
+            BoxShadow(
+              color: Colors.black26,
+              blurRadius: 6,
+              offset: Offset(0, 2),
+            ),
+          ],
+        ),
+        child: Icon(
+          icon,
+          color: color,
+          size: 27,
+        ),
+      ),
+    );
+  }
+}
+
+class _RideRequestCard extends StatelessWidget {
+  const _RideRequestCard({
+    required this.request,
+    required this.actionsEnabled,
+    required this.onAccept,
+    required this.onReject,
+  });
+
+  final QueryDocumentSnapshot<Map<String, dynamic>> request;
+  final bool actionsEnabled;
+  final VoidCallback onAccept;
+  final VoidCallback onReject;
+
+  @override
+  Widget build(BuildContext context) {
+    final Map<String, dynamic> data = request.data();
+
+    final String vehicleType =
+        data['vehicleType']?.toString().trim() ?? '';
+    final String pickupAddress =
+        data['pickupAddress']?.toString().trim() ?? '';
+    final String destinationAddress =
+        data['destinationAddress']?.toString().trim() ?? '';
+    final String customerId =
+        data['customerId']?.toString().trim() ?? '';
+
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const CircleAvatar(
+                  radius: 27,
+                  child: Icon(
+                    Icons.person_pin_circle_rounded,
+                    size: 29,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        vehicleType.isEmpty
+                            ? 'Ride Request'
+                            : '$vehicleType Ride Request',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 3),
+                      Text(
+                        customerId.isEmpty
+                            ? 'Customer'
+                            : 'Customer: $customerId',
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontSize: 12,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                    horizontal: 9,
+                    vertical: 5,
+                  ),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
+                  child: const Text(
+                    'Pending',
+                    style: TextStyle(
+                      color: Colors.orange,
+                      fontWeight: FontWeight.w800,
+                      fontSize: 11.5,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 16),
+            _cardLocationRow(
+              icon: Icons.my_location_rounded,
+              label: 'Pickup',
+              value: pickupAddress,
+            ),
+            const Divider(height: 24),
+            _cardLocationRow(
+              icon: Icons.location_on_rounded,
+              label: 'Destination',
+              value: destinationAddress,
+            ),
+            const SizedBox(height: 16),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: actionsEnabled ? onReject : null,
+                    icon: const Icon(Icons.close_rounded),
+                    label: const Text(
+                      'Reject',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: actionsEnabled ? onAccept : null,
+                    icon: const Icon(Icons.check_rounded),
+                    label: const Text(
+                      'Accept',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            if (!actionsEnabled) ...<Widget>[
+              const SizedBox(height: 8),
+              const Text(
+                'Complete the current ride before accepting another request.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontSize: 12, color: Colors.orange),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _cardLocationRow({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        Icon(icon, color: const Color(0xFF1565C0)),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              Text(
+                label,
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+              const SizedBox(height: 3),
+              Text(
+                value.isEmpty ? 'Not available' : value,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w700,
                   height: 1.3,
                 ),
               ),
@@ -1084,57 +2629,30 @@ class _MessageCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Center(
+    return Card(
+      elevation: 1.5,
       child: Padding(
-        padding:
-            const EdgeInsets.all(20),
-        child: Card(
-          child: Padding(
-            padding:
-                const EdgeInsets.all(
-              24,
+        padding: const EdgeInsets.all(22),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Icon(icon, size: 46, color: Colors.grey.shade600),
+            const SizedBox(height: 10),
+            Text(
+              title,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
             ),
-            child: Column(
-              mainAxisSize:
-                  MainAxisSize.min,
-              children: <Widget>[
-                Icon(
-                  icon,
-                  size: 48,
-                  color: const Color(
-                    0xFF1565C0,
-                  ),
-                ),
-                const SizedBox(
-                  height: 14,
-                ),
-                Text(
-                  title,
-                  textAlign:
-                      TextAlign.center,
-                  style:
-                      const TextStyle(
-                    fontSize: 20,
-                    fontWeight:
-                        FontWeight.w900,
-                  ),
-                ),
-                const SizedBox(
-                  height: 8,
-                ),
-                Text(
-                  message,
-                  textAlign:
-                      TextAlign.center,
-                  style: TextStyle(
-                    color: Colors
-                        .grey.shade700,
-                    height: 1.35,
-                  ),
-                ),
-              ],
+            const SizedBox(height: 5),
+            Text(
+              message,
+              textAlign: TextAlign.center,
+              style: TextStyle(color: Colors.grey.shade700),
             ),
-          ),
+          ],
         ),
       ),
     );
