@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "993981240325",
+    "project_id": "rd-online-shop-d7c72",
+    "storage_bucket": "rd-online-shop-d7c72.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:993981240325:android:a48be8aab42152df42b86c",
+        "android_client_info": {
+          "package_name": "com.example.rd_online_shop_new"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAB5jsBZ6FbN6eQaCyp7zJ_Y8fIgGqgGr8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

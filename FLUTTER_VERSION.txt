@@ -1,0 +1,8 @@
+RD Online Shop stabilized Flutter toolchain
+
+Flutter: 3.44.4 stable
+Dart: 3.12.x (3.12.2 used during the successful Windows compatibility work)
+
+Important: Do not run this source with another Flutter SDK and then reuse generated
+Windows/iOS/macOS build/ephemeral files. Generated files must be recreated by the
+same Flutter SDK used for that build machine.

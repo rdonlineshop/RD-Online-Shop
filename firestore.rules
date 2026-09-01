@@ -1,0 +1,669 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function adminData() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && (
+          request.auth.uid == 'sy7uYYhHSDaukxkqeAKcSQ0L4rP2'
+          || (
+            exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+            && adminData().isActive == true
+            && adminData().role in ['admin', 'superAdmin']
+          )
+        );
+    }
+
+    function sellerData() {
+      return get(/databases/$(database)/documents/sellers/$(request.auth.uid)).data;
+    }
+
+    function isActiveSeller() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/sellers/$(request.auth.uid))
+        && sellerData().isActive == true
+        && sellerData().role == 'seller';
+    }
+
+    function customerData() {
+      return get(/databases/$(database)/documents/customers/$(request.auth.uid)).data;
+    }
+
+    function hasCustomerSession() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/customers/$(request.auth.uid))
+        && customerData().isActive == true
+        && customerData().role == 'customer'
+        && customerData().customerId is string;
+    }
+
+    function driverData() {
+      return get(/databases/$(database)/documents/delivery_persons/$(request.auth.uid)).data;
+    }
+
+    function isActiveDriver() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/delivery_persons/$(request.auth.uid))
+        && driverData().isActive == true
+        && driverData().isApproved == true
+        && driverData().role == 'delivery_person';
+    }
+
+    function rideDriverData() {
+      return get(/databases/$(database)/documents/ride_drivers/$(request.auth.uid)).data;
+    }
+
+    function isActiveRideDriver() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/ride_drivers/$(request.auth.uid))
+        && rideDriverData().isActive == true
+        && rideDriverData().isApproved == true
+        && rideDriverData().drivingLicenseVerified == true
+        && rideDriverData().role == 'ride_driver';
+    }
+
+    match /admins/{adminId} {
+      allow read: if signedIn() && request.auth.uid == adminId;
+      allow read: if isAdmin();
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /customers/{authUid} {
+      allow read: if isAdmin()
+        || (signedIn() && request.auth.uid == authUid);
+
+      allow create: if signedIn()
+        && request.auth.uid == authUid
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.customerId is string
+        && request.resource.data.role == 'customer'
+        && request.resource.data.isActive == true;
+
+      allow update: if isAdmin()
+        || (signedIn()
+          && request.auth.uid == authUid
+          && request.resource.data.authUid == request.auth.uid
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive)
+        || (signedIn()
+          && request.auth.uid == authUid
+          && request.resource.data.authUid == request.auth.uid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive
+          && request.resource.data.linkedViaCode is string
+          && exists(
+            /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+          )
+          && get(
+            /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+          ).data.used == true
+          && get(
+            /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+          ).data.usedByUid == request.auth.uid
+          && get(
+            /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+          ).data.expiresAt > request.time
+          && request.resource.data.customerId == get(
+            /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+          ).data.customerId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'customerId',
+            'linkedViaCode',
+            'linkedAt',
+            'updatedAt'
+          ]));
+
+      allow delete: if isAdmin();
+    }
+
+    match /customer_device_links/{linkCode} {
+      allow get: if signedIn();
+      allow list: if false;
+
+      allow create: if (
+          (
+            hasCustomerSession()
+            && request.resource.data.customerId == customerData().customerId
+            && request.resource.data.createdByUid == request.auth.uid
+          )
+          || (
+            isAdmin()
+            && request.resource.data.customerId is string
+            && request.resource.data.customerId.size() > 0
+            && request.resource.data.createdByUid == request.auth.uid
+          )
+        )
+        && request.resource.data.used == false
+        && request.resource.data.expiresAt is timestamp
+        && request.resource.data.expiresAt > request.time
+        && request.resource.data.keys().hasOnly([
+          'customerId',
+          'createdByUid',
+          'createdAt',
+          'expiresAt',
+          'used'
+        ]);
+
+      allow update: if signedIn()
+        && resource.data.used == false
+        && resource.data.expiresAt > request.time
+        && request.resource.data.used == true
+        && request.resource.data.usedByUid == request.auth.uid
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.createdByUid == resource.data.createdByUid
+        && request.resource.data.expiresAt == resource.data.expiresAt
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'used',
+          'usedByUid',
+          'usedAt'
+        ]);
+
+      allow delete: if isAdmin();
+    }
+
+    match /sellers/{sellerId} {
+      // Customer pages and tracking need seller shop/contact/location data.
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && request.auth.uid == sellerId
+        && request.resource.data.sellerId == request.auth.uid
+        && request.resource.data.role == 'seller'
+        && request.resource.data.isActive == false;
+
+      allow update: if isAdmin()
+        || (signedIn()
+          && request.auth.uid == sellerId
+          && request.resource.data.sellerId == resource.data.sellerId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive);
+
+      allow delete: if isAdmin();
+    }
+
+    match /delivery_persons/{driverId} {
+      allow read: if isAdmin()
+        || (signedIn() && request.auth.uid == driverId)
+        || (isActiveSeller()
+          && resource.data.isActive == true
+          && resource.data.isApproved == true);
+
+      allow create: if signedIn()
+        && request.auth.uid == driverId
+        && request.resource.data.deliveryPersonId == request.auth.uid
+        && request.resource.data.role == 'delivery_person'
+        && request.resource.data.isApproved == false;
+
+      allow update: if isAdmin()
+        || (signedIn()
+          && request.auth.uid == driverId
+          && request.resource.data.deliveryPersonId == resource.data.deliveryPersonId
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive
+          && request.resource.data.isApproved == resource.data.isApproved
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'isOnline',
+            'updatedAt',
+            'latitude',
+            'longitude',
+            'locationUpdatedAt',
+            'currentOrderId'
+          ]));
+
+      allow delete: if isAdmin();
+    }
+
+
+    match /ride_drivers/{rideDriverId} {
+      allow read: if isAdmin()
+        || (signedIn() && request.auth.uid == rideDriverId)
+        || (signedIn()
+          && resource.data.isActive == true
+          && resource.data.isOnline == true);
+
+      allow create: if signedIn()
+        && request.auth.uid == rideDriverId
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.role == 'ride_driver'
+        && request.resource.data.isActive == false
+        && request.resource.data.isApproved == false
+        && request.resource.data.isOnline == false
+        && request.resource.data.drivingLicenseNumber is string
+        && request.resource.data.drivingLicenseNumber.size() > 0
+        && request.resource.data.drivingLicenseExpiry is string
+        && request.resource.data.drivingLicenseExpiry.size() > 0
+        && request.resource.data.drivingLicenseFrontUrl is string
+        && request.resource.data.drivingLicenseFrontUrl.size() > 0
+        && request.resource.data.drivingLicenseBackUrl is string
+        && request.resource.data.drivingLicenseBackUrl.size() > 0
+        && request.resource.data.drivingLicenseVerified == false;
+
+      allow update: if isAdmin()
+        || (signedIn()
+          && request.auth.uid == rideDriverId
+          && resource.data.driverId == request.auth.uid
+          && resource.data.authUid == request.auth.uid
+          && resource.data.role == 'ride_driver'
+          && request.resource.data.driverId == resource.data.driverId
+          && request.resource.data.authUid == resource.data.authUid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive
+          && request.resource.data.isApproved == resource.data.isApproved
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'name',
+            'phone',
+            'vehicleType',
+            'vehicleNumber',
+            'photoUrl',
+            'isOnline',
+            'latitude',
+            'longitude',
+            'locationUpdatedAt',
+            'currentRideRequestId',
+            'updatedAt'
+          ]));
+
+      allow delete: if isAdmin();
+    }
+
+
+    match /ride_requests/{rideRequestId} {
+      function rideDriverOwnsRequest() {
+        return isActiveRideDriver()
+          && resource.data.driverId == request.auth.uid;
+      }
+
+      allow read: if isAdmin()
+        || (signedIn()
+          && resource.data.customerAuthUid == request.auth.uid)
+        || rideDriverOwnsRequest();
+
+      allow create: if signedIn()
+        && request.resource.data.rideRequestId == rideRequestId
+        && request.resource.data.customerAuthUid == request.auth.uid
+        && request.resource.data.customerId is string
+        && request.resource.data.customerId.size() > 0
+        && request.resource.data.driverId is string
+        && request.resource.data.driverId.size() > 0
+        && request.resource.data.vehicleType is string
+        && request.resource.data.vehicleType.size() > 0
+        && request.resource.data.pickupAddress is string
+        && request.resource.data.pickupAddress.size() > 0
+        && request.resource.data.destinationAddress is string
+        && request.resource.data.destinationAddress.size() > 0
+        && request.resource.data.status == 'pending'
+        && request.resource.data.requestType == 'ride_now'
+        && request.resource.data.driverResponse == 'waiting';
+
+      allow update: if isAdmin()
+        || (rideDriverOwnsRequest()
+          && resource.data.status == 'pending'
+          && resource.data.driverResponse == 'waiting'
+          && request.resource.data.driverId == resource.data.driverId
+          && request.resource.data.customerAuthUid == resource.data.customerAuthUid
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'driverResponse',
+            'acceptedAt',
+            'rejectedAt',
+            'updatedAt'
+          ])
+          && (
+            (request.resource.data.status == 'accepted'
+              && request.resource.data.driverResponse == 'accepted')
+            || (request.resource.data.status == 'rejected'
+              && request.resource.data.driverResponse == 'rejected')
+          ));
+
+      allow delete: if isAdmin();
+    }
+
+    match /products/{productId} {
+      allow read: if true;
+
+      allow create: if isAdmin()
+        || (isActiveSeller()
+          && request.resource.data.sellerId == request.auth.uid);
+
+      allow update: if isAdmin()
+        || (isActiveSeller()
+          && resource.data.sellerId == request.auth.uid
+          && request.resource.data.sellerId == request.auth.uid);
+
+      allow delete: if isAdmin()
+        || (isActiveSeller()
+          && resource.data.sellerId == request.auth.uid);
+    }
+
+    match /orders/{orderId} {
+      function customerOwnsOrder() {
+        return hasCustomerSession()
+          && resource.data.customerId == customerData().customerId;
+      }
+
+      function customerOwnsNewOrder() {
+        return hasCustomerSession()
+          && request.resource.data.customerId == customerData().customerId;
+      }
+
+      function sellerOwnsOrder() {
+        return isActiveSeller()
+          && resource.data.sellerIds is list
+          && request.auth.uid in resource.data.sellerIds;
+      }
+
+      function driverOwnsOrder() {
+        return isActiveDriver()
+          && resource.data.driverId is string
+          && resource.data.driverId == request.auth.uid;
+      }
+
+      // Keep Admin read isolated from customer/seller/driver checks.
+      // Some older orders may not contain sellerIds/driverId; evaluating those
+      // role checks in the same expression can deny an otherwise valid Admin
+      // collection query. Admin access is therefore its own allow rule.
+      allow read: if isAdmin();
+
+      allow read: if customerOwnsOrder()
+        || sellerOwnsOrder()
+        || driverOwnsOrder();
+
+      allow create: if isAdmin()
+        || (customerOwnsNewOrder()
+          && request.resource.data.status == 'Pending'
+          && request.resource.data.driverId == '');
+
+      allow update: if isAdmin();
+
+      allow update: if customerOwnsOrder()
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'customerLat',
+          'customerLng',
+          'customerAddress',
+          'address',
+          'customerLocationUpdatedAt',
+          'updatedAt'
+        ]);
+
+      // Secure recovery without reading somebody else's order first.
+      // The caller must know both the Order ID and the original phone number.
+      //
+      // New orders use recoveryPhoneKey. Older RD orders may only have
+      // phone / customerPhone / mobile, so those legacy fields are accepted
+      // as recovery proof as well.
+      function recoveryProofMatches() {
+        return request.resource.data.recoveryProof is string
+          && request.resource.data.recoveryProof.size() >= 6
+          && (
+            (
+              'recoveryPhoneKey' in resource.data
+              && resource.data.recoveryPhoneKey is string
+              && request.resource.data.recoveryProof
+                == resource.data.recoveryPhoneKey
+            )
+            || (
+              'recoveryProof' in resource.data
+              && resource.data.recoveryProof is string
+              && request.resource.data.recoveryProof
+                == resource.data.recoveryProof
+            )
+            || (
+              'phone' in resource.data
+              && resource.data.phone is string
+              && request.resource.data.recoveryProof
+                == resource.data.phone
+            )
+            || (
+              'customerPhone' in resource.data
+              && resource.data.customerPhone is string
+              && request.resource.data.recoveryProof
+                == resource.data.customerPhone
+            )
+            || (
+              'mobile' in resource.data
+              && resource.data.mobile is string
+              && request.resource.data.recoveryProof
+                == resource.data.mobile
+            )
+          );
+      }
+
+      allow update: if hasCustomerSession()
+        && recoveryProofMatches()
+        && request.resource.data.customerId == customerData().customerId
+        && request.resource.data.recoveryPhoneKey
+          == request.resource.data.recoveryProof
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'customerId',
+          'recoveryProof',
+          'recoveryPhoneKey',
+          'recoveredAt',
+          'updatedAt'
+        ]);
+
+      // Merge orders already owned by the new device into the linked customer.
+      allow update: if customerOwnsOrder()
+        && request.resource.data.linkedViaCode is string
+        && exists(
+          /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+        )
+        && get(
+          /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+        ).data.used == true
+        && get(
+          /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+        ).data.usedByUid == request.auth.uid
+        && get(
+          /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+        ).data.expiresAt > request.time
+        && request.resource.data.customerId == get(
+          /databases/$(database)/documents/customer_device_links/$(request.resource.data.linkedViaCode)
+        ).data.customerId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'customerId',
+          'linkedViaCode',
+          'linkedAt',
+          'updatedAt'
+        ]);
+
+      allow update: if sellerOwnsOrder()
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.sellerIds == resource.data.sellerIds
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'trackingStatus',
+          'updatedAt',
+          'deliveryStartedAt',
+          'deliveredAt',
+          'driverId',
+          'driverName',
+          'driverPhone',
+          'driverEmail',
+          'trackingEnabled',
+          'deliveryAssignedAt',
+          'driverLat',
+          'driverLng',
+          'driverLocationUpdatedAt'
+        ]);
+
+      allow update: if driverOwnsOrder()
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.sellerIds == resource.data.sellerIds
+        && request.resource.data.driverId == resource.data.driverId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'trackingStatus',
+          'updatedAt',
+          'deliveryStartedAt',
+          'deliveredAt',
+          'driverLat',
+          'driverLng',
+          'driverLocationUpdatedAt',
+          'trackingEnabled',
+          'deliveryOtp',
+          'deliveryOtpCreatedAt',
+          'deliveryOtpVerified',
+          'deliveryOtpVerifiedAt',
+          'deliveryConfirmationMethod',
+          'deliveredByDriverId',
+          'deliveredByDriverName',
+          'deliveredByDriverPhone',
+          'deliveryConfirmedLat',
+          'deliveryConfirmedLng'
+        ])
+        && (request.resource.data.status != 'Delivered'
+          || (request.resource.data.deliveryOtpVerified == true
+            && request.resource.data.deliveredByDriverId == request.auth.uid));
+
+      allow delete: if isAdmin();
+    }
+
+
+    match /reviews/{reviewId} {
+      function reviewOrderExists() {
+        return request.resource.data.orderId is string
+          && exists(
+            /databases/$(database)/documents/orders/$(request.resource.data.orderId)
+          );
+      }
+
+      function reviewOrderData() {
+        return get(
+          /databases/$(database)/documents/orders/$(request.resource.data.orderId)
+        ).data;
+      }
+
+      function validReviewContent() {
+        return request.resource.data.rating is int
+          && request.resource.data.rating >= 1
+          && request.resource.data.rating <= 5
+          && request.resource.data.comment is string
+          && request.resource.data.comment.size() > 0
+          && request.resource.data.comment.size() <= 500;
+      }
+
+      // Admin can read all reviews.
+      allow read: if isAdmin();
+
+      // Active seller can read only reviews belonging to that seller.
+      allow read: if isActiveSeller()
+        && resource.data.sellerId is string
+        && resource.data.sellerId == request.auth.uid;
+
+      // Customer can read only their own submitted review.
+      allow read: if hasCustomerSession()
+        && resource.data.customerId is string
+        && resource.data.customerId == customerData().customerId;
+
+      // Customer can create a review only for an order that:
+      // 1) belongs to this customer,
+      // 2) is Delivered,
+      // 3) contains this seller.
+      //
+      // Keep create validation intentionally focused on ownership/content.
+      // Client metadata such as timestamps/product labels is not used as an
+      // authorization condition, which avoids false permission-denied errors.
+      allow create: if hasCustomerSession()
+        && request.resource.data.reviewId == reviewId
+        && request.resource.data.customerId is string
+        && request.resource.data.customerId == customerData().customerId
+        && request.resource.data.sellerId is string
+        && request.resource.data.sellerId.size() > 0
+        && validReviewContent()
+        && reviewOrderExists()
+        && reviewOrderData().customerId == customerData().customerId
+        && reviewOrderData().status == 'Delivered'
+        && reviewOrderData().sellerIds is list
+        && request.resource.data.sellerId in reviewOrderData().sellerIds;
+
+      // Customer may edit only rating/comment/time on their own review.
+      // Order/customer/seller/product identity cannot be transferred.
+      allow update: if hasCustomerSession()
+        && resource.data.customerId == customerData().customerId
+        && request.resource.data.reviewId == resource.data.reviewId
+        && request.resource.data.orderId == resource.data.orderId
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.sellerId == resource.data.sellerId
+        && request.resource.data.productId == resource.data.productId
+        && request.resource.data.productName == resource.data.productName
+        && validReviewContent()
+        && reviewOrderExists()
+        && reviewOrderData().customerId == customerData().customerId
+        && reviewOrderData().status == 'Delivered'
+        && reviewOrderData().sellerIds is list
+        && request.resource.data.sellerId in reviewOrderData().sellerIds
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'rating',
+          'comment',
+          'updatedAt'
+        ]);
+
+      // Admin moderation only.
+      allow delete: if isAdmin();
+    }
+
+
+    // ============================================================
+    // ADMIN NOTIFICATIONS
+    // ============================================================
+    //
+    // audience values:
+    // - customers : all customers
+    // - sellers   : all sellers
+    // - both      : all customers + all sellers
+    // - customer  : one customer (targetCustomerId)
+    // - seller    : one seller (targetSellerId)
+    //
+    // Only Admin can create/update/delete notifications.
+    // Customers/Sellers can only read notifications meant for them.
+    match /admin_notifications/{notificationId} {
+      function customerCanReadNotification() {
+        return hasCustomerSession()
+          && resource.data.isActive == true
+          && (
+            resource.data.audience in ['customers', 'both']
+            || (
+              resource.data.audience == 'customer'
+              && resource.data.targetCustomerId is string
+              && resource.data.targetCustomerId == customerData().customerId
+            )
+          );
+      }
+
+      function sellerCanReadNotification() {
+        return isActiveSeller()
+          && resource.data.isActive == true
+          && (
+            resource.data.audience in ['sellers', 'both']
+            || (
+              resource.data.audience == 'seller'
+              && resource.data.targetSellerId is string
+              && resource.data.targetSellerId == request.auth.uid
+            )
+          );
+      }
+
+      allow read: if isAdmin()
+        || customerCanReadNotification()
+        || sellerCanReadNotification();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
