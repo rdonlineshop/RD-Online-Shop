@@ -193,6 +193,8 @@ class RideLocationInputService {
       'q',
       'destination',
       'origin',
+      'daddr',
+      'saddr',
     ]) {
       final String? value =
           uri.queryParameters[key]
@@ -296,6 +298,8 @@ class RideLocationInputService {
       'center',
       'destination',
       'origin',
+      'daddr',
+      'saddr',
     ]) {
       final String? value =
           uri.queryParameters[key];

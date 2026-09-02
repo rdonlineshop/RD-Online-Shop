@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
@@ -1221,6 +1222,12 @@ class _RideDriverLiveRouteMapState
   String _primaryInstruction = 'Route ready';
   String _secondaryInstruction = '';
   String _primaryManeuver = 'straight';
+  double? _nextTurnDistanceMeters;
+
+  bool _mapReady = false;
+  bool _followDriver = true;
+  bool _headingUp = true;
+  double _driverHeading = 0;
 
   double? _asDouble(dynamic value) {
     if (value is num) {
@@ -1230,6 +1237,33 @@ class _RideDriverLiveRouteMapState
     return double.tryParse(
       value?.toString().trim() ?? '',
     );
+  }
+
+  double _bearingBetween(
+    LatLng from,
+    LatLng to,
+  ) {
+    final double fromLat =
+        from.latitude * math.pi / 180;
+    final double toLat =
+        to.latitude * math.pi / 180;
+    final double deltaLng =
+        (to.longitude - from.longitude) *
+            math.pi /
+            180;
+
+    final double y =
+        math.sin(deltaLng) * math.cos(toLat);
+    final double x =
+        math.cos(fromLat) * math.sin(toLat) -
+            math.sin(fromLat) *
+                math.cos(toLat) *
+                math.cos(deltaLng);
+
+    final double degrees =
+        math.atan2(y, x) * 180 / math.pi;
+
+    return (degrees + 360) % 360;
   }
 
   LatLng? _latLngFrom(
@@ -1371,20 +1405,156 @@ class _RideDriverLiveRouteMapState
           return;
         }
 
+        final LatLng? previousLocation =
+            _driverLocation;
+        double? movementHeading;
+
+        if (previousLocation != null) {
+          final double movedMeters =
+              Geolocator.distanceBetween(
+            previousLocation.latitude,
+            previousLocation.longitude,
+            nextLocation.latitude,
+            nextLocation.longitude,
+          );
+
+          if (movedMeters >= 3) {
+            movementHeading = _bearingBetween(
+              previousLocation,
+              nextLocation,
+            );
+          }
+        }
+
         if (mounted) {
           setState(() {
             _driverLocation = nextLocation;
+            if (movementHeading != null) {
+              _driverHeading = movementHeading;
+            }
           });
         } else {
           _driverLocation = nextLocation;
+          if (movementHeading != null) {
+            _driverHeading = movementHeading;
+          }
         }
 
+        _scheduleFollowDriverCamera();
         unawaited(_refreshRoadRoute());
       },
       onError: (_) {
         // Driver GPS errors are shown by the parent page.
       },
     );
+  }
+
+  void _scheduleFollowDriverCamera() {
+    if (!_mapReady || !_followDriver) {
+      return;
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted || !_mapReady || !_followDriver) {
+        return;
+      }
+
+      final LatLng? driver = _driverLocation;
+      if (driver == null) {
+        return;
+      }
+
+      final MapCamera camera = _mapController.camera;
+      final double zoom =
+          camera.zoom < 16 ? 16 : camera.zoom;
+      final double rotation =
+          _headingUp ? _driverHeading : 0;
+
+      _mapController.moveAndRotate(
+        driver,
+        zoom,
+        rotation,
+      );
+    });
+  }
+
+  void _enableFollowDriver() {
+    if (!_followDriver) {
+      setState(() {
+        _followDriver = true;
+      });
+    }
+
+    _scheduleFollowDriverCamera();
+  }
+
+  void _toggleHeadingUp() {
+    setState(() {
+      _headingUp = !_headingUp;
+    });
+
+    if (_followDriver) {
+      _scheduleFollowDriverCamera();
+    } else {
+      _mapController.rotate(
+        _headingUp ? _driverHeading : 0,
+      );
+    }
+  }
+
+  void _fitWholeRoute() {
+    final List<LatLng> points =
+        _roadRoute.isNotEmpty
+            ? _roadRoute
+            : <LatLng>[
+                if (_driverLocation != null)
+                  _driverLocation!,
+                if (_pickup != null) _pickup!,
+                if (_destination != null)
+                  _destination!,
+              ];
+
+    if (points.isEmpty) {
+      return;
+    }
+
+    if (_followDriver) {
+      setState(() {
+        _followDriver = false;
+      });
+    }
+
+    if (points.length == 1) {
+      _mapController.moveAndRotate(
+        points.first,
+        16,
+        0,
+      );
+      return;
+    }
+
+    _mapController.fitCamera(
+      CameraFit.coordinates(
+        coordinates: points,
+        padding: const EdgeInsets.all(54),
+      ),
+    );
+  }
+
+  String _formatTurnDistance(
+    double? meters,
+  ) {
+    if (meters == null ||
+        !meters.isFinite ||
+        meters <= 0) {
+      return '';
+    }
+
+    if (meters < 950) {
+      return '${meters.round()} m';
+    }
+
+    return '${(meters / 1000).toStringAsFixed(1)} km';
   }
 
   bool _sameTarget(
@@ -1796,6 +1966,7 @@ class _RideDriverLiveRouteMapState
       String secondaryInstruction = '';
       String primaryManeuver =
           'straight';
+      double? nextTurnDistanceMeters;
 
       final dynamic legsRaw =
           firstRoute['legs'];
@@ -1832,6 +2003,10 @@ class _RideDriverLiveRouteMapState
             primaryManeuver =
                 _maneuverForStep(
               navigationSteps.first,
+            );
+            nextTurnDistanceMeters =
+                _asDouble(
+              navigationSteps.first['distance'],
             );
           }
 
@@ -1871,6 +2046,8 @@ class _RideDriverLiveRouteMapState
             secondaryInstruction;
         _primaryManeuver =
             primaryManeuver;
+        _nextTurnDistanceMeters =
+            nextTurnDistanceMeters;
 
         _routeError = null;
       });
@@ -1911,19 +2088,7 @@ class _RideDriverLiveRouteMapState
   }
 
   void _recenterOnDriver() {
-    final LatLng? driver = _driverLocation;
-
-    if (driver == null) {
-      return;
-    }
-
-    final double currentZoom =
-        _mapController.camera.zoom;
-
-    _mapController.move(
-      driver,
-      currentZoom < 15 ? 15 : currentZoom,
-    );
+    _enableFollowDriver();
   }
 
   Future<void> _open3DNavigation() async {
@@ -2158,6 +2323,22 @@ class _RideDriverLiveRouteMapState
                     crossAxisAlignment:
                         CrossAxisAlignment.start,
                     children: <Widget>[
+                      if (_formatTurnDistance(
+                            _nextTurnDistanceMeters,
+                          ).isNotEmpty) ...<Widget>[
+                        Text(
+                          _formatTurnDistance(
+                            _nextTurnDistanceMeters,
+                          ),
+                          style: const TextStyle(
+                            color: Colors.white70,
+                            fontSize: 13,
+                            fontWeight:
+                                FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 2),
+                      ],
                       Text(
                         _primaryInstruction,
                         style: const TextStyle(
@@ -2209,6 +2390,20 @@ class _RideDriverLiveRouteMapState
                           const InteractionOptions(
                         flags: InteractiveFlag.all,
                       ),
+                      onMapReady: () {
+                        _mapReady = true;
+                        _scheduleFollowDriverCamera();
+                      },
+                      onPositionChanged: (
+                        MapCamera _,
+                        bool hasGesture,
+                      ) {
+                        if (hasGesture && _followDriver) {
+                          setState(() {
+                            _followDriver = false;
+                          });
+                        }
+                      },
                     ),
                     children: <Widget>[
                       TileLayer(
@@ -2304,9 +2499,31 @@ class _RideDriverLiveRouteMapState
                       ),
                       const SizedBox(height: 8),
                       _MapRoundButton(
-                        tooltip: 'Re-centre on driver',
-                        icon: Icons.my_location_rounded,
+                        tooltip: _followDriver
+                            ? 'Following driver'
+                            : 'Follow driver',
+                        icon: _followDriver
+                            ? Icons.gps_fixed_rounded
+                            : Icons.my_location_rounded,
                         onPressed: _recenterOnDriver,
+                        active: _followDriver,
+                      ),
+                      const SizedBox(height: 8),
+                      _MapRoundButton(
+                        tooltip: _headingUp
+                            ? 'Heading-up mode'
+                            : 'North-up mode',
+                        icon: _headingUp
+                            ? Icons.navigation_rounded
+                            : Icons.explore_rounded,
+                        onPressed: _toggleHeadingUp,
+                        active: _headingUp,
+                      ),
+                      const SizedBox(height: 8),
+                      _MapRoundButton(
+                        tooltip: 'Fit full route',
+                        icon: Icons.zoom_out_map_rounded,
+                        onPressed: _fitWholeRoute,
                       ),
                     ],
                   ),
@@ -2342,8 +2559,8 @@ class _RideDriverLiveRouteMapState
               12,
             ),
             child: Text(
-              'In-app map supports pinch/scroll zoom and drag. '
-              'For full 3D map, voice directions, lane guidance, and turn-by-turn navigation, open Google Maps.',
+              'In-app map supports auto-follow, heading-up / north-up, rotate, pinch/scroll zoom, drag, road route, and next-turn guidance. '
+              'Manual map movement pauses follow; tap the GPS button to resume. For true 3D/tilt, voice guidance, and lane guidance, open Google Maps.',
               textAlign: TextAlign.center,
               style: TextStyle(
                 color: Colors.grey.shade700,
@@ -2363,18 +2580,22 @@ class _MapRoundButton extends StatelessWidget {
     required this.tooltip,
     required this.icon,
     required this.onPressed,
+    this.active = false,
   });
 
   final String tooltip;
   final IconData icon;
   final VoidCallback onPressed;
+  final bool active;
 
   @override
   Widget build(BuildContext context) {
     return Tooltip(
       message: tooltip,
       child: Material(
-        color: Colors.white,
+        color: active
+            ? const Color(0xFFE3F2FD)
+            : Colors.white,
         elevation: 3,
         shape: const CircleBorder(),
         child: InkWell(

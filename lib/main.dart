@@ -9,6 +9,7 @@ import 'firebase_options.dart';
 import 'home_page.dart';
 import 'services/notification_service.dart';
 import 'services/platform_capabilities.dart';
+import 'services/ride_incoming_share_service.dart';
 
 @pragma('vm:entry-point')
 Future<void> firebaseMessagingBackgroundHandler(
@@ -25,6 +26,8 @@ Future<void> firebaseMessagingBackgroundHandler(
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  await RideIncomingShareService.instance.initialize();
 
   if (PlatformCapabilities.supportsPushNotifications) {
     FirebaseMessaging.onBackgroundMessage(

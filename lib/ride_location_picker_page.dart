@@ -1,9 +1,12 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 
+import 'services/ride_incoming_share_service.dart';
 import 'services/ride_location_input_service.dart';
 
 class RidePickedLocation {
@@ -16,6 +19,12 @@ class RidePickedLocation {
   final double latitude;
   final double longitude;
   final String sourceLabel;
+}
+
+enum _SharedImportAction {
+  received,
+  clipboard,
+  manual,
 }
 
 class RideLocationPickerPage extends StatefulWidget {
@@ -45,6 +54,10 @@ class _RideLocationPickerPageState
   final MapController _mapController = MapController();
   final RideLocationInputService _locationInputService =
       const RideLocationInputService();
+  final RideIncomingShareService _incomingShareService =
+      RideIncomingShareService.instance;
+
+  StreamSubscription<String>? _incomingShareSubscription;
 
   LatLng? _selectedLocation;
   LatLng? _currentLocation;
@@ -68,6 +81,30 @@ class _RideLocationPickerPageState
       );
     }
 
+    _incomingShareSubscription =
+        _incomingShareService.sharedTextStream.listen(
+      (String text) {
+        if (!mounted ||
+            ModalRoute.of(context)?.isCurrent != true) {
+          return;
+        }
+
+        if (_resolvingSharedLocation) {
+          _incomingShareService.keepPendingText(text);
+          return;
+        }
+
+        _incomingShareService.consumePendingText();
+
+        unawaited(
+          _resolveSharedText(
+            text,
+            fromIncomingShare: true,
+          ),
+        );
+      },
+    );
+
     WidgetsBinding.instance.addPostFrameCallback(
       (_) {
         if (_selectedLocation != null) {
@@ -81,7 +118,31 @@ class _RideLocationPickerPageState
             zoom: 12,
           );
         }
+
+        unawaited(
+          _consumePendingSharedLocation(),
+        );
       },
+    );
+  }
+
+  @override
+  void dispose() {
+    _incomingShareSubscription?.cancel();
+    super.dispose();
+  }
+
+  Future<void> _consumePendingSharedLocation() async {
+    final String? text =
+        _incomingShareService.consumePendingText();
+
+    if (text == null || text.trim().isEmpty) {
+      return;
+    }
+
+    await _resolveSharedText(
+      text,
+      fromIncomingShare: true,
     );
   }
 
@@ -283,15 +344,11 @@ class _RideLocationPickerPageState
   }
 
   Future<void> _typeSharedLocation() async {
-    final TextEditingController controller =
-        TextEditingController();
+    String typedValue = '';
 
-    final String? value =
-        await showDialog<String>(
+    final String? value = await showDialog<String>(
       context: context,
-      builder: (
-        BuildContext dialogContext,
-      ) {
+      builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text(
             'Add Shared GPS / Map Link',
@@ -299,34 +356,37 @@ class _RideLocationPickerPageState
           content: SizedBox(
             width: 520,
             child: TextField(
-              controller: controller,
               autofocus: true,
               minLines: 2,
               maxLines: 5,
-              decoration:
-                  const InputDecoration(
+              onChanged: (String value) {
+                typedValue = value;
+              },
+              onSubmitted: (String value) {
+                final String clean = value.trim();
+                if (clean.isNotEmpty) {
+                  Navigator.pop(dialogContext, clean);
+                }
+              },
+              decoration: const InputDecoration(
                 hintText:
                     'Paste 24.7136, 46.6753 or a Google Maps shared link',
-                border:
-                    OutlineInputBorder(),
+                border: OutlineInputBorder(),
               ),
             ),
           ),
           actions: <Widget>[
             TextButton(
-              onPressed: () {
-                Navigator.pop(
-                  dialogContext,
-                );
-              },
+              onPressed: () => Navigator.pop(dialogContext),
               child: const Text('Cancel'),
             ),
             FilledButton.icon(
               onPressed: () {
-                Navigator.pop(
-                  dialogContext,
-                  controller.text.trim(),
-                );
+                final String clean = typedValue.trim();
+                if (clean.isEmpty) {
+                  return;
+                }
+                Navigator.pop(dialogContext, clean);
               },
               icon: const Icon(
                 Icons.location_searching_rounded,
@@ -338,18 +398,17 @@ class _RideLocationPickerPageState
       },
     );
 
-    controller.dispose();
-
-    if (value == null || value.isEmpty) {
+    if (!mounted || value == null || value.trim().isEmpty) {
       return;
     }
 
-    await _resolveSharedText(value);
+    await _resolveSharedText(value.trim());
   }
 
   Future<void> _resolveSharedText(
-    String text,
-  ) async {
+    String text, {
+    bool fromIncomingShare = false,
+  }) async {
     if (_resolvingSharedLocation) {
       return;
     }
@@ -397,9 +456,11 @@ class _RideLocationPickerPageState
       );
 
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'Shared GPS location added.',
+            fromIncomingShare
+                ? 'Shared location received. Check the map, then tap Use This Location.'
+                : 'Shared GPS location added. Check the map, then confirm it.',
           ),
         ),
       );
@@ -409,6 +470,157 @@ class _RideLocationPickerPageState
           _resolvingSharedLocation = false;
         });
       }
+    }
+  }
+
+  Future<void> _openImportSharedLocationSheet() async {
+    final bool directShareAvailable =
+        _incomingShareService.supportsDirectShareTarget;
+
+    final _SharedImportAction? action =
+        await showModalBottomSheet<_SharedImportAction>(
+      context: context,
+      isScrollControlled: true,
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: EdgeInsets.fromLTRB(
+              18,
+              18,
+              18,
+              18 + MediaQuery.viewInsetsOf(sheetContext).bottom,
+            ),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    const CircleAvatar(
+                      child: Icon(
+                        Icons.share_location_rounded,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Text(
+                        'Import Shared Location',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                    IconButton(
+                      tooltip: 'Close',
+                      onPressed: () => Navigator.pop(sheetContext),
+                      icon: const Icon(Icons.close_rounded),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFF1565C0)
+                        .withValues(alpha: 0.08),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        directShareAvailable
+                            ? 'From WhatsApp, Messenger, Email, Instagram, or Google Maps: open the received location, tap Share, then choose RD Online Shop.'
+                            : 'From WhatsApp, Messenger, Email, Instagram, or Google Maps: copy the received map link, return here, then use Paste from Clipboard.',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w700,
+                          height: 1.35,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      const Wrap(
+                        spacing: 7,
+                        runSpacing: 7,
+                        children: <Widget>[
+                          Chip(label: Text('WhatsApp')),
+                          Chip(label: Text('Messenger')),
+                          Chip(label: Text('Email')),
+                          Chip(label: Text('Instagram')),
+                          Chip(label: Text('Google Maps')),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
+                if (_incomingShareService.pendingText != null) ...<Widget>[
+                  FilledButton.tonalIcon(
+                    onPressed: () => Navigator.pop(
+                      sheetContext,
+                      _SharedImportAction.received,
+                    ),
+                    icon: const Icon(Icons.move_to_inbox_rounded),
+                    label: const Text('Use Received Shared Location'),
+                  ),
+                  const SizedBox(height: 8),
+                ],
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.pop(
+                    sheetContext,
+                    _SharedImportAction.clipboard,
+                  ),
+                  icon: const Icon(Icons.content_paste_rounded),
+                  label: const Text('Paste from Clipboard'),
+                ),
+                const SizedBox(height: 8),
+                OutlinedButton.icon(
+                  onPressed: () => Navigator.pop(
+                    sheetContext,
+                    _SharedImportAction.manual,
+                  ),
+                  icon: const Icon(Icons.link_rounded),
+                  label: const Text('Enter Map Link / GPS'),
+                ),
+                const SizedBox(height: 10),
+                Text(
+                  'RD only reads the location/link you explicitly share or paste. It cannot read private chats or messages inside other apps.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    fontSize: 11.5,
+                    height: 1.3,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+
+    if (!mounted || action == null) {
+      return;
+    }
+
+    switch (action) {
+      case _SharedImportAction.received:
+        final String? pendingText =
+            _incomingShareService.consumePendingText();
+        if (pendingText == null || pendingText.trim().isEmpty) {
+          return;
+        }
+        await _resolveSharedText(
+          pendingText,
+          fromIncomingShare: true,
+        );
+        return;
+      case _SharedImportAction.clipboard:
+        await _pasteSharedLocation();
+        return;
+      case _SharedImportAction.manual:
+        await _typeSharedLocation();
+        return;
     }
   }
 
@@ -627,49 +839,37 @@ class _RideLocationPickerPageState
                   crossAxisAlignment:
                       CrossAxisAlignment.stretch,
                   children: <Widget>[
-                    Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: <Widget>[
-                        OutlinedButton.icon(
-                          onPressed:
-                              _resolvingSharedLocation
-                                  ? null
-                                  : _pasteSharedLocation,
-                          icon: const Icon(
-                            Icons
-                                .content_paste_rounded,
-                          ),
-                          label: const Text(
-                            'Paste Shared GPS',
-                          ),
+                    OutlinedButton.icon(
+                      onPressed:
+                          _resolvingSharedLocation
+                              ? null
+                              : _openImportSharedLocationSheet,
+                      icon: const Icon(
+                        Icons.share_location_rounded,
+                      ),
+                      label: Text(
+                        _resolvingSharedLocation
+                            ? 'Reading Shared Location...'
+                            : 'Import Shared Location',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
                         ),
-                        OutlinedButton.icon(
-                          onPressed:
-                              _resolvingSharedLocation
-                                  ? null
-                                  : _typeSharedLocation,
-                          icon: const Icon(
-                            Icons.link_rounded,
-                          ),
-                          label: const Text(
-                            'Enter Map Link / GPS',
-                          ),
-                        ),
-                      ],
+                      ),
                     ),
                     const SizedBox(height: 10),
                     FilledButton.icon(
-                      onPressed:
-                          _confirmSelection,
+                      onPressed: _selectedLocation == null
+                          ? null
+                          : _confirmSelection,
                       icon: const Icon(
                         Icons.check_rounded,
                       ),
-                      label: const Text(
-                        'Use This Location',
-                        style: TextStyle(
-                          fontWeight:
-                              FontWeight.w900,
+                      label: Text(
+                        _selectedLocation == null
+                            ? 'Select a Location First'
+                            : 'Use This Location',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
                         ),
                       ),
                     ),

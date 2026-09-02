@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:flutter/foundation.dart' as foundation;
@@ -8,6 +9,7 @@ import 'package:http/http.dart' as http;
 
 import 'nearby_drivers_page.dart';
 import 'ride_location_picker_page.dart';
+import 'services/ride_incoming_share_service.dart';
 import 'services/ride_location_input_service.dart';
 
 class RideBookingPage extends StatefulWidget {
@@ -35,11 +37,16 @@ class _RideBookingPageState extends State<RideBookingPage> {
   Geocoding? _geocoding;
   final RideLocationInputService _locationInputService =
       const RideLocationInputService();
+  final RideIncomingShareService _incomingShareService =
+      RideIncomingShareService.instance;
+
+  StreamSubscription<String>? _incomingShareSubscription;
 
   bool _isFindingDriver = false;
   bool _isGettingLocation = false;
   bool _isFindingPickup = false;
   bool _isFindingDestination = false;
+  bool _showingIncomingShareChooser = false;
   double? _pickupLatitude;
   double? _pickupLongitude;
   double? _destinationLatitude;
@@ -76,13 +83,219 @@ class _RideBookingPageState extends State<RideBookingPage> {
     if (_supportsNativeGeocoding) {
       _geocoding = Geocoding();
     }
+
+    _incomingShareSubscription =
+        _incomingShareService.sharedTextStream.listen(
+      (String text) {
+        if (!mounted ||
+            ModalRoute.of(context)?.isCurrent != true) {
+          return;
+        }
+
+        if (_showingIncomingShareChooser) {
+          _incomingShareService.keepPendingText(text);
+          return;
+        }
+
+        _incomingShareService.consumePendingText();
+        unawaited(_offerIncomingSharedLocation(text));
+      },
+    );
+
+    WidgetsBinding.instance.addPostFrameCallback(
+      (_) {
+        final String? pendingText =
+            _incomingShareService.consumePendingText();
+
+        if (pendingText == null ||
+            pendingText.trim().isEmpty) {
+          return;
+        }
+
+        unawaited(
+          _offerIncomingSharedLocation(pendingText),
+        );
+      },
+    );
   }
 
   @override
   void dispose() {
+    _incomingShareSubscription?.cancel();
     _pickupController.dispose();
     _destinationController.dispose();
     super.dispose();
+  }
+
+  Future<void> _offerIncomingSharedLocation(
+    String text,
+  ) async {
+    if (_showingIncomingShareChooser || !mounted) {
+      return;
+    }
+
+    _showingIncomingShareChooser = true;
+
+    try {
+      final bool? useAsPickup =
+          await showModalBottomSheet<bool>(
+        context: context,
+        builder: (BuildContext sheetContext) {
+          return SafeArea(
+            child: Padding(
+              padding: const EdgeInsets.all(18),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  const Row(
+                    children: <Widget>[
+                      CircleAvatar(
+                        child: Icon(
+                          Icons.share_location_rounded,
+                        ),
+                      ),
+                      SizedBox(width: 12),
+                      Expanded(
+                        child: Text(
+                          'Shared Location Received',
+                          style: TextStyle(
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  const Text(
+                    'Choose where to use the received location. RD will show it on the map before saving it.',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                      height: 1.35,
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  FilledButton.tonalIcon(
+                    onPressed: () =>
+                        Navigator.pop(sheetContext, true),
+                    icon: const Icon(Icons.my_location_rounded),
+                    label: const Text('Use as Pickup'),
+                  ),
+                  const SizedBox(height: 8),
+                  FilledButton.icon(
+                    onPressed: () =>
+                        Navigator.pop(sheetContext, false),
+                    icon: const Icon(Icons.location_on_rounded),
+                    label: const Text('Use as Destination'),
+                  ),
+                  const SizedBox(height: 8),
+                  TextButton(
+                    onPressed: () => Navigator.pop(sheetContext),
+                    child: const Text('Not Now'),
+                  ),
+                ],
+              ),
+            ),
+          );
+        },
+      );
+
+      if (useAsPickup == null || !mounted) {
+        _incomingShareService.keepPendingText(text);
+        return;
+      }
+
+      await _previewIncomingSharedLocation(
+        text,
+        pickup: useAsPickup,
+      );
+    } finally {
+      _showingIncomingShareChooser = false;
+    }
+  }
+
+  Future<void> _previewIncomingSharedLocation(
+    String text, {
+    required bool pickup,
+  }) async {
+    final RideSharedLocation? sharedLocation =
+        await _locationInputService.resolveSharedLocation(text);
+
+    if (sharedLocation == null) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'RD could not read GPS from that shared item. Copy the full map link and use Map / Shared GPS.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    final RidePickedLocation? result =
+        await Navigator.push<RidePickedLocation>(
+      context,
+      MaterialPageRoute<RidePickedLocation>(
+        builder: (_) => RideLocationPickerPage(
+          title: pickup
+              ? 'Confirm Shared Pickup'
+              : 'Confirm Shared Destination',
+          initialLatitude: sharedLocation.latitude,
+          initialLongitude: sharedLocation.longitude,
+        ),
+      ),
+    );
+
+    if (result == null || !mounted) {
+      return;
+    }
+
+    final String address =
+        await _readableAddressForCoordinates(
+      result.latitude,
+      result.longitude,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      if (pickup) {
+        _pickupLatitude = result.latitude;
+        _pickupLongitude = result.longitude;
+        _pickupController.text = address;
+      } else {
+        _destinationLatitude = result.latitude;
+        _destinationLongitude = result.longitude;
+        _destinationController.text = address;
+      }
+    });
+
+    if (pickup) {
+      _pickupFieldKey.currentState?.validate();
+    } else {
+      _destinationFieldKey.currentState?.validate();
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          pickup
+              ? 'Shared pickup confirmed.'
+              : 'Shared destination confirmed.',
+        ),
+      ),
+    );
   }
 
   Future<void> _findNearbyDriver() async {
