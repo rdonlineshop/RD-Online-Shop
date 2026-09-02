@@ -52,6 +52,15 @@ class _RideBookingPageState extends State<RideBookingPage> {
   double? _destinationLatitude;
   double? _destinationLongitude;
 
+  bool _isCalculatingFare = false;
+  double? _routeDistanceKm;
+  int? _routeDurationMinutes;
+  double? _estimatedFare;
+  bool _fareUsesRoadRoute = false;
+  String? _fareError;
+
+  static const String _fareCurrency = 'Rs.';
+
   bool get _supportsNativeGeocoding {
     if (foundation.kIsWeb) {
       return false;
@@ -287,6 +296,8 @@ class _RideBookingPageState extends State<RideBookingPage> {
       _destinationFieldKey.currentState?.validate();
     }
 
+    unawaited(_refreshFareEstimate());
+
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: Text(
@@ -296,6 +307,286 @@ class _RideBookingPageState extends State<RideBookingPage> {
         ),
       ),
     );
+  }
+
+  _RideFareRule get _fareRule {
+    switch (widget.vehicleType.trim()) {
+      case 'Bike':
+        return const _RideFareRule(
+          baseFare: 40,
+          perKm: 18,
+          minimumFare: 80,
+          fallbackAverageSpeedKmh: 30,
+        );
+      case 'Auto':
+        return const _RideFareRule(
+          baseFare: 60,
+          perKm: 25,
+          minimumFare: 120,
+          fallbackAverageSpeedKmh: 28,
+        );
+      case 'Taxi':
+        return const _RideFareRule(
+          baseFare: 100,
+          perKm: 35,
+          minimumFare: 180,
+          fallbackAverageSpeedKmh: 32,
+        );
+      case 'Car':
+        return const _RideFareRule(
+          baseFare: 120,
+          perKm: 40,
+          minimumFare: 220,
+          fallbackAverageSpeedKmh: 34,
+        );
+      case 'Jeep / SUV':
+        return const _RideFareRule(
+          baseFare: 180,
+          perKm: 55,
+          minimumFare: 300,
+          fallbackAverageSpeedKmh: 34,
+        );
+      case 'Van / Hiace':
+        return const _RideFareRule(
+          baseFare: 250,
+          perKm: 70,
+          minimumFare: 450,
+          fallbackAverageSpeedKmh: 32,
+        );
+      case 'Microbus':
+        return const _RideFareRule(
+          baseFare: 350,
+          perKm: 90,
+          minimumFare: 650,
+          fallbackAverageSpeedKmh: 30,
+        );
+      case 'Mini Bus':
+        return const _RideFareRule(
+          baseFare: 500,
+          perKm: 120,
+          minimumFare: 900,
+          fallbackAverageSpeedKmh: 28,
+        );
+      case 'Bus':
+        return const _RideFareRule(
+          baseFare: 700,
+          perKm: 150,
+          minimumFare: 1200,
+          fallbackAverageSpeedKmh: 27,
+        );
+      case 'Ambulance':
+        return const _RideFareRule(
+          baseFare: 300,
+          perKm: 75,
+          minimumFare: 500,
+          fallbackAverageSpeedKmh: 38,
+        );
+      case 'Pickup':
+        return const _RideFareRule(
+          baseFare: 350,
+          perKm: 85,
+          minimumFare: 600,
+          fallbackAverageSpeedKmh: 30,
+        );
+      case 'Truck':
+        return const _RideFareRule(
+          baseFare: 600,
+          perKm: 140,
+          minimumFare: 1000,
+          fallbackAverageSpeedKmh: 26,
+        );
+      default:
+        return const _RideFareRule(
+          baseFare: 120,
+          perKm: 40,
+          minimumFare: 220,
+          fallbackAverageSpeedKmh: 30,
+        );
+    }
+  }
+
+  void _clearFareEstimate() {
+    _routeDistanceKm = null;
+    _routeDurationMinutes = null;
+    _estimatedFare = null;
+    _fareUsesRoadRoute = false;
+    _fareError = null;
+  }
+
+  double _roundedFare(double amount) {
+    return (amount / 5).ceil() * 5.0;
+  }
+
+  double _fareForDistance(double distanceKm) {
+    final _RideFareRule rule = _fareRule;
+    final double raw = rule.baseFare + (distanceKm * rule.perKm);
+    final double withMinimum =
+        raw < rule.minimumFare ? rule.minimumFare : raw;
+    return _roundedFare(withMinimum);
+  }
+
+  Future<({double distanceKm, int durationMinutes, bool roadRoute})>
+      _loadTripMetrics({
+    required double pickupLatitude,
+    required double pickupLongitude,
+    required double destinationLatitude,
+    required double destinationLongitude,
+  }) async {
+    try {
+      final Uri uri = Uri.parse(
+        'https://router.project-osrm.org/'
+        'route/v1/driving/'
+        '$pickupLongitude,$pickupLatitude;'
+        '$destinationLongitude,$destinationLatitude'
+        '?overview=false&steps=false',
+      );
+
+      final Map<String, String> headers = <String, String>{
+        'Accept': 'application/json',
+      };
+
+      if (!foundation.kIsWeb) {
+        headers['User-Agent'] = 'RDOnlineShop/1.0';
+      }
+
+      final http.Response response = await http
+          .get(
+            uri,
+            headers: headers,
+          )
+          .timeout(
+            const Duration(seconds: 12),
+          );
+
+      if (response.statusCode == 200) {
+        final dynamic decoded = jsonDecode(response.body);
+
+        if (decoded is Map<String, dynamic>) {
+          final dynamic routes = decoded['routes'];
+
+          if (routes is List<dynamic> && routes.isNotEmpty) {
+            final dynamic firstRoute = routes.first;
+
+            if (firstRoute is Map<String, dynamic>) {
+              final double? distanceMeters = double.tryParse(
+                firstRoute['distance']?.toString() ?? '',
+              );
+              final double? durationSeconds = double.tryParse(
+                firstRoute['duration']?.toString() ?? '',
+              );
+
+              if (distanceMeters != null &&
+                  distanceMeters > 0 &&
+                  durationSeconds != null &&
+                  durationSeconds > 0) {
+                final int durationMinutes =
+                    (durationSeconds / 60).ceil();
+
+                return (
+                  distanceKm: distanceMeters / 1000,
+                  durationMinutes:
+                      durationMinutes < 1 ? 1 : durationMinutes,
+                  roadRoute: true,
+                );
+              }
+            }
+          }
+        }
+      }
+    } catch (_) {
+      // If road routing is temporarily unavailable (including browser CORS),
+      // keep fare preview usable with a clearly marked approximation.
+    }
+
+    final double directMeters = Geolocator.distanceBetween(
+      pickupLatitude,
+      pickupLongitude,
+      destinationLatitude,
+      destinationLongitude,
+    );
+
+    // Straight-line distance is normally shorter than road distance.
+    // This fallback is only used when the road-route service is unavailable.
+    final double approximateRoadKm = (directMeters / 1000) * 1.18;
+    final double averageSpeed = _fareRule.fallbackAverageSpeedKmh;
+    final int estimatedMinutes =
+        ((approximateRoadKm / averageSpeed) * 60).ceil();
+
+    return (
+      distanceKm: approximateRoadKm,
+      durationMinutes: estimatedMinutes < 1 ? 1 : estimatedMinutes,
+      roadRoute: false,
+    );
+  }
+
+  Future<void> _refreshFareEstimate() async {
+    if (_isCalculatingFare) {
+      return;
+    }
+
+    final double? pickupLatitude = _pickupLatitude;
+    final double? pickupLongitude = _pickupLongitude;
+    final double? destinationLatitude = _destinationLatitude;
+    final double? destinationLongitude = _destinationLongitude;
+
+    if (pickupLatitude == null ||
+        pickupLongitude == null ||
+        destinationLatitude == null ||
+        destinationLongitude == null) {
+      if (mounted) {
+        setState(_clearFareEstimate);
+      }
+      return;
+    }
+
+    setState(() {
+      _isCalculatingFare = true;
+      _fareError = null;
+    });
+
+    try {
+      final ({double distanceKm, int durationMinutes, bool roadRoute})
+          metrics = await _loadTripMetrics(
+        pickupLatitude: pickupLatitude,
+        pickupLongitude: pickupLongitude,
+        destinationLatitude: destinationLatitude,
+        destinationLongitude: destinationLongitude,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      // Do not apply an old async result if the customer changed a location.
+      if (_pickupLatitude != pickupLatitude ||
+          _pickupLongitude != pickupLongitude ||
+          _destinationLatitude != destinationLatitude ||
+          _destinationLongitude != destinationLongitude) {
+        return;
+      }
+
+      setState(() {
+        _routeDistanceKm = metrics.distanceKm;
+        _routeDurationMinutes = metrics.durationMinutes;
+        _estimatedFare = _fareForDistance(metrics.distanceKm);
+        _fareUsesRoadRoute = metrics.roadRoute;
+        _fareError = null;
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _fareError = error.toString();
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCalculatingFare = false;
+        });
+      }
+    }
   }
 
   Future<void> _findNearbyDriver() async {
@@ -331,6 +622,31 @@ class _RideBookingPageState extends State<RideBookingPage> {
       }
     }
 
+    if (_estimatedFare == null && !_isCalculatingFare) {
+      await _refreshFareEstimate();
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    final double? routeDistanceKm = _routeDistanceKm;
+    final int? routeDurationMinutes = _routeDurationMinutes;
+    final double? estimatedFare = _estimatedFare;
+
+    if (routeDistanceKm == null ||
+        routeDurationMinutes == null ||
+        estimatedFare == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Fare could not be prepared. Please tap Refresh Fare and try again.',
+          ),
+        ),
+      );
+      return;
+    }
+
     setState(() {
       _isFindingDriver = true;
     });
@@ -362,6 +678,11 @@ class _RideBookingPageState extends State<RideBookingPage> {
               _pickupController.text.trim(),
           destinationAddress:
               _destinationController.text.trim(),
+          routeDistanceKm: routeDistanceKm,
+          routeDurationMinutes: routeDurationMinutes,
+          estimatedFare: estimatedFare,
+          fareCurrency: _fareCurrency,
+          fareUsesRoadRoute: _fareUsesRoadRoute,
         ),
       ),
     );
@@ -476,6 +797,8 @@ class _RideBookingPageState extends State<RideBookingPage> {
 
       _pickupFieldKey.currentState
           ?.validate();
+
+      unawaited(_refreshFareEstimate());
 
       ScaffoldMessenger.of(context)
           .showSnackBar(
@@ -780,6 +1103,8 @@ class _RideBookingPageState extends State<RideBookingPage> {
       _pickupFieldKey.currentState
           ?.validate();
 
+      unawaited(_refreshFareEstimate());
+
       if (showSuccessMessage) {
         ScaffoldMessenger.of(context)
             .showSnackBar(
@@ -871,6 +1196,8 @@ class _RideBookingPageState extends State<RideBookingPage> {
 
       _destinationFieldKey.currentState
           ?.validate();
+
+      unawaited(_refreshFareEstimate());
 
       if (showSuccessMessage) {
         ScaffoldMessenger.of(context)
@@ -971,6 +1298,8 @@ class _RideBookingPageState extends State<RideBookingPage> {
       _destinationFieldKey.currentState
           ?.validate();
     }
+
+    unawaited(_refreshFareEstimate());
 
     ScaffoldMessenger.of(context)
         .showSnackBar(
@@ -1159,6 +1488,7 @@ class _RideBookingPageState extends State<RideBookingPage> {
                   setState(() {
                     _pickupLatitude = null;
                     _pickupLongitude = null;
+                    _clearFareEstimate();
                   });
                 }
               },
@@ -1279,6 +1609,7 @@ class _RideBookingPageState extends State<RideBookingPage> {
                         null;
                     _destinationLongitude =
                         null;
+                    _clearFareEstimate();
                   });
                 }
               },
@@ -1401,9 +1732,33 @@ class _RideBookingPageState extends State<RideBookingPage> {
             ),
             const Divider(height: 22),
             _summaryRow(
+              icon: Icons.route_rounded,
+              label: 'Distance',
+              value: _isCalculatingFare
+                  ? 'Calculating...'
+                  : _routeDistanceKm == null
+                      ? 'Set both locations'
+                      : '${_routeDistanceKm!.toStringAsFixed(1)} km${_fareUsesRoadRoute ? '' : ' approx.'}',
+            ),
+            const Divider(height: 22),
+            _summaryRow(
+              icon: Icons.timer_outlined,
+              label: 'Estimated time',
+              value: _isCalculatingFare
+                  ? 'Calculating...'
+                  : _routeDurationMinutes == null
+                      ? '--'
+                      : '${_routeDurationMinutes!} min',
+            ),
+            const Divider(height: 22),
+            _summaryRow(
               icon: Icons.payments_outlined,
-              label: 'Fare',
-              value: 'Calculated next',
+              label: 'Estimated Fare',
+              value: _isCalculatingFare
+                  ? 'Calculating...'
+                  : _estimatedFare == null
+                      ? '--'
+                      : '$_fareCurrency ${_estimatedFare!.toStringAsFixed(0)}',
             ),
             const Divider(height: 22),
             _summaryRow(
@@ -1427,6 +1782,44 @@ class _RideBookingPageState extends State<RideBookingPage> {
                 icon: Icons.location_on_rounded,
                 label: 'Destination',
                 value: 'Ready',
+              ),
+            ],
+            if (_pickupLatitude != null &&
+                _pickupLongitude != null &&
+                _destinationLatitude != null &&
+                _destinationLongitude != null) ...<Widget>[
+              const SizedBox(height: 14),
+              if (_fareError != null)
+                Text(
+                  'Fare service fallback is active. Distance and time may be approximate.',
+                  style: TextStyle(
+                    color: Colors.orange.shade800,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              const SizedBox(height: 6),
+              Text(
+                'Estimate: base $_fareCurrency ${_fareRule.baseFare.toStringAsFixed(0)} + '
+                '$_fareCurrency ${_fareRule.perKm.toStringAsFixed(0)}/km, '
+                'minimum $_fareCurrency ${_fareRule.minimumFare.toStringAsFixed(0)}. '
+                'These are development rates and can later be controlled from Admin.',
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontSize: 11.5,
+                  height: 1.35,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Align(
+                alignment: Alignment.centerRight,
+                child: TextButton.icon(
+                  onPressed: _isCalculatingFare
+                      ? null
+                      : _refreshFareEstimate,
+                  icon: const Icon(Icons.refresh_rounded),
+                  label: const Text('Refresh Fare'),
+                ),
               ),
             ],
           ],
@@ -1469,4 +1862,18 @@ class _RideBookingPageState extends State<RideBookingPage> {
       ],
     );
   }
+}
+
+class _RideFareRule {
+  const _RideFareRule({
+    required this.baseFare,
+    required this.perKm,
+    required this.minimumFare,
+    required this.fallbackAverageSpeedKmh,
+  });
+
+  final double baseFare;
+  final double perKm;
+  final double minimumFare;
+  final double fallbackAverageSpeedKmh;
 }

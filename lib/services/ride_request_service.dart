@@ -26,6 +26,11 @@ class RideRequestService {
     required String destinationAddress,
     required double destinationLatitude,
     required double destinationLongitude,
+    required double routeDistanceKm,
+    required int routeDurationMinutes,
+    required double estimatedFare,
+    required String currency,
+    required bool fareUsesRoadRoute,
   }) async {
     final User? user = _auth.currentUser;
 
@@ -40,6 +45,7 @@ class RideRequestService {
     final String cleanPickupAddress = pickupAddress.trim();
     final String cleanDestinationAddress =
         destinationAddress.trim();
+    final String cleanCurrency = currency.trim();
 
     if (cleanCustomerId.isEmpty) {
       throw ArgumentError(
@@ -62,6 +68,30 @@ class RideRequestService {
     if (cleanDestinationAddress.isEmpty) {
       throw ArgumentError(
         'destinationAddress cannot be empty.',
+      );
+    }
+
+    if (routeDistanceKm <= 0) {
+      throw ArgumentError(
+        'routeDistanceKm must be greater than zero.',
+      );
+    }
+
+    if (routeDurationMinutes <= 0) {
+      throw ArgumentError(
+        'routeDurationMinutes must be greater than zero.',
+      );
+    }
+
+    if (estimatedFare <= 0) {
+      throw ArgumentError(
+        'estimatedFare must be greater than zero.',
+      );
+    }
+
+    if (cleanCurrency.isEmpty) {
+      throw ArgumentError(
+        'currency cannot be empty.',
       );
     }
 
@@ -101,10 +131,16 @@ class RideRequestService {
         'requestType': 'ride_now',
         'driverResponse': 'waiting',
 
-        // Fare foundation
-        'estimatedFare': null,
+        // Route + fare snapshot from the customer booking screen.
+        // Keep this immutable estimate available to both customer and driver.
+        'routeDistanceKm': routeDistanceKm,
+        'routeDurationMinutes': routeDurationMinutes,
+        'estimatedFare': estimatedFare,
         'finalFare': null,
-        'currency': 'SAR',
+        'currency': cleanCurrency,
+        'fareUsesRoadRoute': fareUsesRoadRoute,
+        'fareEstimateSource':
+            fareUsesRoadRoute ? 'road_route' : 'fallback_approximation',
 
         // Tracking foundation
         'tripStartedAt': null,

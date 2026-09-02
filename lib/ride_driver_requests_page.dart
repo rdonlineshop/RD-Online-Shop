@@ -834,6 +834,25 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
             data['destinationAddress']?.toString().trim() ?? '';
         final String vehicleType =
             data['vehicleType']?.toString().trim() ?? '';
+        final double? estimatedFare = data['estimatedFare'] is num
+            ? (data['estimatedFare'] as num).toDouble()
+            : double.tryParse(
+                data['estimatedFare']?.toString().trim() ?? '',
+              );
+        final double? routeDistanceKm =
+            data['routeDistanceKm'] is num
+                ? (data['routeDistanceKm'] as num).toDouble()
+                : double.tryParse(
+                    data['routeDistanceKm']?.toString().trim() ?? '',
+                  );
+        final int? routeDurationMinutes =
+            data['routeDurationMinutes'] is num
+                ? (data['routeDurationMinutes'] as num).round()
+                : int.tryParse(
+                    data['routeDurationMinutes']?.toString().trim() ?? '',
+                  );
+        final String currency =
+            data['currency']?.toString().trim() ?? 'Rs.';
 
         return Card(
           elevation: 2,
@@ -892,6 +911,31 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                   label: 'Destination',
                   value: destination,
                 ),
+                if (routeDistanceKm != null) ...<Widget>[
+                  const Divider(height: 24),
+                  _locationRow(
+                    icon: Icons.route_rounded,
+                    label: 'Distance',
+                    value: '${routeDistanceKm.toStringAsFixed(1)} km',
+                  ),
+                ],
+                if (routeDurationMinutes != null) ...<Widget>[
+                  const Divider(height: 24),
+                  _locationRow(
+                    icon: Icons.timer_outlined,
+                    label: 'Estimated time',
+                    value: '$routeDurationMinutes min',
+                  ),
+                ],
+                if (estimatedFare != null) ...<Widget>[
+                  const Divider(height: 24),
+                  _locationRow(
+                    icon: Icons.payments_outlined,
+                    label: 'Estimated Fare',
+                    value:
+                        '$currency ${estimatedFare.toStringAsFixed(0)}',
+                  ),
+                ],
                 const SizedBox(height: 16),
                 _activeRideMap(data),
                 const SizedBox(height: 16),
@@ -2681,6 +2725,25 @@ class _RideRequestCard extends StatelessWidget {
         data['destinationAddress']?.toString().trim() ?? '';
     final String customerId =
         data['customerId']?.toString().trim() ?? '';
+    final double? estimatedFare = data['estimatedFare'] is num
+        ? (data['estimatedFare'] as num).toDouble()
+        : double.tryParse(
+            data['estimatedFare']?.toString().trim() ?? '',
+          );
+    final double? routeDistanceKm =
+        data['routeDistanceKm'] is num
+            ? (data['routeDistanceKm'] as num).toDouble()
+            : double.tryParse(
+                data['routeDistanceKm']?.toString().trim() ?? '',
+              );
+    final int? routeDurationMinutes =
+        data['routeDurationMinutes'] is num
+            ? (data['routeDurationMinutes'] as num).round()
+            : int.tryParse(
+                data['routeDurationMinutes']?.toString().trim() ?? '',
+              );
+    final String currency =
+        data['currency']?.toString().trim() ?? 'Rs.';
 
     return Card(
       elevation: 1.5,
@@ -2760,6 +2823,31 @@ class _RideRequestCard extends StatelessWidget {
               label: 'Destination',
               value: destinationAddress,
             ),
+            if (routeDistanceKm != null) ...<Widget>[
+              const Divider(height: 24),
+              _cardLocationRow(
+                icon: Icons.route_rounded,
+                label: 'Distance',
+                value: '${routeDistanceKm.toStringAsFixed(1)} km',
+              ),
+            ],
+            if (routeDurationMinutes != null) ...<Widget>[
+              const Divider(height: 24),
+              _cardLocationRow(
+                icon: Icons.timer_outlined,
+                label: 'Estimated time',
+                value: '$routeDurationMinutes min',
+              ),
+            ],
+            if (estimatedFare != null) ...<Widget>[
+              const Divider(height: 24),
+              _cardLocationRow(
+                icon: Icons.payments_outlined,
+                label: 'Estimated Fare',
+                value:
+                    '$currency ${estimatedFare.toStringAsFixed(0)}',
+              ),
+            ],
             const SizedBox(height: 16),
             Row(
               children: <Widget>[

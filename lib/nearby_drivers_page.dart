@@ -12,6 +12,11 @@ class NearbyDriversPage extends StatelessWidget {
     required this.destinationLongitude,
     required this.pickupAddress,
     required this.destinationAddress,
+    required this.routeDistanceKm,
+    required this.routeDurationMinutes,
+    required this.estimatedFare,
+    required this.fareCurrency,
+    required this.fareUsesRoadRoute,
     super.key,
   });
 
@@ -25,6 +30,12 @@ class NearbyDriversPage extends StatelessWidget {
 
   final String pickupAddress;
   final String destinationAddress;
+
+  final double routeDistanceKm;
+  final int routeDurationMinutes;
+  final double estimatedFare;
+  final String fareCurrency;
+  final bool fareUsesRoadRoute;
 
   @override
   Widget build(BuildContext context) {
@@ -263,6 +274,26 @@ class NearbyDriversPage extends StatelessWidget {
               label: 'Destination',
               value: destinationAddress,
             ),
+            const Divider(height: 24),
+            _tripInfoRow(
+              icon: Icons.route_rounded,
+              label: 'Distance',
+              value:
+                  '${routeDistanceKm.toStringAsFixed(1)} km${fareUsesRoadRoute ? '' : ' approx.'}',
+            ),
+            const Divider(height: 22),
+            _tripInfoRow(
+              icon: Icons.timer_outlined,
+              label: 'Estimated time',
+              value: '$routeDurationMinutes min',
+            ),
+            const Divider(height: 22),
+            _tripInfoRow(
+              icon: Icons.payments_outlined,
+              label: 'Estimated Fare',
+              value:
+                  '$fareCurrency ${estimatedFare.toStringAsFixed(0)}',
+            ),
           ],
         ),
       ),
@@ -303,6 +334,41 @@ class NearbyDriversPage extends StatelessWidget {
                 ),
               ),
             ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _tripInfoRow({
+    required IconData icon,
+    required String label,
+    required String value,
+  }) {
+    return Row(
+      children: <Widget>[
+        Icon(
+          icon,
+          color: const Color(0xFF1565C0),
+        ),
+        const SizedBox(width: 10),
+        Expanded(
+          child: Text(
+            label,
+            style: TextStyle(
+              color: Colors.grey.shade700,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+        ),
+        const SizedBox(width: 8),
+        Flexible(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: const TextStyle(
+              fontWeight: FontWeight.w900,
+            ),
           ),
         ),
       ],
@@ -445,6 +511,11 @@ class NearbyDriversPage extends StatelessWidget {
                     destinationLatitude,
                 destinationLongitude:
                     destinationLongitude,
+                routeDistanceKm: routeDistanceKm,
+                routeDurationMinutes: routeDurationMinutes,
+                estimatedFare: estimatedFare,
+                fareCurrency: fareCurrency,
+                fareUsesRoadRoute: fareUsesRoadRoute,
               ),
             ),
           );

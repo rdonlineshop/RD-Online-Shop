@@ -16,6 +16,11 @@ class RideRequestPage extends StatefulWidget {
     required this.pickupLongitude,
     required this.destinationLatitude,
     required this.destinationLongitude,
+    required this.routeDistanceKm,
+    required this.routeDurationMinutes,
+    required this.estimatedFare,
+    required this.fareCurrency,
+    required this.fareUsesRoadRoute,
     super.key,
   });
 
@@ -28,6 +33,12 @@ class RideRequestPage extends StatefulWidget {
   final double pickupLongitude;
   final double destinationLatitude;
   final double destinationLongitude;
+
+  final double routeDistanceKm;
+  final int routeDurationMinutes;
+  final double estimatedFare;
+  final String fareCurrency;
+  final bool fareUsesRoadRoute;
 
   @override
   State<RideRequestPage> createState() =>
@@ -70,6 +81,11 @@ class _RideRequestPageState extends State<RideRequestPage> {
         destinationAddress: destinationAddress,
         destinationLatitude: widget.destinationLatitude,
         destinationLongitude: widget.destinationLongitude,
+        routeDistanceKm: widget.routeDistanceKm,
+        routeDurationMinutes: widget.routeDurationMinutes,
+        estimatedFare: widget.estimatedFare,
+        currency: widget.fareCurrency,
+        fareUsesRoadRoute: widget.fareUsesRoadRoute,
       );
 
       if (!mounted) {
@@ -539,9 +555,23 @@ class _RideRequestPageState extends State<RideRequestPage> {
             ),
             const Divider(height: 22),
             _summaryRow(
+              icon: Icons.route_rounded,
+              label: 'Distance',
+              value:
+                  '${widget.routeDistanceKm.toStringAsFixed(1)} km${widget.fareUsesRoadRoute ? '' : ' approx.'}',
+            ),
+            const Divider(height: 22),
+            _summaryRow(
+              icon: Icons.timer_outlined,
+              label: 'Estimated time',
+              value: '${widget.routeDurationMinutes} min',
+            ),
+            const Divider(height: 22),
+            _summaryRow(
               icon: Icons.payments_outlined,
-              label: 'Fare',
-              value: 'Calculated next',
+              label: 'Estimated Fare',
+              value:
+                  '${widget.fareCurrency} ${widget.estimatedFare.toStringAsFixed(0)}',
             ),
             const Divider(height: 22),
             _summaryRow(
