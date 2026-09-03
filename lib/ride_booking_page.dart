@@ -11,6 +11,7 @@ import 'nearby_drivers_page.dart';
 import 'ride_location_picker_page.dart';
 import 'services/ride_incoming_share_service.dart';
 import 'services/ride_location_input_service.dart';
+import 'services/ride_fare_service.dart';
 
 class RideBookingPage extends StatefulWidget {
   const RideBookingPage({
@@ -39,6 +40,7 @@ class _RideBookingPageState extends State<RideBookingPage> {
       const RideLocationInputService();
   final RideIncomingShareService _incomingShareService =
       RideIncomingShareService.instance;
+  final RideFareService _fareService = RideFareService();
 
   StreamSubscription<String>? _incomingShareSubscription;
 
@@ -58,8 +60,12 @@ class _RideBookingPageState extends State<RideBookingPage> {
   double? _estimatedFare;
   bool _fareUsesRoadRoute = false;
   String? _fareError;
+  late RideFareRule _fareRule;
+  bool _fareSettingsLoading = true;
+  bool _fareSettingsUsingFallback = true;
+  String? _fareSettingsError;
 
-  static const String _fareCurrency = 'Rs.';
+  String get _fareCurrency => _fareRule.currency;
 
   bool get _supportsNativeGeocoding {
     if (foundation.kIsWeb) {
@@ -88,6 +94,8 @@ class _RideBookingPageState extends State<RideBookingPage> {
   @override
   void initState() {
     super.initState();
+    _fareRule = RideFareService.defaultRuleFor(widget.vehicleType);
+    unawaited(_loadFareSettings());
 
     if (_supportsNativeGeocoding) {
       _geocoding = Geocoding();
@@ -134,6 +142,36 @@ class _RideBookingPageState extends State<RideBookingPage> {
     _pickupController.dispose();
     _destinationController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadFareSettings() async {
+    try {
+      final RideFareRule rule =
+          await _fareService.loadFareRule(widget.vehicleType);
+      if (!mounted) return;
+
+      setState(() {
+        _fareRule = rule;
+        _fareSettingsLoading = false;
+        _fareSettingsUsingFallback = rule.isFallback;
+        _fareSettingsError = null;
+      });
+
+      if (_pickupLatitude != null &&
+          _pickupLongitude != null &&
+          _destinationLatitude != null &&
+          _destinationLongitude != null &&
+          rule.isActive) {
+        unawaited(_refreshFareEstimate());
+      }
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _fareSettingsLoading = false;
+        _fareSettingsUsingFallback = true;
+        _fareSettingsError = error.toString();
+      });
+    }
   }
 
   Future<void> _offerIncomingSharedLocation(
@@ -309,102 +347,6 @@ class _RideBookingPageState extends State<RideBookingPage> {
     );
   }
 
-  _RideFareRule get _fareRule {
-    switch (widget.vehicleType.trim()) {
-      case 'Bike':
-        return const _RideFareRule(
-          baseFare: 40,
-          perKm: 18,
-          minimumFare: 80,
-          fallbackAverageSpeedKmh: 30,
-        );
-      case 'Auto':
-        return const _RideFareRule(
-          baseFare: 60,
-          perKm: 25,
-          minimumFare: 120,
-          fallbackAverageSpeedKmh: 28,
-        );
-      case 'Taxi':
-        return const _RideFareRule(
-          baseFare: 100,
-          perKm: 35,
-          minimumFare: 180,
-          fallbackAverageSpeedKmh: 32,
-        );
-      case 'Car':
-        return const _RideFareRule(
-          baseFare: 120,
-          perKm: 40,
-          minimumFare: 220,
-          fallbackAverageSpeedKmh: 34,
-        );
-      case 'Jeep / SUV':
-        return const _RideFareRule(
-          baseFare: 180,
-          perKm: 55,
-          minimumFare: 300,
-          fallbackAverageSpeedKmh: 34,
-        );
-      case 'Van / Hiace':
-        return const _RideFareRule(
-          baseFare: 250,
-          perKm: 70,
-          minimumFare: 450,
-          fallbackAverageSpeedKmh: 32,
-        );
-      case 'Microbus':
-        return const _RideFareRule(
-          baseFare: 350,
-          perKm: 90,
-          minimumFare: 650,
-          fallbackAverageSpeedKmh: 30,
-        );
-      case 'Mini Bus':
-        return const _RideFareRule(
-          baseFare: 500,
-          perKm: 120,
-          minimumFare: 900,
-          fallbackAverageSpeedKmh: 28,
-        );
-      case 'Bus':
-        return const _RideFareRule(
-          baseFare: 700,
-          perKm: 150,
-          minimumFare: 1200,
-          fallbackAverageSpeedKmh: 27,
-        );
-      case 'Ambulance':
-        return const _RideFareRule(
-          baseFare: 300,
-          perKm: 75,
-          minimumFare: 500,
-          fallbackAverageSpeedKmh: 38,
-        );
-      case 'Pickup':
-        return const _RideFareRule(
-          baseFare: 350,
-          perKm: 85,
-          minimumFare: 600,
-          fallbackAverageSpeedKmh: 30,
-        );
-      case 'Truck':
-        return const _RideFareRule(
-          baseFare: 600,
-          perKm: 140,
-          minimumFare: 1000,
-          fallbackAverageSpeedKmh: 26,
-        );
-      default:
-        return const _RideFareRule(
-          baseFare: 120,
-          perKm: 40,
-          minimumFare: 220,
-          fallbackAverageSpeedKmh: 30,
-        );
-    }
-  }
-
   void _clearFareEstimate() {
     _routeDistanceKm = null;
     _routeDurationMinutes = null;
@@ -418,7 +360,7 @@ class _RideBookingPageState extends State<RideBookingPage> {
   }
 
   double _fareForDistance(double distanceKm) {
-    final _RideFareRule rule = _fareRule;
+    final RideFareRule rule = _fareRule;
     final double raw = rule.baseFare + (distanceKm * rule.perKm);
     final double withMinimum =
         raw < rule.minimumFare ? rule.minimumFare : raw;
@@ -524,6 +466,19 @@ class _RideBookingPageState extends State<RideBookingPage> {
       return;
     }
 
+    if (!_fareRule.isActive) {
+      if (mounted) {
+        setState(() {
+          _routeDistanceKm = null;
+          _routeDurationMinutes = null;
+          _estimatedFare = null;
+          _fareUsesRoadRoute = false;
+          _fareError = 'Vehicle fare is disabled by Admin.';
+        });
+      }
+      return;
+    }
+
     final double? pickupLatitude = _pickupLatitude;
     final double? pickupLongitude = _pickupLongitude;
     final double? destinationLatitude = _destinationLatitude;
@@ -590,6 +545,17 @@ class _RideBookingPageState extends State<RideBookingPage> {
   }
 
   Future<void> _findNearbyDriver() async {
+    if (!_fareRule.isActive) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'This vehicle is currently unavailable for ride booking.',
+          ),
+        ),
+      );
+      return;
+    }
+
     final bool valid =
         _formKey.currentState?.validate() ??
             false;
@@ -683,6 +649,9 @@ class _RideBookingPageState extends State<RideBookingPage> {
           estimatedFare: estimatedFare,
           fareCurrency: _fareCurrency,
           fareUsesRoadRoute: _fareUsesRoadRoute,
+          fareBaseFare: _fareRule.baseFare,
+          farePerKm: _fareRule.perKm,
+          fareMinimumFare: _fareRule.minimumFare,
         ),
       ),
     );
@@ -1754,11 +1723,15 @@ class _RideBookingPageState extends State<RideBookingPage> {
             _summaryRow(
               icon: Icons.payments_outlined,
               label: 'Estimated Fare',
-              value: _isCalculatingFare
-                  ? 'Calculating...'
-                  : _estimatedFare == null
-                      ? '--'
-                      : '$_fareCurrency ${_estimatedFare!.toStringAsFixed(0)}',
+              value: !_fareRule.isActive
+                  ? 'Unavailable'
+                  : _fareSettingsLoading
+                      ? 'Loading rate...'
+                      : _isCalculatingFare
+                          ? 'Calculating...'
+                          : _estimatedFare == null
+                              ? '--'
+                              : '$_fareCurrency ${_estimatedFare!.toStringAsFixed(0)}',
             ),
             const Divider(height: 22),
             _summaryRow(
@@ -1799,22 +1772,56 @@ class _RideBookingPageState extends State<RideBookingPage> {
                   ),
                 ),
               const SizedBox(height: 6),
-              Text(
-                'Estimate: base $_fareCurrency ${_fareRule.baseFare.toStringAsFixed(0)} + '
-                '$_fareCurrency ${_fareRule.perKm.toStringAsFixed(0)}/km, '
-                'minimum $_fareCurrency ${_fareRule.minimumFare.toStringAsFixed(0)}. '
-                'These are development rates and can later be controlled from Admin.',
-                style: TextStyle(
-                  color: Colors.grey.shade700,
-                  fontSize: 11.5,
-                  height: 1.35,
+              if (!_fareRule.isActive)
+                Text(
+                  'This vehicle has been disabled from Admin Ride Fare Settings.',
+                  style: TextStyle(
+                    color: Colors.red.shade700,
+                    fontSize: 11.5,
+                    fontWeight: FontWeight.w800,
+                    height: 1.35,
+                  ),
+                )
+              else ...<Widget>[
+                Text(
+                  'Estimate: base $_fareCurrency ${_fareRule.baseFare.toStringAsFixed(0)} + '
+                  '$_fareCurrency ${_fareRule.perKm.toStringAsFixed(0)}/km, '
+                  'minimum $_fareCurrency ${_fareRule.minimumFare.toStringAsFixed(0)}.',
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    fontSize: 11.5,
+                    height: 1.35,
+                  ),
                 ),
-              ),
+                if (_fareSettingsUsingFallback || _fareSettingsError != null) ...<Widget>[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Built-in safe fare rate is being used until Admin/Firestore rate is available.',
+                    style: TextStyle(
+                      color: Colors.orange.shade800,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ] else ...<Widget>[
+                  const SizedBox(height: 4),
+                  Text(
+                    'Fare rate loaded from Admin settings.',
+                    style: TextStyle(
+                      color: Colors.green.shade700,
+                      fontSize: 11.5,
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                ],
+              ],
               const SizedBox(height: 8),
               Align(
                 alignment: Alignment.centerRight,
                 child: TextButton.icon(
-                  onPressed: _isCalculatingFare
+                  onPressed: _isCalculatingFare ||
+                          _fareSettingsLoading ||
+                          !_fareRule.isActive
                       ? null
                       : _refreshFareEstimate,
                   icon: const Icon(Icons.refresh_rounded),
@@ -1862,18 +1869,4 @@ class _RideBookingPageState extends State<RideBookingPage> {
       ],
     );
   }
-}
-
-class _RideFareRule {
-  const _RideFareRule({
-    required this.baseFare,
-    required this.perKm,
-    required this.minimumFare,
-    required this.fallbackAverageSpeedKmh,
-  });
-
-  final double baseFare;
-  final double perKm;
-  final double minimumFare;
-  final double fallbackAverageSpeedKmh;
 }

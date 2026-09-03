@@ -17,6 +17,9 @@ class NearbyDriversPage extends StatelessWidget {
     required this.estimatedFare,
     required this.fareCurrency,
     required this.fareUsesRoadRoute,
+    required this.fareBaseFare,
+    required this.farePerKm,
+    required this.fareMinimumFare,
     super.key,
   });
 
@@ -36,6 +39,9 @@ class NearbyDriversPage extends StatelessWidget {
   final double estimatedFare;
   final String fareCurrency;
   final bool fareUsesRoadRoute;
+  final double fareBaseFare;
+  final double farePerKm;
+  final double fareMinimumFare;
 
   @override
   Widget build(BuildContext context) {
@@ -294,6 +300,26 @@ class NearbyDriversPage extends StatelessWidget {
               value:
                   '$fareCurrency ${estimatedFare.toStringAsFixed(0)}',
             ),
+            const Divider(height: 22),
+            _tripInfoRow(
+              icon: Icons.calculate_outlined,
+              label: 'Fare Rate',
+              value:
+                  '$fareCurrency ${fareBaseFare.toStringAsFixed(0)} + '
+                  '$fareCurrency ${farePerKm.toStringAsFixed(0)}/km',
+            ),
+            const SizedBox(height: 6),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                'Minimum $fareCurrency ${fareMinimumFare.toStringAsFixed(0)}',
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -516,6 +542,9 @@ class NearbyDriversPage extends StatelessWidget {
                 estimatedFare: estimatedFare,
                 fareCurrency: fareCurrency,
                 fareUsesRoadRoute: fareUsesRoadRoute,
+                fareBaseFare: fareBaseFare,
+                farePerKm: farePerKm,
+                fareMinimumFare: fareMinimumFare,
               ),
             ),
           );

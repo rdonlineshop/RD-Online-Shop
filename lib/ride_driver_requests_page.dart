@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:math' as math;
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' as foundation;
 import 'package:flutter/material.dart';
@@ -12,7 +13,10 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
+import 'ride_chat_page.dart';
 import 'ride_driver_auth_page.dart';
+import 'ride_driver_earnings_page.dart';
+import 'ride_driver_reactivation_page.dart';
 
 class RideDriverRequestsPage extends StatefulWidget {
   const RideDriverRequestsPage({
@@ -188,6 +192,170 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     );
   }
 
+  double? _toDouble(dynamic value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    return double.tryParse(
+      value?.toString().trim() ?? '',
+    );
+  }
+
+  double _calculateLiveFare({
+    required double distanceKm,
+    required double baseFare,
+    required double perKm,
+    required double minimumFare,
+  }) {
+    final double rawFare = baseFare + (distanceKm * perKm);
+    final double minimumApplied =
+        rawFare < minimumFare ? minimumFare : rawFare;
+    return (minimumApplied / 5).ceil() * 5.0;
+  }
+
+  Future<void> _recordLiveFarePosition(
+    Position position,
+    String rideRequestId,
+  ) async {
+    final String cleanRideId = rideRequestId.trim();
+    if (cleanRideId.isEmpty || position.accuracy > 100) {
+      return;
+    }
+
+    final DocumentReference<Map<String, dynamic>> requestRef =
+        _rideRequests.doc(cleanRideId);
+
+    await FirebaseFirestore.instance.runTransaction(
+      (Transaction transaction) async {
+        final DocumentSnapshot<Map<String, dynamic>> snapshot =
+            await transaction.get(requestRef);
+        final Map<String, dynamic>? data = snapshot.data();
+
+        if (!snapshot.exists || data == null) {
+          return;
+        }
+
+        final String status =
+            data['status']?.toString().trim().toLowerCase() ?? '';
+        if (status != 'in_progress') {
+          return;
+        }
+
+        final double? baseFare = _toDouble(data['fareBaseFare']);
+        final double? perKm = _toDouble(data['farePerKm']);
+        final double? minimumFare = _toDouble(data['fareMinimumFare']);
+
+        // Legacy ride requests created before Live Fare remain usable.
+        if (baseFare == null ||
+            perKm == null ||
+            minimumFare == null ||
+            baseFare <= 0 ||
+            perKm <= 0 ||
+            minimumFare <= 0) {
+          return;
+        }
+
+        final double currentDistanceKm =
+            _toDouble(data['actualDistanceKm']) ?? 0.0;
+        final double currentLiveFare = _calculateLiveFare(
+          distanceKm: currentDistanceKm,
+          baseFare: baseFare,
+          perKm: perKm,
+          minimumFare: minimumFare,
+        );
+
+        final double? previousLat =
+            _toDouble(data['tripDistanceLastLatitude']);
+        final double? previousLng =
+            _toDouble(data['tripDistanceLastLongitude']);
+        final Timestamp currentPositionAt =
+            Timestamp.fromDate(position.timestamp);
+
+        if (previousLat == null || previousLng == null) {
+          transaction.update(
+            requestRef,
+            <String, dynamic>{
+              'actualDistanceKm': currentDistanceKm,
+              'liveFare': currentLiveFare,
+              'tripDistanceLastLatitude': position.latitude,
+              'tripDistanceLastLongitude': position.longitude,
+              'tripDistanceLastPositionAt': currentPositionAt,
+              'tripDistanceUpdatedAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+          return;
+        }
+
+        final double segmentMeters = Geolocator.distanceBetween(
+          previousLat,
+          previousLng,
+          position.latitude,
+          position.longitude,
+        );
+
+        if (!segmentMeters.isFinite || segmentMeters < 0) {
+          return;
+        }
+
+        final dynamic previousTimeRaw =
+            data['tripDistanceLastPositionAt'];
+        final DateTime? previousTime = previousTimeRaw is Timestamp
+            ? previousTimeRaw.toDate()
+            : null;
+
+        if (previousTime != null) {
+          final double elapsedSeconds = position.timestamp
+                  .difference(previousTime)
+                  .inMilliseconds /
+              1000.0;
+
+          // Ignore duplicated/out-of-order GPS samples.
+          if (elapsedSeconds <= 0) {
+            return;
+          }
+
+          final double speedKmh =
+              (segmentMeters / elapsedSeconds) * 3.6;
+          if (speedKmh > 200) {
+            // Ignore an unrealistic GPS jump for fare calculation.
+            return;
+          }
+        } else if (segmentMeters > 2000) {
+          // Extra protection for a legacy/missing timestamp baseline.
+          return;
+        }
+
+        // Very small movements are treated as GPS noise. Keep the baseline
+        // fresh, but do not charge the passenger for the jitter.
+        final double chargedSegmentMeters =
+            segmentMeters < 3 ? 0.0 : segmentMeters;
+        final double nextDistanceKm =
+            currentDistanceKm + (chargedSegmentMeters / 1000.0);
+        final double nextLiveFare = _calculateLiveFare(
+          distanceKm: nextDistanceKm,
+          baseFare: baseFare,
+          perKm: perKm,
+          minimumFare: minimumFare,
+        );
+
+        transaction.update(
+          requestRef,
+          <String, dynamic>{
+            'actualDistanceKm': nextDistanceKm,
+            'liveFare': nextLiveFare,
+            'tripDistanceLastLatitude': position.latitude,
+            'tripDistanceLastLongitude': position.longitude,
+            'tripDistanceLastPositionAt': currentPositionAt,
+            'tripDistanceUpdatedAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+      },
+    );
+  }
+
   Future<void> _writeDriverPosition(
     Position position,
     String rideRequestId,
@@ -204,6 +372,13 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       );
     } catch (_) {
       // A later GPS update retries automatically while the stream is active.
+    }
+
+    try {
+      await _recordLiveFarePosition(position, rideRequestId);
+    } catch (_) {
+      // Driver GPS sharing must continue even if one fare write fails.
+      // The next valid GPS point retries the live fare update.
     }
   }
 
@@ -292,6 +467,34 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
 
     try {
       if (goOnline) {
+        final DocumentSnapshot<Map<String, dynamic>> driverDocument =
+            await _driverRef.get();
+        final Map<String, dynamic> driverData =
+            driverDocument.data() ?? <String, dynamic>{};
+        final bool approved = driverData['isApproved'] == true;
+        final bool active = driverData['isActive'] == true;
+        final bool licenceVerified =
+            driverData['drivingLicenseVerified'] == true;
+        final String approvalStatus =
+            driverData['approvalStatus']?.toString().trim().toLowerCase() ?? '';
+        final bool suspended = approvalStatus == 'suspended';
+
+        if (!approved || !active || !licenceVerified || suspended) {
+          if (!mounted) {
+            return;
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(
+              content: Text(
+                suspended
+                    ? 'Your driver account is suspended. Pay the amount due and request reactivation before going online.'
+                    : 'Admin approval and driving licence verification are required before going online.',
+              ),
+            ),
+          );
+          return;
+        }
+
         final Position? position = await _getCurrentPosition();
         if (position == null) {
           return;
@@ -371,6 +574,31 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
         const SnackBar(
           content: Text(
             'Complete your current ride before accepting another request.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final DocumentSnapshot<Map<String, dynamic>> driverDocument =
+        await _driverRef.get();
+    final Map<String, dynamic> driverData =
+        driverDocument.data() ?? <String, dynamic>{};
+    final bool driverCanAccept =
+        driverData['isApproved'] == true &&
+        driverData['isActive'] == true &&
+        driverData['drivingLicenseVerified'] == true &&
+        driverData['approvalStatus']?.toString().trim().toLowerCase() !=
+            'suspended';
+
+    if (!driverCanAccept) {
+      if (!context.mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ride access is paused. Resolve the driver account status before accepting a new ride.',
           ),
         ),
       );
@@ -484,10 +712,98 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     }
   }
 
+
+  Future<bool> _verifyTripStartOtp(
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
+  ) async {
+    final Map<String, dynamic> data = request.data();
+    final bool otpRequired = data['tripStartOtpRequired'] == true;
+    final String expectedHash =
+        data['tripStartOtpHash']?.toString().trim() ?? '';
+
+    // Legacy rides created before OTP was added can still be completed.
+    if (!otpRequired || expectedHash.isEmpty) {
+      return true;
+    }
+
+    final String? otp = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return const _TripStartOtpDialog();
+      },
+    );
+
+    if (otp == null || !mounted) {
+      return false;
+    }
+
+    final String enteredHash =
+        sha256.convert(utf8.encode(otp.trim())).toString();
+
+    if (enteredHash != expectedHash) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Incorrect Trip Start OTP. Ask the customer for the current 6-digit OTP.',
+          ),
+        ),
+      );
+      return false;
+    }
+
+    return true;
+  }
+
+  Future<void> _callCustomerPhone(String phone) async {
+    final String cleanPhone = phone.trim();
+
+    if (cleanPhone.isEmpty) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Customer phone number is not available. Use Ride Chat instead.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    try {
+      final bool opened = await launchUrl(
+        Uri(scheme: 'tel', path: cleanPhone),
+      );
+
+      if (!opened && mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No phone app is available on this device.'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open phone call: $error')),
+      );
+    }
+  }
+
   Future<void> _startTrip(
     QueryDocumentSnapshot<Map<String, dynamic>> request,
   ) async {
     if (_updatingRideStatus) {
+      return;
+    }
+
+    final bool otpVerified = await _verifyTripStartOtp(request);
+    if (!otpVerified || !mounted) {
       return;
     }
 
@@ -496,13 +812,41 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     });
 
     try {
-      await request.reference.update(
+      final Position? startPosition = await _getCurrentPosition();
+
+      final WriteBatch startBatch = FirebaseFirestore.instance.batch();
+
+      startBatch.update(
+        request.reference,
         <String, dynamic>{
           'status': 'in_progress',
           'tripStartedAt': FieldValue.serverTimestamp(),
+          'tripStartOtpVerifiedAt': FieldValue.serverTimestamp(),
+          'actualDistanceKm': 0.0,
+          if (startPosition != null && startPosition.accuracy <= 100)
+            ...<String, dynamic>{
+            'tripDistanceLastLatitude': startPosition.latitude,
+            'tripDistanceLastLongitude': startPosition.longitude,
+            'tripDistanceLastPositionAt':
+                Timestamp.fromDate(startPosition.timestamp),
+            'tripDistanceUpdatedAt': FieldValue.serverTimestamp(),
+          },
           'updatedAt': FieldValue.serverTimestamp(),
         },
       );
+
+      // The real 6-digit OTP is no longer needed after successful
+      // verification. Delete it atomically while preserving only the
+      // verification timestamp on the parent ride for Admin evidence.
+      startBatch.delete(
+        request.reference.collection('private').doc('customer'),
+      );
+
+      await startBatch.commit();
+
+      if (startPosition != null) {
+        await _writeDriverPosition(startPosition, request.id);
+      }
 
       await _startLiveLocationTracking(request.id);
 
@@ -513,7 +857,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text(
-            'Trip started. Customer can see your live location.',
+            'Trip started. Live GPS, actual distance and live fare are now shared with the customer.',
           ),
         ),
       );
@@ -574,6 +918,33 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     });
 
     try {
+      final Position? finalPosition = await _getCurrentPosition();
+      if (finalPosition != null) {
+        await _writeDriverPosition(finalPosition, request.id);
+      }
+
+      final DocumentSnapshot<Map<String, dynamic>> latestSnapshot =
+          await request.reference.get();
+      final Map<String, dynamic> latestData =
+          latestSnapshot.data() ?? request.data();
+
+      final double finalDistanceKm =
+          _toDouble(latestData['actualDistanceKm']) ??
+              _toDouble(latestData['routeDistanceKm']) ??
+              0.0;
+      final double finalFare =
+          _toDouble(latestData['liveFare']) ??
+              _toDouble(latestData['estimatedFare']) ??
+              0.0;
+      final double rdCommissionPercent =
+          _toDouble(latestData['rdCommissionPercent']) ?? 0.0;
+      final double finalRdCommission =
+          finalFare * rdCommissionPercent / 100.0;
+      final double driverNetIncome =
+          (finalFare - finalRdCommission)
+              .clamp(0.0, finalFare)
+              .toDouble();
+
       final WriteBatch batch = FirebaseFirestore.instance.batch();
 
       batch.update(
@@ -581,6 +952,10 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
         <String, dynamic>{
           'status': 'completed',
           'tripCompletedAt': FieldValue.serverTimestamp(),
+          'finalDistanceKm': finalDistanceKm,
+          'finalFare': finalFare,
+          'finalRdCommission': finalRdCommission,
+          'driverNetIncome': driverNetIncome,
           'updatedAt': FieldValue.serverTimestamp(),
         },
       );
@@ -601,9 +976,18 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
         return;
       }
 
+      final String currency =
+          latestData['currency']?.toString().trim().isNotEmpty == true
+              ? latestData['currency'].toString().trim()
+              : 'Rs.';
+
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
-          content: Text('Trip completed successfully.'),
+        SnackBar(
+          content: Text(
+            'Trip completed. Final ${finalDistanceKm.toStringAsFixed(2)} km • '
+            '$currency ${finalFare.toStringAsFixed(0)} • '
+            'Net $currency ${driverNetIncome.toStringAsFixed(2)}',
+          ),
         ),
       );
     } catch (error) {
@@ -666,13 +1050,30 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
         final bool licenceVerified =
             data['drivingLicenseVerified'] == true;
         final bool isOnline = data['isOnline'] == true;
+        final String approvalStatus =
+            data['approvalStatus']?.toString().trim().toLowerCase() ?? '';
+        final bool suspended =
+            isApproved && !isActive && approvalStatus == 'suspended';
         final bool canGoOnline =
-            isApproved && isActive && licenceVerified;
+            isApproved && isActive && licenceVerified && !suspended;
 
         final String vehicleType =
             data['vehicleType']?.toString().trim() ?? '';
         final String vehicleNumber =
             data['vehicleNumber']?.toString().trim() ?? '';
+        final String suspensionCurrency =
+            data['suspensionCurrency']?.toString().trim().isNotEmpty == true
+                ? data['suspensionCurrency'].toString().trim()
+                : 'Rs.';
+        final double commissionDue =
+            _toDouble(data['outstandingRdCommission']) ?? 0.0;
+        final double fine = _toDouble(data['suspensionFine']) ?? 0.0;
+        final double totalDue =
+            _toDouble(data['suspensionTotalDue']) ?? 0.0;
+        final String suspensionReason =
+            data['suspensionReason']?.toString().trim() ?? '';
+        final String reactivationStatus =
+            data['reactivationStatus']?.toString().trim().toLowerCase() ?? '';
 
         return Card(
           elevation: 1.5,
@@ -685,11 +1086,21 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                   children: <Widget>[
                     CircleAvatar(
                       radius: 27,
-                      backgroundColor: (isOnline ? Colors.green : Colors.grey)
+                      backgroundColor: (suspended
+                              ? Colors.red
+                              : isOnline
+                                  ? Colors.green
+                                  : Colors.grey)
                           .withValues(alpha: 0.14),
                       child: Icon(
-                        Icons.drive_eta_rounded,
-                        color: isOnline ? Colors.green : Colors.grey.shade700,
+                        suspended
+                            ? Icons.block_rounded
+                            : Icons.drive_eta_rounded,
+                        color: suspended
+                            ? Colors.red
+                            : isOnline
+                                ? Colors.green
+                                : Colors.grey.shade700,
                         size: 29,
                       ),
                     ),
@@ -699,7 +1110,11 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: <Widget>[
                           Text(
-                            isOnline ? 'Driver Online' : 'Driver Offline',
+                            suspended
+                                ? 'Driver Account Suspended'
+                                : isOnline
+                                    ? 'Driver Online'
+                                    : 'Driver Offline',
                             style: const TextStyle(
                               fontSize: 18,
                               fontWeight: FontWeight.w900,
@@ -707,12 +1122,9 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                           ),
                           const SizedBox(height: 3),
                           Text(
-                            <String>[
-                              vehicleType,
-                              vehicleNumber,
-                            ].where((String value) => value.isNotEmpty).join(
-                                  ' • ',
-                                ),
+                            <String>[vehicleType, vehicleNumber]
+                                .where((String value) => value.isNotEmpty)
+                                .join(' • '),
                             style: TextStyle(
                               color: Colors.grey.shade700,
                               fontWeight: FontWeight.w700,
@@ -722,13 +1134,94 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                       ),
                     ),
                     _statusChip(
-                      isOnline ? 'ONLINE' : 'OFFLINE',
-                      isOnline ? Colors.green : Colors.grey,
+                      suspended
+                          ? 'SUSPENDED'
+                          : isOnline
+                              ? 'ONLINE'
+                              : 'OFFLINE',
+                      suspended
+                          ? Colors.red
+                          : isOnline
+                              ? Colors.green
+                              : Colors.grey,
                     ),
                   ],
                 ),
                 const SizedBox(height: 14),
-                if (!canGoOnline)
+                if (suspended) ...<Widget>[
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.06),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: Colors.red.withValues(alpha: 0.18),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        if (suspensionReason.isNotEmpty) ...<Widget>[
+                          Text(
+                            suspensionReason,
+                            style: TextStyle(
+                              color: Colors.red.shade800,
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                        ],
+                        _suspensionAmountRow(
+                          'RD Commission Due',
+                          '$suspensionCurrency ${commissionDue.toStringAsFixed(2)}',
+                        ),
+                        _suspensionAmountRow(
+                          'Late Fine',
+                          '$suspensionCurrency ${fine.toStringAsFixed(2)}',
+                        ),
+                        const Divider(height: 18),
+                        _suspensionAmountRow(
+                          'Total Due',
+                          '$suspensionCurrency ${totalDue.toStringAsFixed(2)}',
+                          strong: true,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          reactivationStatus == 'pending_admin_review'
+                              ? 'Payment submitted • Waiting for Admin approval'
+                              : reactivationStatus == 'rejected'
+                                  ? 'Previous reactivation request was rejected. You can submit corrected payment details.'
+                                  : 'Pay the amount due and request reactivation to use RD Ride again.',
+                          style: TextStyle(
+                            color: reactivationStatus == 'pending_admin_review'
+                                ? Colors.orange.shade800
+                                : Colors.grey.shade700,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
+                  FilledButton.icon(
+                    onPressed: () {
+                      Navigator.push<void>(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => RideDriverReactivationPage(
+                            driverId: _driverId,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.payments_rounded),
+                    label: Text(
+                      reactivationStatus == 'pending_admin_review'
+                          ? 'View Reactivation Status'
+                          : 'Pay / Request Reactivation',
+                    ),
+                  ),
+                ] else if (!canGoOnline)
                   Text(
                     'Admin approval and driving licence verification are required before going online.',
                     textAlign: TextAlign.center,
@@ -777,6 +1270,34 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
           ),
         );
       },
+    );
+  }
+
+  Widget _suspensionAmountRow(
+    String label,
+    String value, {
+    bool strong = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 3),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontWeight: strong ? FontWeight.w900 : FontWeight.w700,
+              ),
+            ),
+          ),
+          Text(
+            value,
+            style: TextStyle(
+              fontWeight: strong ? FontWeight.w900 : FontWeight.w800,
+            ),
+          ),
+        ],
+      ),
     );
   }
 
@@ -834,6 +1355,16 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
             data['destinationAddress']?.toString().trim() ?? '';
         final String vehicleType =
             data['vehicleType']?.toString().trim() ?? '';
+        final String customerName =
+            data['customerName']?.toString().trim().isNotEmpty == true
+                ? data['customerName'].toString().trim()
+                : 'Customer';
+        final String customerPhone =
+            data['customerPhone']?.toString().trim() ?? '';
+        final String driverName =
+            data['driverName']?.toString().trim().isNotEmpty == true
+                ? data['driverName'].toString().trim()
+                : 'Ride Driver';
         final double? estimatedFare = data['estimatedFare'] is num
             ? (data['estimatedFare'] as num).toDouble()
             : double.tryParse(
@@ -852,7 +1383,34 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                     data['routeDurationMinutes']?.toString().trim() ?? '',
                   );
         final String currency =
-            data['currency']?.toString().trim() ?? 'Rs.';
+            data['currency']?.toString().trim().isNotEmpty == true
+                ? data['currency'].toString().trim()
+                : 'Rs.';
+        final double? actualDistanceKm =
+            _toDouble(data['actualDistanceKm']);
+        final double? liveFare = _toDouble(data['liveFare']);
+        final double? fareBaseFare = _toDouble(data['fareBaseFare']);
+        final double? farePerKm = _toDouble(data['farePerKm']);
+        final double? fareMinimumFare =
+            _toDouble(data['fareMinimumFare']);
+        final double rdCommissionPercent =
+            _toDouble(data['rdCommissionPercent']) ?? 0.0;
+        final double? estimatedRdCommission = estimatedFare == null
+            ? null
+            : estimatedFare * rdCommissionPercent / 100.0;
+        final double? estimatedDriverIncome = estimatedFare == null
+            ? null
+            : (estimatedFare - (estimatedRdCommission ?? 0.0))
+                .clamp(0.0, estimatedFare)
+                .toDouble();
+        final double? liveRdCommission = liveFare == null
+            ? null
+            : liveFare * rdCommissionPercent / 100.0;
+        final double? liveDriverIncome = liveFare == null
+            ? null
+            : (liveFare - (liveRdCommission ?? 0.0))
+                .clamp(0.0, liveFare)
+                .toDouble();
 
         return Card(
           elevation: 2,
@@ -900,6 +1458,71 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                   ],
                 ),
                 const SizedBox(height: 16),
+                Container(
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: const Color(0xFFF7F8FA),
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Text(
+                        customerName,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 9),
+                      Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: OutlinedButton.icon(
+                              onPressed: () =>
+                                  _callCustomerPhone(customerPhone),
+                              icon: const Icon(Icons.call_rounded),
+                              label: const Text('Call Customer'),
+                            ),
+                          ),
+                          const SizedBox(width: 10),
+                          Expanded(
+                            child: FilledButton.icon(
+                              onPressed: () {
+                                Navigator.push<void>(
+                                  context,
+                                  MaterialPageRoute<void>(
+                                    builder: (_) => RideChatPage(
+                                      rideRequestId: ride.id,
+                                      senderRole: 'driver',
+                                      senderName: driverName,
+                                      otherPartyName: customerName,
+                                    ),
+                                  ),
+                                );
+                              },
+                              icon: const Icon(
+                                Icons.chat_bubble_outline_rounded,
+                              ),
+                              label: const Text('Chat'),
+                            ),
+                          ),
+                        ],
+                      ),
+                      if (customerPhone.isEmpty) ...<Widget>[
+                        const SizedBox(height: 6),
+                        const Text(
+                          'Customer phone is not saved. Ride Chat is available.',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            color: Colors.blueGrey,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(height: 14),
                 _locationRow(
                   icon: Icons.my_location_rounded,
                   label: 'Pickup',
@@ -936,6 +1559,72 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                         '$currency ${estimatedFare.toStringAsFixed(0)}',
                   ),
                 ],
+                if (fareBaseFare != null &&
+                    farePerKm != null &&
+                    fareMinimumFare != null) ...<Widget>[
+                  const Divider(height: 24),
+                  _locationRow(
+                    icon: Icons.calculate_outlined,
+                    label: 'Fare Formula',
+                    value:
+                        '$currency ${fareBaseFare.toStringAsFixed(0)} + '
+                        '$currency ${farePerKm.toStringAsFixed(0)}/km '
+                        '(min $currency ${fareMinimumFare.toStringAsFixed(0)})',
+                  ),
+                ],
+                if (estimatedRdCommission != null &&
+                    estimatedDriverIncome != null) ...<Widget>[
+                  const Divider(height: 24),
+                  _locationRow(
+                    icon: Icons.percent_rounded,
+                    label:
+                        'RD Commission (${rdCommissionPercent.toStringAsFixed(2)}%)',
+                    value:
+                        '$currency ${estimatedRdCommission.toStringAsFixed(2)}',
+                  ),
+                  const SizedBox(height: 8),
+                  _locationRow(
+                    icon: Icons.account_balance_wallet_rounded,
+                    label: 'Estimated Driver Income',
+                    value:
+                        '$currency ${estimatedDriverIncome.toStringAsFixed(2)}',
+                  ),
+                ],
+                if (status == 'in_progress' &&
+                    actualDistanceKm != null) ...<Widget>[
+                  const Divider(height: 24),
+                  _locationRow(
+                    icon: Icons.speed_rounded,
+                    label: 'Actual Distance • LIVE',
+                    value: '${actualDistanceKm.toStringAsFixed(2)} km',
+                  ),
+                ],
+                if (status == 'in_progress' && liveFare != null) ...<Widget>[
+                  const Divider(height: 24),
+                  _locationRow(
+                    icon: Icons.currency_rupee_rounded,
+                    label: 'Live Fare',
+                    value: '$currency ${liveFare.toStringAsFixed(0)}',
+                  ),
+                ],
+                if (status == 'in_progress' &&
+                    liveRdCommission != null &&
+                    liveDriverIncome != null) ...<Widget>[
+                  const Divider(height: 24),
+                  _locationRow(
+                    icon: Icons.percent_rounded,
+                    label: 'Live RD Commission',
+                    value:
+                        '$currency ${liveRdCommission.toStringAsFixed(2)}',
+                  ),
+                  const SizedBox(height: 8),
+                  _locationRow(
+                    icon: Icons.wallet_rounded,
+                    label: 'Live Driver Income',
+                    value:
+                        '$currency ${liveDriverIncome.toStringAsFixed(2)}',
+                  ),
+                ],
                 const SizedBox(height: 16),
                 _activeRideMap(data),
                 const SizedBox(height: 16),
@@ -961,7 +1650,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                   ),
                 const SizedBox(height: 8),
                 const Text(
-                  'Keep this screen open while driving so the customer receives foreground live GPS updates.',
+                  'Keep this screen open while driving. GPS, actual distance and live fare update together for both driver and customer.',
                   textAlign: TextAlign.center,
                   style: TextStyle(fontSize: 12.5),
                 ),
@@ -1149,6 +1838,20 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                     padding: const EdgeInsets.all(16),
                     children: <Widget>[
                       _onlineStatusCard(),
+                      const SizedBox(height: 18),
+                      RideDriverEarningsSummaryCard(
+                        driverId: _driverId,
+                        onViewHistory: () {
+                          Navigator.push<void>(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) => RideDriverEarningsPage(
+                                driverId: _driverId,
+                              ),
+                            ),
+                          );
+                        },
+                      ),
                       const SizedBox(height: 18),
                       _activeRideSection(),
                       if (_activeRideRequestId != null)
@@ -2743,7 +3446,24 @@ class _RideRequestCard extends StatelessWidget {
                 data['routeDurationMinutes']?.toString().trim() ?? '',
               );
     final String currency =
-        data['currency']?.toString().trim() ?? 'Rs.';
+        data['currency']?.toString().trim().isNotEmpty == true
+            ? data['currency'].toString().trim()
+            : 'Rs.';
+    final double? fareBaseFare = data['fareBaseFare'] is num
+        ? (data['fareBaseFare'] as num).toDouble()
+        : double.tryParse(
+            data['fareBaseFare']?.toString().trim() ?? '',
+          );
+    final double? farePerKm = data['farePerKm'] is num
+        ? (data['farePerKm'] as num).toDouble()
+        : double.tryParse(
+            data['farePerKm']?.toString().trim() ?? '',
+          );
+    final double? fareMinimumFare = data['fareMinimumFare'] is num
+        ? (data['fareMinimumFare'] as num).toDouble()
+        : double.tryParse(
+            data['fareMinimumFare']?.toString().trim() ?? '',
+          );
 
     return Card(
       elevation: 1.5,
@@ -2846,6 +3566,19 @@ class _RideRequestCard extends StatelessWidget {
                 label: 'Estimated Fare',
                 value:
                     '$currency ${estimatedFare.toStringAsFixed(0)}',
+              ),
+            ],
+            if (fareBaseFare != null &&
+                farePerKm != null &&
+                fareMinimumFare != null) ...<Widget>[
+              const Divider(height: 24),
+              _cardLocationRow(
+                icon: Icons.calculate_outlined,
+                label: 'Fare Formula',
+                value:
+                    '$currency ${fareBaseFare.toStringAsFixed(0)} + '
+                    '$currency ${farePerKm.toStringAsFixed(0)}/km '
+                    '(min $currency ${fareMinimumFare.toStringAsFixed(0)})',
               ),
             ],
             const SizedBox(height: 16),
@@ -2967,3 +3700,90 @@ class _MessageCard extends StatelessWidget {
     );
   }
 }
+
+class _TripStartOtpDialog extends StatefulWidget {
+  const _TripStartOtpDialog();
+
+  @override
+  State<_TripStartOtpDialog> createState() => _TripStartOtpDialogState();
+}
+
+class _TripStartOtpDialogState extends State<_TripStartOtpDialog> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _verify() {
+    if (_formKey.currentState?.validate() != true) {
+      return;
+    }
+
+    Navigator.of(context).pop(_controller.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      icon: const Icon(
+        Icons.password_rounded,
+        size: 42,
+      ),
+      title: const Text('Trip Start OTP'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Text(
+              'Ask the customer for the 6-digit Trip Start OTP shown on their Track Ride screen.',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              controller: _controller,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 5,
+              ),
+              decoration: const InputDecoration(
+                labelText: '6-digit OTP',
+                border: OutlineInputBorder(),
+                counterText: '',
+              ),
+              validator: (String? value) {
+                final String otp = value?.trim() ?? '';
+                if (!RegExp(r'^\d{6}$').hasMatch(otp)) {
+                  return 'Enter the 6-digit OTP.';
+                }
+                return null;
+              },
+              onFieldSubmitted: (_) => _verify(),
+            ),
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          onPressed: _verify,
+          icon: const Icon(Icons.verified_user_outlined),
+          label: const Text('Verify & Start'),
+        ),
+      ],
+    );
+  }
+}
+

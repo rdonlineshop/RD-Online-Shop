@@ -271,9 +271,77 @@ service cloud.firestore {
             'locationUpdatedAt',
             'currentRideRequestId',
             'updatedAt'
+          ])
+          && (
+            request.resource.data.isOnline == false
+            || (
+              resource.data.isActive == true
+              && resource.data.isApproved == true
+              && resource.data.drivingLicenseVerified == true
+              && resource.data.get('approvalStatus', '') != 'suspended'
+            )
+          ))
+        || (signedIn()
+          && request.auth.uid == rideDriverId
+          && resource.data.driverId == request.auth.uid
+          && resource.data.authUid == request.auth.uid
+          && resource.data.role == 'ride_driver'
+          && resource.data.isApproved == true
+          && resource.data.isActive == false
+          && resource.data.get('approvalStatus', '') == 'suspended'
+          && request.resource.data.driverId == resource.data.driverId
+          && request.resource.data.authUid == resource.data.authUid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isActive == resource.data.isActive
+          && request.resource.data.isApproved == resource.data.isApproved
+          && request.resource.data.reactivationStatus == 'pending_admin_review'
+          && request.resource.data.reactivationPaymentMethod is string
+          && request.resource.data.reactivationPaymentMethod.size() > 0
+          && request.resource.data.reactivationPaymentAmount is number
+          && request.resource.data.reactivationPaymentAmount >= 0
+          && request.resource.data.reactivationPaymentAmount
+            >= resource.data.suspensionTotalDue
+          && request.resource.data.reactivationPaymentReference is string
+          && request.resource.data.reactivationPaymentReference.size() <= 120
+          && request.resource.data.reactivationPaymentNote is string
+          && request.resource.data.reactivationPaymentNote.size() <= 300
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'reactivationStatus',
+            'reactivationPaymentMethod',
+            'reactivationPaymentAmount',
+            'reactivationPaymentReference',
+            'reactivationPaymentNote',
+            'reactivationRequestedAt',
+            'updatedAt'
           ]));
 
       allow delete: if isAdmin();
+    }
+
+    // Immutable account action log. Admin writes suspension/reactivation
+    // events; the driver may read only their own account history.
+    match /ride_driver_account_history/{eventId} {
+      allow read: if isAdmin()
+        || (signedIn()
+          && resource.data.driverId == request.auth.uid);
+      allow create: if isAdmin()
+        && request.resource.data.eventId == eventId
+        && request.resource.data.driverId is string
+        && request.resource.data.driverId.size() > 0
+        && request.resource.data.action is string
+        && request.resource.data.action.size() > 0;
+      allow update, delete: if false;
+    }
+
+
+    // ============================================================
+    // RD RIDE BUSINESS SETTINGS
+    // ============================================================
+    // Signed-in customers/drivers may read the current commission so each
+    // new ride can snapshot it. Only Admin/SuperAdmin may change it.
+    match /ride_business_settings/{settingsId} {
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
     }
 
 
@@ -281,6 +349,18 @@ service cloud.firestore {
       function rideDriverOwnsRequest() {
         return isActiveRideDriver()
           && resource.data.driverId == request.auth.uid;
+      }
+
+      function assignedRideDriverCanRead() {
+        return signedIn()
+          && exists(/databases/$(database)/documents/ride_drivers/$(request.auth.uid))
+          && rideDriverData().isApproved == true
+          && rideDriverData().role == 'ride_driver'
+          && resource.data.driverId == request.auth.uid;
+      }
+
+      function rideCommissionPercentSnapshot() {
+        return resource.data.get('rdCommissionPercent', 0.0);
       }
 
       function rideIdentityUnchanged() {
@@ -297,7 +377,7 @@ service cloud.firestore {
       allow read: if isAdmin()
         || (signedIn()
           && resource.data.customerAuthUid == request.auth.uid)
-        || rideDriverOwnsRequest();
+        || assignedRideDriverCanRead();
 
       allow create: if signedIn()
         && request.resource.data.rideRequestId == rideRequestId
@@ -314,7 +394,20 @@ service cloud.firestore {
         && request.resource.data.destinationAddress.size() > 0
         && request.resource.data.status == 'pending'
         && request.resource.data.requestType == 'ride_now'
-        && request.resource.data.driverResponse == 'waiting';
+        && request.resource.data.driverResponse == 'waiting'
+        && request.resource.data.estimatedFare is number
+        && request.resource.data.estimatedFare > 0
+        && request.resource.data.rdCommissionPercent is number
+        && request.resource.data.rdCommissionPercent >= 0
+        && request.resource.data.rdCommissionPercent <= 50
+        && request.resource.data.estimatedRdCommission is number
+        && request.resource.data.estimatedRdCommission
+          == request.resource.data.estimatedFare
+            * request.resource.data.rdCommissionPercent / 100.0
+        && request.resource.data.estimatedDriverIncome is number
+        && request.resource.data.estimatedDriverIncome
+          == request.resource.data.estimatedFare
+            - request.resource.data.estimatedRdCommission;
 
       allow update: if isAdmin()
         || (rideDriverOwnsRequest()
@@ -345,8 +438,33 @@ service cloud.firestore {
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                 'status',
                 'tripStartedAt',
+                'tripStartOtpVerifiedAt',
+                'actualDistanceKm',
+                'tripDistanceLastLatitude',
+                'tripDistanceLastLongitude',
+                'tripDistanceLastPositionAt',
+                'tripDistanceUpdatedAt',
                 'updatedAt'
               ])
+            )
+            || (
+              resource.data.status == 'in_progress'
+              && resource.data.driverResponse == 'accepted'
+              && request.resource.data.status == 'in_progress'
+              && request.resource.data.driverResponse == 'accepted'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'actualDistanceKm',
+                'liveFare',
+                'tripDistanceLastLatitude',
+                'tripDistanceLastLongitude',
+                'tripDistanceLastPositionAt',
+                'tripDistanceUpdatedAt',
+                'updatedAt'
+              ])
+              && request.resource.data.actualDistanceKm is number
+              && request.resource.data.liveFare is number
+              && request.resource.data.actualDistanceKm >= resource.data.actualDistanceKm
+              && request.resource.data.liveFare >= 0
             )
             || (
               resource.data.status == 'in_progress'
@@ -356,12 +474,232 @@ service cloud.firestore {
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                 'status',
                 'tripCompletedAt',
+                'finalDistanceKm',
+                'finalFare',
+                'finalRdCommission',
+                'driverNetIncome',
                 'updatedAt'
               ])
+              && request.resource.data.finalDistanceKm is number
+              && request.resource.data.finalDistanceKm >= 0
+              && request.resource.data.finalFare is number
+              && request.resource.data.finalFare >= 0
+              && request.resource.data.finalRdCommission is number
+              && request.resource.data.finalRdCommission >= 0
+              && request.resource.data.driverNetIncome is number
+              && request.resource.data.driverNetIncome >= 0
+              && request.resource.data.finalRdCommission
+                == request.resource.data.finalFare
+                  * rideCommissionPercentSnapshot() / 100.0
+              && request.resource.data.driverNetIncome
+                == request.resource.data.finalFare
+                  - request.resource.data.finalRdCommission
             )
           ));
 
       allow delete: if isAdmin();
+
+      // Customer-only private data for a ride. The real Trip Start OTP is
+      // stored here so the assigned driver can only see the hash on the
+      // parent ride request and must ask the customer for the 6-digit code.
+      match /private/{privateDoc} {
+        function parentRideAfterCreate() {
+          return getAfter(
+            /databases/$(database)/documents/ride_requests/$(rideRequestId)
+          ).data;
+        }
+
+        function parentRide() {
+          return get(
+            /databases/$(database)/documents/ride_requests/$(rideRequestId)
+          ).data;
+        }
+
+        allow read: if isAdmin()
+          || (signedIn()
+            && parentRide().customerAuthUid == request.auth.uid);
+
+        allow create: if signedIn()
+          && privateDoc == 'customer'
+          && parentRideAfterCreate().customerAuthUid == request.auth.uid
+          && request.resource.data.rideRequestId == rideRequestId
+          && request.resource.data.tripStartOtp is string
+          && request.resource.data.tripStartOtp.matches('^[0-9]{6}$');
+
+        allow update: if isAdmin();
+
+        // After the driver successfully verifies the OTP, the real 6-digit
+        // value is deleted in the same batch. Only the parent verification
+        // timestamp remains as evidence.
+        allow delete: if isAdmin()
+          || (
+            isActiveRideDriver()
+            && parentRideAfterCreate().driverId == request.auth.uid
+            && parentRideAfterCreate().status == 'in_progress'
+            && parentRideAfterCreate().tripStartOtpVerifiedAt is timestamp
+          );
+      }
+
+      // Private real-time chat between the customer and the assigned Ride
+      // Driver. Customer/driver can read only while the ride is active.
+      // After completion the evidence is Admin-only and immutable.
+      match /messages/{messageId} {
+        function chatRide() {
+          return get(
+            /databases/$(database)/documents/ride_requests/$(rideRequestId)
+          ).data;
+        }
+
+        function chatCustomer() {
+          return signedIn()
+            && chatRide().customerAuthUid == request.auth.uid;
+        }
+
+        function chatDriver() {
+          return isActiveRideDriver()
+            && chatRide().driverId == request.auth.uid;
+        }
+
+        function activeRideChat() {
+          return chatRide().status in ['accepted', 'in_progress'];
+        }
+
+        function validChatSenderRole() {
+          return request.resource.data.senderRole is string
+            && (
+              (request.resource.data.senderRole == 'customer'
+                && chatCustomer())
+              || (request.resource.data.senderRole == 'driver'
+                && chatDriver())
+              || (request.resource.data.senderRole == 'admin'
+                && isAdmin())
+            );
+        }
+
+        function validEvidenceExpiry() {
+          return request.resource.data.evidenceExpiresAt is timestamp
+            && request.resource.data.evidenceExpiresAt
+              >= request.time + duration.value(89, 'd')
+            && request.resource.data.evidenceExpiresAt
+              <= request.time + duration.value(91, 'd');
+        }
+
+        function validTextMessage() {
+          return request.resource.data.messageType == 'text'
+            && request.resource.data.get('text', '') is string
+            && request.resource.data.get('text', '').size() > 0
+            && request.resource.data.get('text', '').size() <= 1000;
+        }
+
+        function validVoiceMessage() {
+          return request.resource.data.messageType == 'voice'
+            && request.resource.data.get('text', '') == ''
+            && request.resource.data.get('voicePayloadId', '') == messageId
+            && request.resource.data.get('voiceDurationSeconds', 0) is int
+            && request.resource.data.get('voiceDurationSeconds', 0) >= 1
+            && request.resource.data.get('voiceDurationSeconds', 0) <= 20
+            && request.resource.data.get('voiceByteLength', 0) is int
+            && request.resource.data.get('voiceByteLength', 0) > 44
+            && request.resource.data.get('voiceByteLength', 0) <= 700000
+            && request.resource.data.get('voiceMimeType', '') == 'audio/wav';
+        }
+
+        allow read: if isAdmin()
+          || ((chatCustomer() || chatDriver()) && activeRideChat());
+
+        allow create: if (chatCustomer() || chatDriver() || isAdmin())
+          && activeRideChat()
+          && request.resource.data.messageId == messageId
+          && request.resource.data.rideRequestId == rideRequestId
+          && request.resource.data.senderUid == request.auth.uid
+          && validChatSenderRole()
+          && request.resource.data.senderName is string
+          && request.resource.data.senderName.size() <= 120
+          && validEvidenceExpiry()
+          && (validTextMessage() || validVoiceMessage());
+
+        // Evidence is append-only. Customer, driver and Admin cannot edit or
+        // manually delete original messages. Firestore TTL may remove them
+        // automatically after evidenceExpiresAt.
+        allow update, delete: if false;
+      }
+
+      // Voice payload is stored separately from message metadata so normal
+      // chat loading stays small. It is fetched only when Play is pressed.
+      // Customer/driver can read it only while the ride is active; Admin can
+      // review it during the evidence retention period.
+      match /message_audio/{messageId} {
+        function audioRide() {
+          return get(
+            /databases/$(database)/documents/ride_requests/$(rideRequestId)
+          ).data;
+        }
+
+        function audioCustomer() {
+          return signedIn()
+            && audioRide().customerAuthUid == request.auth.uid;
+        }
+
+        function audioDriver() {
+          return isActiveRideDriver()
+            && audioRide().driverId == request.auth.uid;
+        }
+
+        function activeAudioChat() {
+          return audioRide().status in ['accepted', 'in_progress'];
+        }
+
+        function pairedMessageAfterCreate() {
+          return getAfter(
+            /databases/$(database)/documents/ride_requests/$(rideRequestId)/messages/$(messageId)
+          ).data;
+        }
+
+        function validAudioSenderRole() {
+          return request.resource.data.senderRole is string
+            && (
+              (request.resource.data.senderRole == 'customer'
+                && audioCustomer())
+              || (request.resource.data.senderRole == 'driver'
+                && audioDriver())
+              || (request.resource.data.senderRole == 'admin'
+                && isAdmin())
+            );
+        }
+
+        allow read: if isAdmin()
+          || ((audioCustomer() || audioDriver()) && activeAudioChat());
+
+        allow create: if (audioCustomer() || audioDriver() || isAdmin())
+          && activeAudioChat()
+          && request.resource.data.messageId == messageId
+          && request.resource.data.rideRequestId == rideRequestId
+          && request.resource.data.senderUid == request.auth.uid
+          && validAudioSenderRole()
+          && request.resource.data.audioData is bytes
+          && request.resource.data.audioData.size() > 44
+          && request.resource.data.audioData.size() <= 700000
+          && request.resource.data.byteLength is int
+          && request.resource.data.byteLength
+            == request.resource.data.audioData.size()
+          && request.resource.data.contentType == 'audio/wav'
+          && request.resource.data.evidenceExpiresAt is timestamp
+          && request.resource.data.evidenceExpiresAt
+            >= request.time + duration.value(89, 'd')
+          && request.resource.data.evidenceExpiresAt
+            <= request.time + duration.value(91, 'd')
+          && pairedMessageAfterCreate().messageType == 'voice'
+          && pairedMessageAfterCreate().messageId == messageId
+          && pairedMessageAfterCreate().rideRequestId == rideRequestId
+          && pairedMessageAfterCreate().senderUid == request.auth.uid
+          && pairedMessageAfterCreate().senderRole
+            == request.resource.data.senderRole
+          && pairedMessageAfterCreate().voicePayloadId == messageId
+          && pairedMessageAfterCreate().voiceByteLength
+            == request.resource.data.byteLength;
+
+        allow update, delete: if false;
+      }
     }
 
     match /products/{productId} {
@@ -694,6 +1032,17 @@ service cloud.firestore {
         || customerCanReadNotification()
         || sellerCanReadNotification();
 
+      allow create, update, delete: if isAdmin();
+    }
+
+
+    // ============================================================
+    // RD RIDE FARE SETTINGS
+    // ============================================================
+    // Signed-in customers/drivers can read the current fare table.
+    // Only Admin/SuperAdmin can create, update, or delete fare rates.
+    match /ride_fare_settings/{fareId} {
+      allow read: if signedIn();
       allow create, update, delete: if isAdmin();
     }
 

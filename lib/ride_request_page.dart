@@ -21,6 +21,9 @@ class RideRequestPage extends StatefulWidget {
     required this.estimatedFare,
     required this.fareCurrency,
     required this.fareUsesRoadRoute,
+    required this.fareBaseFare,
+    required this.farePerKm,
+    required this.fareMinimumFare,
     super.key,
   });
 
@@ -39,6 +42,9 @@ class RideRequestPage extends StatefulWidget {
   final double estimatedFare;
   final String fareCurrency;
   final bool fareUsesRoadRoute;
+  final double fareBaseFare;
+  final double farePerKm;
+  final double fareMinimumFare;
 
   @override
   State<RideRequestPage> createState() =>
@@ -86,6 +92,9 @@ class _RideRequestPageState extends State<RideRequestPage> {
         estimatedFare: widget.estimatedFare,
         currency: widget.fareCurrency,
         fareUsesRoadRoute: widget.fareUsesRoadRoute,
+        fareBaseFare: widget.fareBaseFare,
+        farePerKm: widget.farePerKm,
+        fareMinimumFare: widget.fareMinimumFare,
       );
 
       if (!mounted) {
@@ -572,6 +581,28 @@ class _RideRequestPageState extends State<RideRequestPage> {
               label: 'Estimated Fare',
               value:
                   '${widget.fareCurrency} ${widget.estimatedFare.toStringAsFixed(0)}',
+            ),
+            const Divider(height: 22),
+            _summaryRow(
+              icon: Icons.calculate_outlined,
+              label: 'Live Fare Formula',
+              value:
+                  '${widget.fareCurrency} ${widget.fareBaseFare.toStringAsFixed(0)} + '
+                  '${widget.fareCurrency} ${widget.farePerKm.toStringAsFixed(0)}/km',
+            ),
+            const SizedBox(height: 5),
+            Align(
+              alignment: Alignment.centerRight,
+              child: Text(
+                'Minimum ${widget.fareCurrency} ${widget.fareMinimumFare.toStringAsFixed(0)}. '
+                'Actual fare starts updating after Start Trip.',
+                textAlign: TextAlign.right,
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
             ),
             const Divider(height: 22),
             _summaryRow(

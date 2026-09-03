@@ -2,6 +2,9 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import 'ride_chat_page.dart';
 
 class RideCustomerTrackingPage extends StatelessWidget {
   const RideCustomerTrackingPage({
@@ -110,6 +113,7 @@ class RideCustomerTrackingPage extends StatelessWidget {
                               <String, dynamic>{};
 
                       return _content(
+                        context: context,
                         request: request,
                         driver: driver,
                         driverLoadError:
@@ -126,6 +130,7 @@ class RideCustomerTrackingPage extends StatelessWidget {
   }
 
   Widget _content({
+    required BuildContext context,
     required Map<String, dynamic> request,
     required Map<String, dynamic> driver,
     required String? driverLoadError,
@@ -145,6 +150,14 @@ class RideCustomerTrackingPage extends StatelessWidget {
         request['vehicleType']?.toString().trim() ?? '';
     final String vehicleNumber =
         request['vehicleNumber']?.toString().trim() ?? '';
+    final String driverPhone =
+        request['driverPhone']?.toString().trim().isNotEmpty == true
+            ? request['driverPhone'].toString().trim()
+            : driver['phone']?.toString().trim() ?? '';
+    final String customerName =
+        request['customerName']?.toString().trim().isNotEmpty == true
+            ? request['customerName'].toString().trim()
+            : 'Customer';
 
     final String pickupAddress =
         request['pickupAddress']?.toString().trim() ?? '';
@@ -195,6 +208,8 @@ class RideCustomerTrackingPage extends StatelessWidget {
           padding: const EdgeInsets.all(16),
           children: <Widget>[
             _statusCard(status),
+            const SizedBox(height: 14),
+            _fareCard(request, status),
             const SizedBox(height: 14),
             Card(
               elevation: 1.5,
@@ -265,6 +280,20 @@ class RideCustomerTrackingPage extends StatelessWidget {
                 ),
               ),
             ),
+            if (status == 'accepted' || status == 'in_progress') ...<Widget>[
+              const SizedBox(height: 14),
+              _communicationCard(
+                context: context,
+                driverName: driverName,
+                driverPhone: driverPhone,
+                customerName: customerName,
+              ),
+            ],
+            if (status == 'accepted' &&
+                request['tripStartOtpRequired'] == true) ...<Widget>[
+              const SizedBox(height: 14),
+              _tripStartOtpCard(),
+            ],
             const SizedBox(height: 14),
             Card(
               elevation: 1.5,
@@ -400,6 +429,351 @@ class RideCustomerTrackingPage extends StatelessWidget {
                 style: TextStyle(
                   color: Colors.grey.shade700,
                   fontSize: 12.5,
+                  height: 1.35,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+
+  Widget _communicationCard({
+    required BuildContext context,
+    required String driverName,
+    required String driverPhone,
+    required String customerName,
+  }) {
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const Text(
+              'Contact Driver',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: driverPhone.isEmpty
+                        ? null
+                        : () => _callPhone(context, driverPhone),
+                    icon: const Icon(Icons.call_rounded),
+                    label: const Text('Call Driver'),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      Navigator.push<void>(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => RideChatPage(
+                            rideRequestId: rideRequestId,
+                            senderRole: 'customer',
+                            senderName: customerName,
+                            otherPartyName: driverName,
+                          ),
+                        ),
+                      );
+                    },
+                    icon: const Icon(Icons.chat_bubble_outline_rounded),
+                    label: const Text('Chat'),
+                  ),
+                ),
+              ],
+            ),
+            if (driverPhone.isEmpty) ...<Widget>[
+              const SizedBox(height: 8),
+              const Text(
+                'Driver phone number is not available for this ride. In-app chat still works.',
+                style: TextStyle(
+                  color: Colors.blueGrey,
+                  fontSize: 11.5,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _tripStartOtpCard() {
+    final String cleanRideId = rideRequestId.trim();
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('ride_requests')
+          .doc(cleanRideId)
+          .collection('private')
+          .doc('customer')
+          .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> snapshot,
+      ) {
+        if (snapshot.hasError) {
+          return Card(
+            elevation: 1.5,
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'Trip Start OTP is temporarily unavailable: ${snapshot.error}',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          );
+        }
+
+        final String otp =
+            snapshot.data?.data()?['tripStartOtp']?.toString().trim() ?? '';
+
+        return Card(
+          elevation: 1.5,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                const Row(
+                  children: <Widget>[
+                    CircleAvatar(
+                      backgroundColor: Color(0xFFFFF3E0),
+                      child: Icon(
+                        Icons.password_rounded,
+                        color: Colors.deepOrange,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Trip Start OTP',
+                        style: TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                Text(
+                  otp.isEmpty ? 'Loading OTP...' : otp,
+                  style: const TextStyle(
+                    fontSize: 30,
+                    fontWeight: FontWeight.w900,
+                    letterSpacing: 7,
+                  ),
+                ),
+                const SizedBox(height: 6),
+                const Text(
+                  'Tell this 6-digit OTP to the driver only when you are ready to start the trip. The driver cannot start the new ride without entering it.',
+                  style: TextStyle(
+                    color: Colors.blueGrey,
+                    fontSize: 11.5,
+                    height: 1.35,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _callPhone(
+    BuildContext context,
+    String phone,
+  ) async {
+    final String cleanPhone = phone.trim();
+    if (cleanPhone.isEmpty) {
+      return;
+    }
+
+    try {
+      final bool opened = await launchUrl(
+        Uri(scheme: 'tel', path: cleanPhone),
+      );
+
+      if (!opened && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('No phone app is available on this device.'),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not open phone call: $error')),
+      );
+    }
+  }
+
+  Widget _fareCard(
+    Map<String, dynamic> request,
+    String status,
+  ) {
+    final String currency =
+        request['currency']?.toString().trim().isNotEmpty == true
+            ? request['currency'].toString().trim()
+            : 'Rs.';
+
+    final double? estimatedFare = _toDouble(request['estimatedFare']);
+    final double? liveFare = _toDouble(request['liveFare']);
+    final double? finalFare = _toDouble(request['finalFare']);
+    final double? routeDistanceKm =
+        _toDouble(request['routeDistanceKm']);
+    final double? actualDistanceKm =
+        _toDouble(request['actualDistanceKm']);
+    final double? finalDistanceKm =
+        _toDouble(request['finalDistanceKm']);
+    final double? baseFare = _toDouble(request['fareBaseFare']);
+    final double? perKm = _toDouble(request['farePerKm']);
+    final double? minimumFare =
+        _toDouble(request['fareMinimumFare']);
+
+    final bool inProgress =
+        status == 'in_progress' || status == 'started';
+    final bool completed = status == 'completed';
+
+    final String mainLabel = completed
+        ? 'Final Fare'
+        : inProgress
+            ? 'Live Fare'
+            : 'Estimated Fare';
+    final double? mainFare = completed
+        ? (finalFare ?? liveFare ?? estimatedFare)
+        : inProgress
+            ? (liveFare ?? estimatedFare)
+            : estimatedFare;
+    final double? shownDistance = completed
+        ? (finalDistanceKm ?? actualDistanceKm ?? routeDistanceKm)
+        : inProgress
+            ? actualDistanceKm
+            : routeDistanceKm;
+    final String distanceLabel = completed
+        ? 'Final Distance'
+        : inProgress
+            ? 'Actual Distance • LIVE'
+            : 'Estimated Distance';
+
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                CircleAvatar(
+                  backgroundColor: (inProgress ? Colors.blue : Colors.green)
+                      .withValues(alpha: 0.12),
+                  child: Icon(
+                    Icons.payments_rounded,
+                    color: inProgress ? Colors.blue : Colors.green,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        mainLabel,
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      if (inProgress)
+                        const Text(
+                          'Updates automatically from the driver GPS.',
+                          style: TextStyle(
+                            fontSize: 11.5,
+                            fontWeight: FontWeight.w700,
+                            color: Colors.blueGrey,
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+                if (inProgress)
+                  Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 9,
+                      vertical: 5,
+                    ),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withValues(alpha: 0.10),
+                      borderRadius: BorderRadius.circular(16),
+                    ),
+                    child: const Text(
+                      'LIVE',
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.w900,
+                        fontSize: 11.5,
+                      ),
+                    ),
+                  ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            Text(
+              mainFare == null
+                  ? 'Fare is not available yet.'
+                  : '$currency ${mainFare.toStringAsFixed(0)}',
+              style: const TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            if (shownDistance != null) ...<Widget>[
+              const SizedBox(height: 12),
+              _locationRow(
+                icon: Icons.route_rounded,
+                label: distanceLabel,
+                value: '${shownDistance.toStringAsFixed(2)} km',
+              ),
+            ],
+            if (baseFare != null &&
+                perKm != null &&
+                minimumFare != null) ...<Widget>[
+              const Divider(height: 24),
+              _locationRow(
+                icon: Icons.calculate_outlined,
+                label: 'Fare Formula',
+                value:
+                    '$currency ${baseFare.toStringAsFixed(0)} + '
+                    '$currency ${perKm.toStringAsFixed(0)}/km '
+                    '(minimum $currency ${minimumFare.toStringAsFixed(0)})',
+              ),
+            ],
+            if (!inProgress && !completed) ...<Widget>[
+              const SizedBox(height: 8),
+              const Text(
+                "Actual distance and live fare start from 0 km when the driver presses Start Trip. The driver's travel to pickup is not charged.",
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: Colors.blueGrey,
                   height: 1.35,
                 ),
               ),

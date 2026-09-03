@@ -95,10 +95,9 @@ class _RideDriverAuthPageState
         _uploadPreset;
 
     request.files.add(
-      http.MultipartFile.fromBytes(
+      await http.MultipartFile.fromPath(
         'file',
-        await image.readAsBytes(),
-        filename: image.name,
+        image.path,
       ),
     );
 
@@ -416,12 +415,14 @@ class _RideDriverAuthPageState
         doc.data() ?? <String, dynamic>{};
 
     final bool isActive = data['isActive'] == true;
-    final bool isApproved =
-        data['isApproved'] == true;
+    final bool isApproved = data['isApproved'] == true;
     final bool licenseVerified =
         data['drivingLicenseVerified'] == true;
-    final String role =
-        data['role']?.toString().trim() ?? '';
+    final String role = data['role']?.toString().trim() ?? '';
+    final String approvalStatus =
+        data['approvalStatus']?.toString().trim().toLowerCase() ?? '';
+    final bool isSuspended =
+        isApproved && !isActive && approvalStatus == 'suspended';
 
     if (role != 'ride_driver') {
       await FirebaseAuth.instance.signOut();
@@ -431,24 +432,48 @@ class _RideDriverAuthPageState
       );
     }
 
+    // A suspended, already-approved driver may still enter the driver
+    // dashboard to see the amount due and submit a reactivation request.
+    // Suspension only blocks Online / new-ride access.
+    if (isSuspended && licenseVerified) {
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.pushReplacement<void, void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => RideDriverRequestsPage(
+            driverId: user.uid,
+          ),
+        ),
+      );
+      return;
+    }
+
     if (!isApproved || !isActive || !licenseVerified) {
       if (!mounted) {
         return;
       }
 
+      final bool rejected = approvalStatus == 'rejected';
       await showDialog<void>(
         context: context,
         builder: (BuildContext dialogContext) {
           return AlertDialog(
-            icon: const Icon(
-              Icons.pending_actions_rounded,
+            icon: Icon(
+              rejected
+                  ? Icons.cancel_rounded
+                  : Icons.pending_actions_rounded,
               size: 42,
             ),
-            title: const Text(
-              'Approval Pending',
+            title: Text(
+              rejected ? 'Driver Account Rejected' : 'Approval Pending',
             ),
-            content: const Text(
-              'Your Ride Driver account is not active yet. Admin approval and driving licence verification are required.',
+            content: Text(
+              rejected
+                  ? 'This Ride Driver account is currently rejected. Contact Admin if you need the account reviewed again.'
+                  : 'Your Ride Driver account is not active yet. Admin approval and driving licence verification are required.',
             ),
             actions: <Widget>[
               FilledButton(
