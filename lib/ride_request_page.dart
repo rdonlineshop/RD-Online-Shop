@@ -56,6 +56,7 @@ class _RideRequestPageState extends State<RideRequestPage> {
       RideRequestService();
 
   bool _isSending = false;
+  bool _isCancelling = false;
   String? _sentRequestId;
 
   RideDriverNearby get driver => widget.driver;
@@ -128,6 +129,146 @@ class _RideRequestPageState extends State<RideRequestPage> {
       if (mounted) {
         setState(() {
           _isSending = false;
+        });
+      }
+    }
+  }
+
+
+  Future<void> _cancelCustomerRide({
+    required String requestId,
+    required String status,
+    required Map<String, dynamic> data,
+  }) async {
+    if (_isCancelling) {
+      return;
+    }
+
+    final List<String> reasons = <String>[
+      'Driver is taking too long',
+      'Changed my plans',
+      'Booked by mistake',
+      'Pickup or destination changed',
+      'Found another ride',
+      'Other',
+    ];
+
+    String selectedReason = reasons.first;
+    final double fee = status == 'accepted'
+        ? ((data['fareBaseFare'] is num)
+            ? (data['fareBaseFare'] as num).toDouble()
+            : double.tryParse(data['fareBaseFare']?.toString() ?? '') ?? 0.0)
+        : 0.0;
+    final String currency =
+        data['currency']?.toString().trim().isNotEmpty == true
+            ? data['currency'].toString().trim()
+            : 'Rs.';
+
+    final String? reason = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext dialogContext,
+            StateSetter setDialogState,
+          ) {
+            return AlertDialog(
+              title: const Text('Cancel Ride?'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Text(
+                    status == 'accepted' && fee > 0
+                        ? 'The driver has already accepted this ride. '
+                            'Cancellation fee: $currency ${fee.toStringAsFixed(0)}.'
+                        : 'No cancellation fee applies before the driver accepts.',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedReason,
+                    decoration: const InputDecoration(
+                      labelText: 'Cancellation reason',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: reasons
+                        .map(
+                          (String item) => DropdownMenuItem<String>(
+                            value: item,
+                            child: Text(item),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (String? value) {
+                      if (value != null) {
+                        setDialogState(() {
+                          selectedReason = value;
+                        });
+                      }
+                    },
+                  ),
+                ],
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Keep Ride'),
+                ),
+                FilledButton.icon(
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, selectedReason),
+                  icon: const Icon(Icons.cancel_outlined),
+                  label: const Text('Cancel Ride'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (reason == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _isCancelling = true;
+    });
+
+    try {
+      final RideCancellationResult result =
+          await _rideRequestService.cancelCustomerRide(
+        rideRequestId: requestId,
+        reason: reason,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            result.fee > 0
+                ? 'Ride cancelled. Cancellation fee: '
+                    '${result.currency} ${result.fee.toStringAsFixed(0)}.'
+                : 'Ride cancelled. No cancellation fee.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not cancel ride: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isCancelling = false;
         });
       }
     }
@@ -287,6 +428,17 @@ class _RideRequestPageState extends State<RideRequestPage> {
               onAction: () {
                 _openTracking(requestId);
               },
+              secondaryActionLabel:
+                  _isCancelling ? 'Cancelling...' : 'Cancel Ride',
+              onSecondaryAction: _isCancelling
+                  ? null
+                  : () {
+                      _cancelCustomerRide(
+                        requestId: requestId,
+                        status: status,
+                        data: data,
+                      );
+                    },
             );
 
           case 'rejected':
@@ -328,11 +480,36 @@ class _RideRequestPageState extends State<RideRequestPage> {
             );
 
           case 'cancelled':
+            final String cancelledBy =
+                data['cancelledBy']?.toString().trim() ?? '';
+            final String reason =
+                data['cancellationReason']?.toString().trim() ?? '';
+            final double fee = data['cancellationFee'] is num
+                ? (data['cancellationFee'] as num).toDouble()
+                : double.tryParse(
+                      data['cancellationFee']?.toString().trim() ?? '',
+                    ) ??
+                    0.0;
+            final String currency =
+                data['cancellationCurrency']?.toString().trim().isNotEmpty ==
+                        true
+                    ? data['cancellationCurrency'].toString().trim()
+                    : (data['currency']?.toString().trim().isNotEmpty == true
+                        ? data['currency'].toString().trim()
+                        : 'Rs.');
+
             return _requestStatusCard(
               color: Colors.red,
               icon: Icons.cancel_outlined,
               title: 'Ride Cancelled',
-              message: 'This ride request was cancelled.',
+              message: <String>[
+                cancelledBy.isEmpty
+                    ? 'This ride request was cancelled.'
+                    : 'Cancelled by $cancelledBy.',
+                if (reason.isNotEmpty) 'Reason: $reason',
+                if (fee > 0)
+                  'Cancellation fee: $currency ${fee.toStringAsFixed(0)}',
+              ].join('\n'),
               actionLabel: 'Choose Another Driver',
               onAction: _chooseAnotherDriver,
             );
@@ -345,6 +522,17 @@ class _RideRequestPageState extends State<RideRequestPage> {
               title: 'Waiting for Driver',
               message:
                   'Request ID: $requestId\nWaiting for ${driver.name} to accept or reject the ride.',
+              secondaryActionLabel:
+                  _isCancelling ? 'Cancelling...' : 'Cancel Request',
+              onSecondaryAction: _isCancelling
+                  ? null
+                  : () {
+                      _cancelCustomerRide(
+                        requestId: requestId,
+                        status: status,
+                        data: data,
+                      );
+                    },
             );
         }
       },
@@ -358,6 +546,8 @@ class _RideRequestPageState extends State<RideRequestPage> {
     required String message,
     String? actionLabel,
     VoidCallback? onAction,
+    String? secondaryActionLabel,
+    VoidCallback? onSecondaryAction,
   }) {
     return Card(
       elevation: 1.5,
@@ -417,6 +607,22 @@ class _RideRequestPageState extends State<RideRequestPage> {
                   ),
                   label: Text(
                     actionLabel,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            if (secondaryActionLabel != null) ...<Widget>[
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 48,
+                child: OutlinedButton.icon(
+                  onPressed: onSecondaryAction,
+                  icon: const Icon(Icons.cancel_outlined),
+                  label: Text(
+                    secondaryActionLabel,
                     style: const TextStyle(
                       fontWeight: FontWeight.w900,
                     ),

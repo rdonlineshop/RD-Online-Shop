@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
+import 'ride_driver_agreement_page.dart';
 import 'ride_driver_requests_page.dart';
 
 class RideDriverAuthPage extends StatefulWidget {
@@ -481,7 +482,21 @@ class _RideDriverAuthPageState
           return;
         }
 
-        await _registerDriver();
+        final RideDriverAgreementAcceptance? agreement =
+            await Navigator.push<RideDriverAgreementAcceptance>(
+          context,
+          MaterialPageRoute<RideDriverAgreementAcceptance>(
+            builder: (_) => RideDriverAgreementPage(
+              driverName: _nameController.text.trim(),
+            ),
+          ),
+        );
+
+        if (agreement == null || !mounted) {
+          return;
+        }
+
+        await _registerDriver(agreement);
       } else {
         await _loginDriver();
       }
@@ -519,15 +534,42 @@ class _RideDriverAuthPageState
     }
   }
 
-  Future<void> _registerDriver() async {
-    final UserCredential credential =
-        await FirebaseAuth.instance
-            .createUserWithEmailAndPassword(
-      email: _emailController.text.trim(),
-      password: _passwordController.text,
-    );
+  Future<void> _registerDriver(
+    RideDriverAgreementAcceptance agreement,
+  ) async {
+    final String email = _emailController.text.trim();
+    User? user = FirebaseAuth.instance.currentUser;
+    bool createdNewAuthUser = false;
 
-    final User? user = credential.user;
+    // If a previous registration attempt created the Firebase Auth account
+    // but Firestore rejected the profile write, safely reuse that same signed-in
+    // account instead of failing with email-already-in-use on the next attempt.
+    final bool canReuseCurrentUser = user != null &&
+        !user.isAnonymous &&
+        (user.email ?? '').trim().toLowerCase() == email.toLowerCase();
+
+    if (canReuseCurrentUser) {
+      final DocumentSnapshot<Map<String, dynamic>> existingDriver =
+          await FirebaseFirestore.instance
+              .collection('ride_drivers')
+              .doc(user.uid)
+              .get();
+
+      if (existingDriver.exists) {
+        throw StateError(
+          'A Ride Driver profile already exists for this account. Please login instead.',
+        );
+      }
+    } else {
+      final UserCredential credential =
+          await FirebaseAuth.instance.createUserWithEmailAndPassword(
+        email: email,
+        password: _passwordController.text,
+      );
+
+      user = credential.user;
+      createdNewAuthUser = true;
+    }
 
     if (user == null) {
       throw StateError(
@@ -535,45 +577,68 @@ class _RideDriverAuthPageState
       );
     }
 
-    await FirebaseFirestore.instance
-        .collection('ride_drivers')
-        .doc(user.uid)
-        .set(
-      <String, dynamic>{
-        'driverId': user.uid,
-        'authUid': user.uid,
-        'role': 'ride_driver',
-        'name': _nameController.text.trim(),
-        'phone': _phoneController.text.trim(),
-        'email': _emailController.text.trim(),
-        'vehicleType': _vehicleType,
-        'vehicleNumber':
-            _vehicleNumberController.text.trim(),
+    try {
+      await FirebaseFirestore.instance
+          .collection('ride_drivers')
+          .doc(user.uid)
+          .set(
+        <String, dynamic>{
+          'driverId': user.uid,
+          'authUid': user.uid,
+          'role': 'ride_driver',
+          'name': _nameController.text.trim(),
+          'phone': _phoneController.text.trim(),
+          'email': email,
+          'vehicleType': _vehicleType,
+          'vehicleNumber':
+              _vehicleNumberController.text.trim(),
 
-        // Driving licence
-        'drivingLicenseNumber':
-            _licenseNumberController.text.trim(),
-        'drivingLicenseExpiry':
-            _licenseExpiryController.text.trim(),
-        'drivingLicenseFrontUrl':
-            _licenseFrontUrl,
-        'drivingLicenseBackUrl':
-            _licenseBackUrl,
-        'drivingLicenseVerified': false,
+          // Driving licence
+          'drivingLicenseNumber':
+              _licenseNumberController.text.trim(),
+          'drivingLicenseExpiry':
+              _licenseExpiryController.text.trim(),
+          'drivingLicenseFrontUrl':
+              _licenseFrontUrl,
+          'drivingLicenseBackUrl':
+              _licenseBackUrl,
+          'drivingLicenseVerified': false,
 
-        'photoUrl': '',
-        'rating': 0.0,
-        'isActive': false,
-        'isApproved': false,
-        'isOnline': false,
-        'latitude': null,
-        'longitude': null,
-        'locationUpdatedAt': null,
-        'currentRideRequestId': '',
-        'createdAt': FieldValue.serverTimestamp(),
-        'updatedAt': FieldValue.serverTimestamp(),
-      },
-    );
+          // Driver Agreement acceptance. Keep the exact text snapshot and hash
+          // so Admin can review what this driver accepted later.
+          'driverAgreementAccepted': true,
+          'driverAgreementVersion': agreement.version,
+          'driverAgreementAcceptedName': agreement.acceptedName,
+          'driverAgreementTextHash': agreement.textHash,
+          'driverAgreementTextSnapshot': agreement.textSnapshot,
+          'driverAgreementAcceptedAt': FieldValue.serverTimestamp(),
+          'driverAgreementReacceptRequired': false,
+
+          'photoUrl': '',
+          'rating': 0.0,
+          'isActive': false,
+          'isApproved': false,
+          'isOnline': false,
+          'latitude': null,
+          'longitude': null,
+          'locationUpdatedAt': null,
+          'currentRideRequestId': '',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+    } catch (_) {
+      // Roll back only an Auth account created by this attempt. This prevents
+      // an orphan login account if Firestore rejects the profile write.
+      if (createdNewAuthUser) {
+        try {
+          await user.delete();
+        } catch (_) {
+          // Keep the original Firestore error as the primary failure.
+        }
+      }
+      rethrow;
+    }
 
     if (!mounted) {
       return;
@@ -591,7 +656,7 @@ class _RideDriverAuthPageState
             'Registration Submitted',
           ),
           content: const Text(
-            'Your Ride Driver account and driving licence were submitted. Admin approval and licence verification are required before you can go online and receive ride requests.',
+            'Your Ride Driver account, driving licence and Driver Agreement were submitted. Admin approval and licence verification are required before you can go online and receive ride requests.',
           ),
           actions: <Widget>[
             FilledButton(
@@ -1069,6 +1134,36 @@ class _RideDriverAuthPageState
                             onTap: () =>
                                 _pickLicenseImage(
                               front: false,
+                            ),
+                          ),
+                          const SizedBox(height: 12),
+                          Container(
+                            padding: const EdgeInsets.all(14),
+                            decoration: BoxDecoration(
+                              color: Colors.blue.withValues(alpha: 0.06),
+                              borderRadius: BorderRadius.circular(14),
+                              border: Border.all(
+                                color: Colors.blue.withValues(alpha: 0.18),
+                              ),
+                            ),
+                            child: const Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Icon(
+                                  Icons.description_outlined,
+                                  color: Colors.blue,
+                                ),
+                                SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    'Driver Agreement is required. After you tap Register, read the full Nepali + English agreement, scroll to the end, tick I Agree, and type your full name before registration is submitted.',
+                                    style: TextStyle(
+                                      fontWeight: FontWeight.w700,
+                                      height: 1.35,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
                           ),
                           const SizedBox(height: 12),

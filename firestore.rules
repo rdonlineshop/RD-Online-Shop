@@ -246,7 +246,19 @@ service cloud.firestore {
         && request.resource.data.drivingLicenseFrontUrl.size() > 0
         && request.resource.data.drivingLicenseBackUrl is string
         && request.resource.data.drivingLicenseBackUrl.size() > 0
-        && request.resource.data.drivingLicenseVerified == false;
+        && request.resource.data.drivingLicenseVerified == false
+        && request.resource.data.driverAgreementAccepted == true
+        && request.resource.data.driverAgreementVersion == 'RD-RIDE-DRIVER-1.0'
+        && request.resource.data.driverAgreementAcceptedName is string
+        && request.resource.data.driverAgreementAcceptedName
+          == request.resource.data.name
+        && request.resource.data.driverAgreementTextHash is string
+        && request.resource.data.driverAgreementTextHash.size() == 64
+        && request.resource.data.driverAgreementTextSnapshot is string
+        && request.resource.data.driverAgreementTextSnapshot.size() >= 1000
+        && request.resource.data.driverAgreementTextSnapshot.size() <= 30000
+        && request.resource.data.driverAgreementAcceptedAt is timestamp
+        && request.resource.data.driverAgreementReacceptRequired == false;
 
       allow update: if isAdmin()
         || (signedIn()
@@ -359,6 +371,11 @@ service cloud.firestore {
           && resource.data.driverId == request.auth.uid;
       }
 
+      function customerOwnsRequest() {
+        return signedIn()
+          && resource.data.customerAuthUid == request.auth.uid;
+      }
+
       function rideCommissionPercentSnapshot() {
         return resource.data.get('rdCommissionPercent', 0.0);
       }
@@ -410,6 +427,56 @@ service cloud.firestore {
             - request.resource.data.estimatedRdCommission;
 
       allow update: if isAdmin()
+        || (customerOwnsRequest()
+          && rideIdentityUnchanged()
+          && resource.data.status in ['pending', 'accepted']
+          && request.resource.data.status == 'cancelled'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'cancelledBy',
+            'cancellationReason',
+            'cancellationPreviousStatus',
+            'cancellationFee',
+            'cancellationCurrency',
+            'cancellationFeeStatus',
+            'cancelledAt',
+            'updatedAt'
+          ])
+          && request.resource.data.cancelledBy == 'customer'
+          && request.resource.data.cancellationReason is string
+          && request.resource.data.cancellationReason.size() > 0
+          && request.resource.data.cancellationReason.size() <= 200
+          && request.resource.data.cancellationPreviousStatus
+            == resource.data.status
+          && request.resource.data.cancellationCurrency
+            == resource.data.currency
+          && request.resource.data.cancellationFee is number
+          && request.resource.data.cancellationFee >= 0
+          && request.resource.data.cancelledAt is timestamp
+          && (
+            (
+              resource.data.status == 'pending'
+              && request.resource.data.cancellationFee == 0
+              && request.resource.data.cancellationFeeStatus == 'not_required'
+            )
+            || (
+              resource.data.status == 'accepted'
+              && (
+                (
+                  resource.data.get('fareBaseFare', 0.0) > 0
+                  && request.resource.data.cancellationFee
+                    == resource.data.get('fareBaseFare', 0.0)
+                  && request.resource.data.cancellationFeeStatus == 'due'
+                )
+                || (
+                  resource.data.get('fareBaseFare', 0.0) <= 0
+                  && request.resource.data.cancellationFee == 0
+                  && request.resource.data.cancellationFeeStatus
+                    == 'not_required'
+                )
+              )
+            )
+          ))
         || (rideDriverOwnsRequest()
           && rideIdentityUnchanged()
           && (
@@ -429,6 +496,33 @@ service cloud.firestore {
                 || (request.resource.data.status == 'rejected'
                   && request.resource.data.driverResponse == 'rejected')
               )
+            )
+            || (
+              resource.data.status == 'accepted'
+              && resource.data.driverResponse == 'accepted'
+              && request.resource.data.status == 'cancelled'
+              && request.resource.data.driverResponse == 'accepted'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'cancelledBy',
+                'cancellationReason',
+                'cancellationPreviousStatus',
+                'cancellationFee',
+                'cancellationCurrency',
+                'cancellationFeeStatus',
+                'cancelledAt',
+                'updatedAt'
+              ])
+              && request.resource.data.cancelledBy == 'driver'
+              && request.resource.data.cancellationReason is string
+              && request.resource.data.cancellationReason.size() > 0
+              && request.resource.data.cancellationReason.size() <= 200
+              && request.resource.data.cancellationPreviousStatus == 'accepted'
+              && request.resource.data.cancellationFee == 0
+              && request.resource.data.cancellationCurrency
+                == resource.data.currency
+              && request.resource.data.cancellationFeeStatus == 'not_required'
+              && request.resource.data.cancelledAt is timestamp
             )
             || (
               resource.data.status == 'accepted'
@@ -533,10 +627,24 @@ service cloud.firestore {
         // timestamp remains as evidence.
         allow delete: if isAdmin()
           || (
+            signedIn()
+            && parentRideAfterCreate().customerAuthUid == request.auth.uid
+            && parentRideAfterCreate().status == 'cancelled'
+            && parentRideAfterCreate().cancelledBy == 'customer'
+          )
+          || (
             isActiveRideDriver()
             && parentRideAfterCreate().driverId == request.auth.uid
-            && parentRideAfterCreate().status == 'in_progress'
-            && parentRideAfterCreate().tripStartOtpVerifiedAt is timestamp
+            && (
+              (
+                parentRideAfterCreate().status == 'in_progress'
+                && parentRideAfterCreate().tripStartOtpVerifiedAt is timestamp
+              )
+              || (
+                parentRideAfterCreate().status == 'cancelled'
+                && parentRideAfterCreate().cancelledBy == 'driver'
+              )
+            )
           );
       }
 

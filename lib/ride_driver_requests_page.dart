@@ -14,9 +14,11 @@ import 'package:http/http.dart' as http;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'ride_chat_page.dart';
+import 'ride_driver_agreement_page.dart';
 import 'ride_driver_auth_page.dart';
 import 'ride_driver_earnings_page.dart';
 import 'ride_driver_reactivation_page.dart';
+import 'services/ride_request_service.dart';
 
 class RideDriverRequestsPage extends StatefulWidget {
   const RideDriverRequestsPage({
@@ -35,12 +37,47 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
   bool _updatingOnlineStatus = false;
   bool _updatingRideStatus = false;
   String? _activeRideRequestId;
+  final RideRequestService _rideRequestService = RideRequestService();
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
       _rideWatchSubscription;
   StreamSubscription<Position>? _positionSubscription;
 
   String get _driverId => widget.driverId.trim();
+
+  String _agreementTimestampText(dynamic value) {
+    if (value is! Timestamp) {
+      return 'Not recorded';
+    }
+    final DateTime time = value.toDate().toLocal();
+    final String day = time.day.toString().padLeft(2, '0');
+    final String month = time.month.toString().padLeft(2, '0');
+    final String hour = time.hour.toString().padLeft(2, '0');
+    final String minute = time.minute.toString().padLeft(2, '0');
+    return '$day/$month/${time.year} $hour:$minute';
+  }
+
+  void _openMyDriverAgreement(Map<String, dynamic> data) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => RideDriverAgreementPage(
+          driverName: data['name']?.toString().trim() ?? '',
+          reviewOnly: true,
+          acceptedName:
+              data['driverAgreementAcceptedName']?.toString().trim() ?? '',
+          acceptedVersion:
+              data['driverAgreementVersion']?.toString().trim() ?? '',
+          acceptedHash:
+              data['driverAgreementTextHash']?.toString().trim() ?? '',
+          acceptedAtText:
+              _agreementTimestampText(data['driverAgreementAcceptedAt']),
+          agreementText:
+              data['driverAgreementTextSnapshot']?.toString() ?? '',
+        ),
+      ),
+    );
+  }
 
 
 
@@ -713,6 +750,135 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
   }
 
 
+
+  Future<void> _cancelAcceptedRide(
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
+  ) async {
+    if (_updatingRideStatus) {
+      return;
+    }
+
+    final List<String> reasons = <String>[
+      'Vehicle problem',
+      'Emergency',
+      'Cannot reach pickup',
+      'Customer unreachable',
+      'Safety concern',
+      'Other',
+    ];
+
+    String selectedReason = reasons.first;
+
+    final String? reason = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext dialogContext,
+            StateSetter setDialogState,
+          ) {
+            return AlertDialog(
+              title: const Text('Cancel Accepted Ride?'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  const Text(
+                    'Use this only before Start Trip. The customer will not '
+                    'be charged a cancellation fee when the driver cancels.',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedReason,
+                    decoration: const InputDecoration(
+                      labelText: 'Cancellation reason',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: reasons
+                        .map(
+                          (String item) => DropdownMenuItem<String>(
+                            value: item,
+                            child: Text(item),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (String? value) {
+                      if (value != null) {
+                        setDialogState(() {
+                          selectedReason = value;
+                        });
+                      }
+                    },
+                  ),
+                ],
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Keep Ride'),
+                ),
+                FilledButton.icon(
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, selectedReason),
+                  icon: const Icon(Icons.cancel_outlined),
+                  label: const Text('Cancel Ride'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (reason == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _updatingRideStatus = true;
+    });
+
+    try {
+      await _rideRequestService.cancelDriverRide(
+        rideRequestId: request.id,
+        reason: reason,
+      );
+
+      _activeRideRequestId = null;
+      await _stopLiveLocationTracking();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {});
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Ride cancelled. The customer was not charged a cancellation fee.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not cancel ride: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingRideStatus = false;
+        });
+      }
+    }
+  }
+
+
   Future<bool> _verifyTripStartOtp(
     QueryDocumentSnapshot<Map<String, dynamic>> request,
   ) async {
@@ -1050,6 +1216,12 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
         final bool licenceVerified =
             data['drivingLicenseVerified'] == true;
         final bool isOnline = data['isOnline'] == true;
+        final bool agreementAccepted =
+            data['driverAgreementAccepted'] == true;
+        final bool agreementReacceptRequired =
+            data['driverAgreementReacceptRequired'] == true;
+        final String agreementVersion =
+            data['driverAgreementVersion']?.toString().trim() ?? '';
         final String approvalStatus =
             data['approvalStatus']?.toString().trim().toLowerCase() ?? '';
         final bool suspended =
@@ -1254,6 +1426,59 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                               : 'Go Online',
                     ),
                   ),
+                const SizedBox(height: 12),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: (agreementAccepted && !agreementReacceptRequired
+                            ? Colors.green
+                            : Colors.orange)
+                        .withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(
+                      color: (agreementAccepted && !agreementReacceptRequired
+                              ? Colors.green
+                              : Colors.orange)
+                          .withValues(alpha: 0.20),
+                    ),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Row(
+                        children: <Widget>[
+                          Icon(
+                            Icons.description_outlined,
+                            color: agreementAccepted && !agreementReacceptRequired
+                                ? Colors.green
+                                : Colors.orange,
+                          ),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: Text(
+                              agreementReacceptRequired
+                                  ? 'Driver Agreement • Re-accept required'
+                                  : agreementAccepted
+                                      ? 'Driver Agreement • ${agreementVersion.isEmpty ? 'Accepted' : agreementVersion}'
+                                      : 'Driver Agreement • Not recorded',
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w900,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 8),
+                      OutlinedButton.icon(
+                        onPressed: agreementAccepted
+                            ? () => _openMyDriverAgreement(data)
+                            : null,
+                        icon: const Icon(Icons.visibility_outlined),
+                        label: const Text('View My Accepted Agreement'),
+                      ),
+                    ],
+                  ),
+                ),
                 if (_activeRideRequestId != null) ...<Widget>[
                   const SizedBox(height: 10),
                   const Text(
@@ -1628,7 +1853,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                 const SizedBox(height: 16),
                 _activeRideMap(data),
                 const SizedBox(height: 16),
-                if (status == 'accepted')
+                if (status == 'accepted') ...<Widget>[
                   FilledButton.icon(
                     onPressed:
                         _updatingRideStatus ? null : () => _startTrip(ride),
@@ -1637,8 +1862,19 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                       'Start Trip',
                       style: TextStyle(fontWeight: FontWeight.w900),
                     ),
-                  )
-                else
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: _updatingRideStatus
+                        ? null
+                        : () => _cancelAcceptedRide(ride),
+                    icon: const Icon(Icons.cancel_outlined),
+                    label: const Text(
+                      'Cancel Accepted Ride',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ] else
                   FilledButton.icon(
                     onPressed:
                         _updatingRideStatus ? null : () => _completeTrip(ride),

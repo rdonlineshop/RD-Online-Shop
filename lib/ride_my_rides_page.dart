@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 import 'ride_customer_tracking_page.dart';
+import 'services/ride_request_service.dart';
 
 class RideMyRidesPage extends StatelessWidget {
   const RideMyRidesPage({super.key});
@@ -194,6 +196,54 @@ class RideMyRidesPage extends StatelessWidget {
     return routeDistanceKm;
   }
 
+  Future<void> _callDriver(
+    BuildContext context,
+    String phoneNumber,
+  ) async {
+    final String cleanPhone = phoneNumber.trim();
+
+    if (cleanPhone.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Driver contact number is not available.'),
+        ),
+      );
+      return;
+    }
+
+    final Uri phoneUri = Uri(
+      scheme: 'tel',
+      path: cleanPhone,
+    );
+
+    try {
+      final bool launched = await launchUrl(
+        phoneUri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!launched && context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'This device could not open the phone dialer.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not call driver: $error'),
+        ),
+      );
+    }
+  }
+
   void _openRide(
     BuildContext context,
     QueryDocumentSnapshot<Map<String, dynamic>> ride,
@@ -224,6 +274,195 @@ class RideMyRidesPage extends StatelessWidget {
           driverId: driverId,
         ),
       ),
+    );
+  }
+
+
+  Future<void> _showCustomerCancellationDialog({
+    required BuildContext context,
+    required QueryDocumentSnapshot<Map<String, dynamic>> ride,
+  }) async {
+    final Map<String, dynamic> data = ride.data();
+    final String status = _status(data);
+
+    if (status != 'pending' && status != 'accepted') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('This ride can no longer be cancelled here.'),
+        ),
+      );
+      return;
+    }
+
+    final List<String> reasons = <String>[
+      'Driver is taking too long',
+      'Changed my plans',
+      'Booked by mistake',
+      'Pickup or destination changed',
+      'Found another ride',
+      'Other',
+    ];
+
+    String selectedReason = reasons.first;
+    bool isSubmitting = false;
+    final double baseFare = _toDouble(data['fareBaseFare']) ?? 0.0;
+    final double shownFee = status == 'accepted' && baseFare > 0
+        ? baseFare
+        : 0.0;
+    final String currency =
+        data['currency']?.toString().trim().isNotEmpty == true
+            ? data['currency'].toString().trim()
+            : 'Rs.';
+    final String requestId =
+        data['rideRequestId']?.toString().trim().isNotEmpty == true
+            ? data['rideRequestId'].toString().trim()
+            : ride.id;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext dialogContext,
+            StateSetter setDialogState,
+          ) {
+            Future<void> submit() async {
+              if (isSubmitting) {
+                return;
+              }
+
+              setDialogState(() {
+                isSubmitting = true;
+              });
+
+              try {
+                final RideCancellationResult result =
+                    await RideRequestService().cancelCustomerRide(
+                  rideRequestId: requestId,
+                  reason: selectedReason,
+                );
+
+                if (!dialogContext.mounted) {
+                  return;
+                }
+
+                Navigator.pop(dialogContext);
+
+                if (!context.mounted) {
+                  return;
+                }
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      result.fee > 0
+                          ? 'Ride cancelled. Cancellation fee: '
+                              '${result.currency} ${result.fee.toStringAsFixed(0)}.'
+                          : 'Ride cancelled. No cancellation fee.',
+                    ),
+                  ),
+                );
+              } catch (error) {
+                if (!dialogContext.mounted) {
+                  return;
+                }
+
+                setDialogState(() {
+                  isSubmitting = false;
+                });
+
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Could not cancel ride: $error'),
+                    ),
+                  );
+                }
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('Cancel Ride?'),
+              content: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    Text(
+                      shownFee > 0
+                          ? 'Cancellation fee: '
+                              '$currency ${shownFee.toStringAsFixed(0)}.'
+                          : 'No cancellation fee applies.',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 8),
+                    if (status == 'pending')
+                      const Text(
+                        'If the driver accepts before cancellation finishes, the accepted-ride cancellation fee may apply.',
+                        style: TextStyle(
+                          color: Colors.blueGrey,
+                          fontSize: 11.5,
+                        ),
+                      ),
+                    const SizedBox(height: 14),
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedReason,
+                      isExpanded: true,
+                      decoration: const InputDecoration(
+                        labelText: 'Cancellation reason',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: reasons
+                          .map(
+                            (String item) => DropdownMenuItem<String>(
+                              value: item,
+                              child: Text(
+                                item,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                              ),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: isSubmitting
+                          ? null
+                          : (String? value) {
+                              if (value != null) {
+                                setDialogState(() {
+                                  selectedReason = value;
+                                });
+                              }
+                            },
+                    ),
+                  ],
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.pop(dialogContext),
+                  child: const Text('Keep Ride'),
+                ),
+                FilledButton.icon(
+                  onPressed: isSubmitting ? null : submit,
+                  icon: isSubmitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cancel_outlined),
+                  label: Text(
+                    isSubmitting ? 'Cancelling...' : 'Cancel Ride',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
     );
   }
 
@@ -497,9 +736,17 @@ class RideMyRidesPage extends StatelessWidget {
     final double? fare = _shownFare(data, status);
     final double? distance = _shownDistance(data, status);
     final String driverId = data['driverId']?.toString().trim() ?? '';
+    final String driverPhone =
+        data['driverPhone']?.toString().trim() ?? '';
+    final bool canContactDriver = driverPhone.isNotEmpty &&
+        (status == 'pending' ||
+            status == 'accepted' ||
+            status == 'started' ||
+            status == 'in_progress');
     final bool canTrack = driverId.isNotEmpty &&
         status != 'cancelled' &&
         status != 'rejected';
+    final bool canCancel = status == 'pending' || status == 'accepted';
 
     return Card(
       elevation: 1.5,
@@ -569,6 +816,76 @@ class RideMyRidesPage extends StatelessWidget {
                 ),
               ],
             ),
+            if (canContactDriver) ...<Widget>[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: _rdBlue.withValues(alpha: 0.06),
+                  borderRadius: BorderRadius.circular(14),
+                  border: Border.all(
+                    color: _rdBlue.withValues(alpha: 0.18),
+                  ),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: <Widget>[
+                    const CircleAvatar(
+                      radius: 20,
+                      backgroundColor: Color(0xFFE3F2FD),
+                      child: Icon(
+                        Icons.phone_in_talk_rounded,
+                        color: _rdBlue,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            status == 'pending'
+                                ? 'Driver Contact • Request Sent'
+                                : 'Driver Contact',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 3),
+                          SelectableText(
+                            driverPhone,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          if (status == 'pending') ...<Widget>[
+                            const SizedBox(height: 3),
+                            Text(
+                              'You can call the selected driver even before acceptance.',
+                              style: TextStyle(
+                                color: Colors.grey.shade700,
+                                fontSize: 11.5,
+                                height: 1.25,
+                              ),
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    IconButton.filled(
+                      tooltip: 'Call Driver',
+                      onPressed: () => _callDriver(
+                        context,
+                        driverPhone,
+                      ),
+                      icon: const Icon(Icons.call_rounded),
+                    ),
+                  ],
+                ),
+              ),
+            ],
             const SizedBox(height: 14),
             _infoRow(
               icon: Icons.my_location_rounded,
@@ -616,6 +933,10 @@ class RideMyRidesPage extends StatelessWidget {
                 value: '$estimatedMinutes min',
               ),
             ],
+            if (status == 'cancelled') ...<Widget>[
+              const SizedBox(height: 14),
+              _cancellationDetails(data),
+            ],
             if (canTrack) ...<Widget>[
               const SizedBox(height: 16),
               SizedBox(
@@ -636,8 +957,133 @@ class RideMyRidesPage extends StatelessWidget {
                 ),
               ),
             ],
+            if (canCancel) ...<Widget>[
+              const SizedBox(height: 10),
+              SizedBox(
+                height: 50,
+                child: OutlinedButton.icon(
+                  onPressed: () => _showCustomerCancellationDialog(
+                    context: context,
+                    ride: ride,
+                  ),
+                  icon: const Icon(Icons.cancel_outlined),
+                  label: Text(
+                    status == 'accepted'
+                        ? 'Cancel Ride • Fee may apply'
+                        : 'Cancel Ride • No fee',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ],
           ],
         ),
+      ),
+    );
+  }
+
+  Widget _cancellationDetails(Map<String, dynamic> data) {
+    final String rawCancelledBy =
+        data['cancelledBy']?.toString().trim().toLowerCase() ?? '';
+    final String cancelledBy = rawCancelledBy == 'driver'
+        ? 'Driver'
+        : rawCancelledBy == 'customer'
+            ? 'Customer'
+            : rawCancelledBy.isEmpty
+                ? 'Not available'
+                : rawCancelledBy;
+    final String reason =
+        data['cancellationReason']?.toString().trim() ?? '';
+    final double fee = _toDouble(data['cancellationFee']) ?? 0.0;
+    final String currency = data['cancellationCurrency']
+                    ?.toString()
+                    .trim()
+                    .isNotEmpty ==
+                true
+        ? data['cancellationCurrency'].toString().trim()
+        : (data['currency']?.toString().trim().isNotEmpty == true
+            ? data['currency'].toString().trim()
+            : 'Rs.');
+    final String feeStatus =
+        data['cancellationFeeStatus']?.toString().trim().toLowerCase() ?? '';
+
+    final String feeText = fee > 0
+        ? '$currency ${fee.toStringAsFixed(0)}${feeStatus == 'due' ? ' • Due' : ''}'
+        : 'No cancellation fee';
+
+    return Container(
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: Colors.red.withValues(alpha: 0.06),
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(
+          color: Colors.red.withValues(alpha: 0.22),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          const Row(
+            children: <Widget>[
+              Icon(
+                Icons.info_outline_rounded,
+                color: Colors.red,
+                size: 20,
+              ),
+              SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  'Cancellation Details',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    color: Colors.red,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
+          _cancellationLine('Cancelled by', cancelledBy),
+          _cancellationLine(
+            'Reason',
+            reason.isEmpty ? 'Not available' : reason,
+          ),
+          _cancellationLine('Cancellation fee', feeText),
+        ],
+      ),
+    );
+  }
+
+  Widget _cancellationLine(String label, String value) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 6),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SizedBox(
+            width: 118,
+            child: Text(
+              '$label:',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          Expanded(
+            child: Text(
+              value,
+              style: const TextStyle(
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+                height: 1.3,
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

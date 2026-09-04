@@ -7,9 +7,8 @@ import 'admin_notification_center_page.dart';
 import 'admin_order_page.dart';
 import 'admin_product_page.dart';
 import 'admin_ride_driver_management_page.dart';
-import 'admin_ride_evidence_page.dart';
+import 'admin_ride_history_page.dart';
 import 'admin_ride_fare_settings_page.dart';
-import 'admin_ride_commission_settings_page.dart';
 import 'admin_seller_page.dart';
 
 class AdminDashboardPage extends StatelessWidget {
@@ -195,23 +194,12 @@ class AdminDashboardPage extends StatelessWidget {
             ),
           ),
           _dashboardCard(
-            icon: Icons.percent_rounded,
-            title: 'Ride Commission',
+            icon: Icons.route_rounded,
+            title: 'Ride History',
             onTap: () => Navigator.push<void>(
               context,
               MaterialPageRoute<void>(
-                builder: (_) =>
-                    const AdminRideCommissionSettingsPage(),
-              ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.security_rounded,
-            title: 'Ride Evidence',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminRideEvidencePage(),
+                builder: (_) => const AdminRideHistoryPage(),
               ),
             ),
           ),

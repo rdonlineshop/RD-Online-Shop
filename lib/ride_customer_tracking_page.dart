@@ -5,6 +5,7 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'ride_chat_page.dart';
+import 'services/ride_request_service.dart';
 
 class RideCustomerTrackingPage extends StatelessWidget {
   const RideCustomerTrackingPage({
@@ -210,6 +211,17 @@ class RideCustomerTrackingPage extends StatelessWidget {
             _statusCard(status),
             const SizedBox(height: 14),
             _fareCard(request, status),
+            if (status == 'pending' || status == 'accepted') ...<Widget>[
+              const SizedBox(height: 14),
+              _customerCancellationCard(
+                context: context,
+                request: request,
+              ),
+            ],
+            if (status == 'cancelled') ...<Widget>[
+              const SizedBox(height: 14),
+              _cancellationInfoCard(request),
+            ],
             const SizedBox(height: 14),
             Card(
               elevation: 1.5,
@@ -591,6 +603,281 @@ class RideCustomerTrackingPage extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+
+
+  Widget _customerCancellationCard({
+    required BuildContext context,
+    required Map<String, dynamic> request,
+  }) {
+    final String status =
+        request['status']?.toString().trim().toLowerCase() ?? 'pending';
+    final double fee = status == 'accepted'
+        ? (_toDouble(request['fareBaseFare']) ?? 0.0)
+        : 0.0;
+    final String currency =
+        request['currency']?.toString().trim().isNotEmpty == true
+            ? request['currency'].toString().trim()
+            : 'Rs.';
+
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const Text(
+              'Need to cancel?',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 7),
+            Text(
+              fee > 0
+                  ? 'The driver has already accepted. '
+                      'Cancellation fee: $currency ${fee.toStringAsFixed(0)}.'
+                  : 'You can cancel before the trip starts.',
+              style: const TextStyle(
+                color: Colors.blueGrey,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 12),
+            OutlinedButton.icon(
+              onPressed: () => _showCustomerCancellationDialog(
+                context: context,
+                request: request,
+              ),
+              icon: const Icon(Icons.cancel_outlined),
+              label: const Text(
+                'Cancel Ride',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showCustomerCancellationDialog({
+    required BuildContext context,
+    required Map<String, dynamic> request,
+  }) async {
+    final List<String> reasons = <String>[
+      'Driver is taking too long',
+      'Changed my plans',
+      'Booked by mistake',
+      'Pickup or destination changed',
+      'Found another ride',
+      'Other',
+    ];
+
+    String selectedReason = reasons.first;
+    bool isSubmitting = false;
+    final String status =
+        request['status']?.toString().trim().toLowerCase() ?? 'pending';
+    final double fee = status == 'accepted'
+        ? (_toDouble(request['fareBaseFare']) ?? 0.0)
+        : 0.0;
+    final String currency =
+        request['currency']?.toString().trim().isNotEmpty == true
+            ? request['currency'].toString().trim()
+            : 'Rs.';
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: !isSubmitting,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext dialogContext,
+            StateSetter setDialogState,
+          ) {
+            Future<void> submit() async {
+              if (isSubmitting) {
+                return;
+              }
+
+              setDialogState(() {
+                isSubmitting = true;
+              });
+
+              try {
+                final RideCancellationResult result =
+                    await RideRequestService().cancelCustomerRide(
+                  rideRequestId: rideRequestId,
+                  reason: selectedReason,
+                );
+
+                if (!dialogContext.mounted) {
+                  return;
+                }
+
+                Navigator.pop(dialogContext);
+
+                if (!context.mounted) {
+                  return;
+                }
+
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(
+                      result.fee > 0
+                          ? 'Ride cancelled. Cancellation fee: '
+                              '${result.currency} ${result.fee.toStringAsFixed(0)}.'
+                          : 'Ride cancelled. No cancellation fee.',
+                    ),
+                  ),
+                );
+              } catch (error) {
+                if (!dialogContext.mounted) {
+                  return;
+                }
+
+                setDialogState(() {
+                  isSubmitting = false;
+                });
+
+                if (context.mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content: Text('Could not cancel ride: $error'),
+                    ),
+                  );
+                }
+              }
+            }
+
+            return AlertDialog(
+              title: const Text('Cancel Ride?'),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Text(
+                    fee > 0
+                        ? 'Cancellation fee: '
+                            '$currency ${fee.toStringAsFixed(0)}.'
+                        : 'No cancellation fee applies.',
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedReason,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Cancellation reason',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: reasons
+                        .map(
+                          (String item) => DropdownMenuItem<String>(
+                            value: item,
+                            child: Text(
+                              item,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: isSubmitting
+                        ? null
+                        : (String? value) {
+                            if (value != null) {
+                              setDialogState(() {
+                                selectedReason = value;
+                              });
+                            }
+                          },
+                  ),
+                ],
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: isSubmitting
+                      ? null
+                      : () => Navigator.pop(dialogContext),
+                  child: const Text('Keep Ride'),
+                ),
+                FilledButton.icon(
+                  onPressed: isSubmitting ? null : submit,
+                  icon: isSubmitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.cancel_outlined),
+                  label: Text(
+                    isSubmitting ? 'Cancelling...' : 'Cancel Ride',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+  }
+
+  Widget _cancellationInfoCard(
+    Map<String, dynamic> request,
+  ) {
+    final String cancelledBy =
+        request['cancelledBy']?.toString().trim() ?? '';
+    final String reason =
+        request['cancellationReason']?.toString().trim() ?? '';
+    final double fee = _toDouble(request['cancellationFee']) ?? 0.0;
+    final String currency =
+        request['cancellationCurrency']?.toString().trim().isNotEmpty == true
+            ? request['cancellationCurrency'].toString().trim()
+            : (request['currency']?.toString().trim().isNotEmpty == true
+                ? request['currency'].toString().trim()
+                : 'Rs.');
+
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const Text(
+              'Cancellation Details',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 10),
+            _locationRow(
+              icon: Icons.person_outline_rounded,
+              label: 'Cancelled by',
+              value: cancelledBy.isEmpty ? 'Not available' : cancelledBy,
+            ),
+            const Divider(height: 22),
+            _locationRow(
+              icon: Icons.notes_rounded,
+              label: 'Reason',
+              value: reason.isEmpty ? 'Not available' : reason,
+            ),
+            const Divider(height: 22),
+            _locationRow(
+              icon: Icons.payments_outlined,
+              label: 'Cancellation Fee',
+              value: fee > 0
+                  ? '$currency ${fee.toStringAsFixed(0)}'
+                  : '$currency 0',
+            ),
+          ],
+        ),
+      ),
     );
   }
 

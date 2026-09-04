@@ -2,6 +2,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'ride_driver_agreement_page.dart';
+
 class AdminRideDriverManagementPage extends StatelessWidget {
   const AdminRideDriverManagementPage({super.key});
 
@@ -69,6 +71,25 @@ class AdminRideDriverManagementPage extends StatelessWidget {
     BuildContext context,
     QueryDocumentSnapshot<Map<String, dynamic>> doc,
   ) async {
+    final Map<String, dynamic> driver = doc.data();
+    final bool agreementAccepted =
+        driver['driverAgreementAccepted'] == true;
+    final bool reacceptRequired =
+        driver['driverAgreementReacceptRequired'] == true;
+
+    if (!agreementAccepted || reacceptRequired) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            reacceptRequired
+                ? 'Driver must accept the latest RD Ride Driver Agreement before approval.'
+                : 'Driver Agreement acceptance is required before approval.',
+          ),
+        ),
+      );
+      return;
+    }
+
     final WriteBatch batch = FirebaseFirestore.instance.batch();
     batch.update(
       doc.reference,
@@ -652,6 +673,39 @@ class _DriverCard extends StatelessWidget {
     return '$clean ${amount.toStringAsFixed(2)}';
   }
 
+  String _timestampText(dynamic value) {
+    if (value is! Timestamp) {
+      return 'Not recorded';
+    }
+
+    final DateTime time = value.toDate().toLocal();
+    final String day = time.day.toString().padLeft(2, '0');
+    final String month = time.month.toString().padLeft(2, '0');
+    final String hour = time.hour.toString().padLeft(2, '0');
+    final String minute = time.minute.toString().padLeft(2, '0');
+    return '$day/$month/${time.year} $hour:$minute';
+  }
+
+  void _openAgreement(
+    BuildContext context,
+    Map<String, dynamic> data,
+  ) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => RideDriverAgreementPage(
+          driverName: _value(data, 'name'),
+          reviewOnly: true,
+          acceptedName: _value(data, 'driverAgreementAcceptedName'),
+          acceptedVersion: _value(data, 'driverAgreementVersion'),
+          acceptedHash: _value(data, 'driverAgreementTextHash'),
+          acceptedAtText: _timestampText(data['driverAgreementAcceptedAt']),
+          agreementText: _value(data, 'driverAgreementTextSnapshot'),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final Map<String, dynamic> data = doc.data();
@@ -665,6 +719,15 @@ class _DriverCard extends StatelessWidget {
     final String licenceFront = _value(data, 'drivingLicenseFrontUrl');
     final String licenceBack = _value(data, 'drivingLicenseBackUrl');
     final bool licenceVerified = data['drivingLicenseVerified'] == true;
+    final bool agreementAccepted = data['driverAgreementAccepted'] == true;
+    final bool agreementReacceptRequired =
+        data['driverAgreementReacceptRequired'] == true;
+    final String agreementVersion = _value(data, 'driverAgreementVersion');
+    final String agreementName =
+        _value(data, 'driverAgreementAcceptedName');
+    final String agreementHash = _value(data, 'driverAgreementTextHash');
+    final String agreementAcceptedAt =
+        _timestampText(data['driverAgreementAcceptedAt']);
     final bool approved = data['isApproved'] == true;
     final bool active = data['isActive'] == true;
     final bool online = data['isOnline'] == true;
@@ -750,6 +813,66 @@ class _DriverCard extends StatelessWidget {
               value: licenceVerified ? 'Yes' : 'No',
             ),
             _InfoRow(label: 'Online', value: online ? 'Yes' : 'No'),
+            const Divider(height: 24),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    'Driver Agreement',
+                    style: TextStyle(
+                      color: agreementAccepted && !agreementReacceptRequired
+                          ? Colors.green.shade700
+                          : Colors.orange.shade800,
+                      fontWeight: FontWeight.w900,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                _StatusChip(
+                  text: agreementReacceptRequired
+                      ? 'RE-ACCEPT REQUIRED'
+                      : agreementAccepted
+                          ? 'ACCEPTED'
+                          : 'NOT RECORDED',
+                  color: agreementAccepted && !agreementReacceptRequired
+                      ? Colors.green
+                      : Colors.orange,
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            _InfoRow(
+              label: 'Accepted Name',
+              value: agreementName.isEmpty ? 'Not recorded' : agreementName,
+            ),
+            _InfoRow(
+              label: 'Version',
+              value: agreementVersion.isEmpty ? 'Not recorded' : agreementVersion,
+            ),
+            _InfoRow(label: 'Accepted At', value: agreementAcceptedAt),
+            _InfoRow(
+              label: 'Text Hash',
+              value: agreementHash.isEmpty ? 'Not recorded' : agreementHash,
+            ),
+            const SizedBox(height: 8),
+            OutlinedButton.icon(
+              onPressed: agreementAccepted
+                  ? () => _openAgreement(context, data)
+                  : null,
+              icon: const Icon(Icons.description_outlined),
+              label: const Text('View Accepted Agreement'),
+            ),
+            if (!agreementAccepted && !approved)
+              Padding(
+                padding: const EdgeInsets.only(top: 6),
+                child: Text(
+                  'Approval is blocked until the driver accepts the RD Ride Driver Agreement.',
+                  style: TextStyle(
+                    color: Colors.orange.shade900,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
             if (suspended) ...<Widget>[
               const Divider(height: 24),
               Text(
@@ -829,7 +952,9 @@ class _DriverCard extends StatelessWidget {
               ),
             if (licenceVerified && !approved)
               FilledButton.icon(
-                onPressed: onApprove,
+                onPressed: agreementAccepted && !agreementReacceptRequired
+                    ? onApprove
+                    : null,
                 icon: const Icon(Icons.check_circle_rounded),
                 label: const Text(
                   'Approve & Activate Driver',

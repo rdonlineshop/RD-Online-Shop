@@ -298,6 +298,16 @@ class RideRequestService {
         'tripCompletedAt': null,
         'cancelledAt': null,
 
+        // Cancellation snapshot.
+        // Before driver acceptance the customer cancellation fee is 0.
+        // After acceptance, RD uses this ride's immutable base fare snapshot.
+        'cancelledBy': null,
+        'cancellationReason': null,
+        'cancellationPreviousStatus': null,
+        'cancellationFee': 0.0,
+        'cancellationCurrency': cleanCurrency,
+        'cancellationFeeStatus': 'not_required',
+
         // Timestamps
         'createdAt': FieldValue.serverTimestamp(),
         'updatedAt': FieldValue.serverTimestamp(),
@@ -318,6 +328,195 @@ class RideRequestService {
     return ref.id;
   }
 
+
+  double _cancellationFeeForStatus(
+    Map<String, dynamic> ride,
+    String status,
+  ) {
+    if (status != 'accepted') {
+      return 0.0;
+    }
+
+    final dynamic rawBaseFare = ride['fareBaseFare'];
+    final double baseFare = rawBaseFare is num
+        ? rawBaseFare.toDouble()
+        : double.tryParse(rawBaseFare?.toString().trim() ?? '') ?? 0.0;
+
+    return baseFare > 0 ? baseFare : 0.0;
+  }
+
+  Future<RideCancellationResult> cancelCustomerRide({
+    required String rideRequestId,
+    required String reason,
+  }) async {
+    final User? user = _auth.currentUser;
+    if (user == null) {
+      throw StateError('Customer session is not available.');
+    }
+
+    final String cleanId = rideRequestId.trim();
+    final String cleanReason = reason.trim();
+
+    if (cleanId.isEmpty) {
+      throw ArgumentError('rideRequestId cannot be empty.');
+    }
+    if (cleanReason.isEmpty || cleanReason.length > 200) {
+      throw ArgumentError('A cancellation reason is required.');
+    }
+
+    final DocumentReference<Map<String, dynamic>> rideRef =
+        _rideRequests.doc(cleanId);
+    final DocumentReference<Map<String, dynamic>> privateRef =
+        rideRef.collection('private').doc('customer');
+
+    return _firestore.runTransaction<RideCancellationResult>(
+      (Transaction transaction) async {
+        final DocumentSnapshot<Map<String, dynamic>> snapshot =
+            await transaction.get(rideRef);
+        final Map<String, dynamic>? ride = snapshot.data();
+
+        if (!snapshot.exists || ride == null) {
+          throw StateError('Ride request was not found.');
+        }
+
+        if (ride['customerAuthUid']?.toString().trim() != user.uid) {
+          throw StateError('This ride does not belong to the current customer.');
+        }
+
+        final String status =
+            ride['status']?.toString().trim().toLowerCase() ?? '';
+
+        if (status != 'pending' && status != 'accepted') {
+          throw StateError(
+            status == 'in_progress' || status == 'started'
+                ? 'A trip that has already started cannot be cancelled here.'
+                : 'This ride can no longer be cancelled.',
+          );
+        }
+
+        final double fee = _cancellationFeeForStatus(ride, status);
+        final String currency =
+            ride['currency']?.toString().trim().isNotEmpty == true
+                ? ride['currency'].toString().trim()
+                : 'Rs.';
+
+        transaction.update(
+          rideRef,
+          <String, dynamic>{
+            'status': 'cancelled',
+            'cancelledBy': 'customer',
+            'cancellationReason': cleanReason,
+            'cancellationPreviousStatus': status,
+            'cancellationFee': fee,
+            'cancellationCurrency': currency,
+            'cancellationFeeStatus': fee > 0 ? 'due' : 'not_required',
+            'cancelledAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+
+        // The real Trip Start OTP is no longer needed after cancellation.
+        transaction.delete(privateRef);
+
+        return RideCancellationResult(
+          previousStatus: status,
+          fee: fee,
+          currency: currency,
+        );
+      },
+    );
+  }
+
+  Future<RideCancellationResult> cancelDriverRide({
+    required String rideRequestId,
+    required String reason,
+  }) async {
+    final User? user = _auth.currentUser;
+    if (user == null) {
+      throw StateError('Ride Driver session is not available.');
+    }
+
+    final String cleanId = rideRequestId.trim();
+    final String cleanReason = reason.trim();
+
+    if (cleanId.isEmpty) {
+      throw ArgumentError('rideRequestId cannot be empty.');
+    }
+    if (cleanReason.isEmpty || cleanReason.length > 200) {
+      throw ArgumentError('A cancellation reason is required.');
+    }
+
+    final DocumentReference<Map<String, dynamic>> rideRef =
+        _rideRequests.doc(cleanId);
+    final DocumentReference<Map<String, dynamic>> privateRef =
+        rideRef.collection('private').doc('customer');
+    final DocumentReference<Map<String, dynamic>> driverRef =
+        _firestore.collection('ride_drivers').doc(user.uid);
+
+    return _firestore.runTransaction<RideCancellationResult>(
+      (Transaction transaction) async {
+        final DocumentSnapshot<Map<String, dynamic>> snapshot =
+            await transaction.get(rideRef);
+        final Map<String, dynamic>? ride = snapshot.data();
+
+        if (!snapshot.exists || ride == null) {
+          throw StateError('Ride request was not found.');
+        }
+
+        if (ride['driverId']?.toString().trim() != user.uid) {
+          throw StateError('This ride is not assigned to the current driver.');
+        }
+
+        final String status =
+            ride['status']?.toString().trim().toLowerCase() ?? '';
+
+        if (status != 'accepted') {
+          throw StateError(
+            status == 'in_progress' || status == 'started'
+                ? 'A trip that has already started cannot be cancelled here.'
+                : 'Only an accepted ride can be cancelled by the driver.',
+          );
+        }
+
+        final String currency =
+            ride['currency']?.toString().trim().isNotEmpty == true
+                ? ride['currency'].toString().trim()
+                : 'Rs.';
+
+        transaction.update(
+          rideRef,
+          <String, dynamic>{
+            'status': 'cancelled',
+            'cancelledBy': 'driver',
+            'cancellationReason': cleanReason,
+            'cancellationPreviousStatus': status,
+            'cancellationFee': 0.0,
+            'cancellationCurrency': currency,
+            'cancellationFeeStatus': 'not_required',
+            'cancelledAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+
+        transaction.update(
+          driverRef,
+          <String, dynamic>{
+            'currentRideRequestId': null,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+
+        transaction.delete(privateRef);
+
+        return RideCancellationResult(
+          previousStatus: status,
+          fee: 0.0,
+          currency: currency,
+        );
+      },
+    );
+  }
+
   Stream<DocumentSnapshot<Map<String, dynamic>>>
       watchRideRequest(
     String rideRequestId,
@@ -330,4 +529,16 @@ class RideRequestService {
 
     return _rideRequests.doc(cleanId).snapshots();
   }
+}
+
+class RideCancellationResult {
+  const RideCancellationResult({
+    required this.previousStatus,
+    required this.fee,
+    required this.currency,
+  });
+
+  final String previousStatus;
+  final double fee;
+  final String currency;
 }
