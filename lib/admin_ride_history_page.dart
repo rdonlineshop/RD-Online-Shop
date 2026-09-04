@@ -59,6 +59,7 @@ class _AdminRideHistoryPageState extends State<AdminRideHistoryPage> {
       case 'active':
         return status == 'pending' ||
             status == 'accepted' ||
+            status == 'arrived' ||
             status == 'started' ||
             status == 'in_progress';
       case 'all':
@@ -76,6 +77,8 @@ class _AdminRideHistoryPageState extends State<AdminRideHistoryPage> {
         return Colors.red;
       case 'accepted':
         return Colors.teal;
+      case 'arrived':
+        return Colors.deepOrange;
       case 'started':
       case 'in_progress':
         return Colors.blue;
@@ -98,6 +101,8 @@ class _AdminRideHistoryPageState extends State<AdminRideHistoryPage> {
         return 'REJECTED';
       case 'accepted':
         return 'ACCEPTED';
+      case 'arrived':
+        return 'ARRIVED';
       case 'pending':
       default:
         return 'PENDING';
@@ -225,6 +230,7 @@ class _AdminRideHistoryPageState extends State<AdminRideHistoryPage> {
       if (status == 'completed') completed++;
       if (status == 'pending' ||
           status == 'accepted' ||
+          status == 'arrived' ||
           status == 'started' ||
           status == 'in_progress') {
         active++;

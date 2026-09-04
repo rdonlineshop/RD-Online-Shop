@@ -129,7 +129,9 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                   .toLowerCase() ??
               '';
 
-          if (status == 'accepted' || status == 'in_progress') {
+          if (status == 'accepted' ||
+              status == 'arrived' ||
+              status == 'in_progress') {
             activeRide = document;
             break;
           }
@@ -778,7 +780,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
             StateSetter setDialogState,
           ) {
             return AlertDialog(
-              title: const Text('Cancel Accepted Ride?'),
+              title: const Text('Cancel Ride Before Start?'),
               content: Column(
                 mainAxisSize: MainAxisSize.min,
                 crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -879,6 +881,84 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
   }
 
 
+  Future<void> _markArrivedAtPickup(
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
+  ) async {
+    if (_updatingRideStatus) {
+      return;
+    }
+
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              title: const Text('Arrived at Pickup?'),
+              content: const Text(
+                'Confirm only after you have reached the customer pickup location. '
+                'The customer will immediately see that you have arrived.',
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext, false),
+                  child: const Text('Not Yet'),
+                ),
+                FilledButton.icon(
+                  onPressed: () => Navigator.pop(dialogContext, true),
+                  icon: const Icon(Icons.location_on_rounded),
+                  label: const Text('I Have Arrived'),
+                ),
+              ],
+            );
+          },
+        ) ??
+        false;
+
+    if (!confirmed || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _updatingRideStatus = true;
+    });
+
+    try {
+      await request.reference.update(
+        <String, dynamic>{
+          'status': 'arrived',
+          'arrivedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Arrival confirmed. The customer can now see that you are at the pickup point.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not mark arrival: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingRideStatus = false;
+        });
+      }
+    }
+  }
+
+
   Future<bool> _verifyTripStartOtp(
     QueryDocumentSnapshot<Map<String, dynamic>> request,
   ) async {
@@ -965,6 +1045,19 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     QueryDocumentSnapshot<Map<String, dynamic>> request,
   ) async {
     if (_updatingRideStatus) {
+      return;
+    }
+
+    final String currentStatus =
+        request.data()['status']?.toString().trim().toLowerCase() ?? '';
+    if (currentStatus != 'arrived') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Confirm Arrived at Pickup before starting the trip.',
+          ),
+        ),
+      );
       return;
     }
 
@@ -1561,7 +1654,9 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                     .trim()
                     .toLowerCase() ??
                 '';
-            return status == 'accepted' || status == 'in_progress';
+            return status == 'accepted' ||
+                status == 'arrived' ||
+                status == 'in_progress';
           },
         ).toList();
 
@@ -1677,8 +1772,16 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                       ),
                     ),
                     _statusChip(
-                      status == 'in_progress' ? 'IN PROGRESS' : 'ACCEPTED',
-                      status == 'in_progress' ? Colors.blue : Colors.green,
+                      status == 'in_progress'
+                          ? 'IN PROGRESS'
+                          : status == 'arrived'
+                              ? 'ARRIVED'
+                              : 'ACCEPTED',
+                      status == 'in_progress'
+                          ? Colors.blue
+                          : status == 'arrived'
+                              ? Colors.deepOrange
+                              : Colors.green,
                     ),
                   ],
                 ),
@@ -1855,6 +1958,28 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                 const SizedBox(height: 16),
                 if (status == 'accepted') ...<Widget>[
                   FilledButton.icon(
+                    onPressed: _updatingRideStatus
+                        ? null
+                        : () => _markArrivedAtPickup(ride),
+                    icon: const Icon(Icons.location_on_rounded),
+                    label: const Text(
+                      'I Have Arrived at Pickup',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: _updatingRideStatus
+                        ? null
+                        : () => _cancelAcceptedRide(ride),
+                    icon: const Icon(Icons.cancel_outlined),
+                    label: const Text(
+                      'Cancel Ride Before Start',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ] else if (status == 'arrived') ...<Widget>[
+                  FilledButton.icon(
                     onPressed:
                         _updatingRideStatus ? null : () => _startTrip(ride),
                     icon: const Icon(Icons.play_arrow_rounded),
@@ -1870,7 +1995,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                         : () => _cancelAcceptedRide(ride),
                     icon: const Icon(Icons.cancel_outlined),
                     label: const Text(
-                      'Cancel Accepted Ride',
+                      'Cancel Ride Before Start',
                       style: TextStyle(fontWeight: FontWeight.w900),
                     ),
                   ),

@@ -297,6 +297,7 @@ class RideRequestService {
         'tripStartedAt': null,
         'tripCompletedAt': null,
         'cancelledAt': null,
+        'arrivedAt': null,
 
         // Cancellation snapshot.
         // Before driver acceptance the customer cancellation fee is 0.
@@ -333,7 +334,7 @@ class RideRequestService {
     Map<String, dynamic> ride,
     String status,
   ) {
-    if (status != 'accepted') {
+    if (status != 'accepted' && status != 'arrived') {
       return 0.0;
     }
 
@@ -386,7 +387,9 @@ class RideRequestService {
         final String status =
             ride['status']?.toString().trim().toLowerCase() ?? '';
 
-        if (status != 'pending' && status != 'accepted') {
+        if (status != 'pending' &&
+            status != 'accepted' &&
+            status != 'arrived') {
           throw StateError(
             status == 'in_progress' || status == 'started'
                 ? 'A trip that has already started cannot be cancelled here.'
@@ -470,11 +473,11 @@ class RideRequestService {
         final String status =
             ride['status']?.toString().trim().toLowerCase() ?? '';
 
-        if (status != 'accepted') {
+        if (status != 'accepted' && status != 'arrived') {
           throw StateError(
             status == 'in_progress' || status == 'started'
                 ? 'A trip that has already started cannot be cancelled here.'
-                : 'Only an accepted ride can be cancelled by the driver.',
+                : 'Only an accepted or arrived ride can be cancelled by the driver.',
           );
         }
 

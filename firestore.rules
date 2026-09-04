@@ -429,7 +429,7 @@ service cloud.firestore {
       allow update: if isAdmin()
         || (customerOwnsRequest()
           && rideIdentityUnchanged()
-          && resource.data.status in ['pending', 'accepted']
+          && resource.data.status in ['pending', 'accepted', 'arrived']
           && request.resource.data.status == 'cancelled'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'status',
@@ -460,7 +460,7 @@ service cloud.firestore {
               && request.resource.data.cancellationFeeStatus == 'not_required'
             )
             || (
-              resource.data.status == 'accepted'
+              resource.data.status in ['accepted', 'arrived']
               && (
                 (
                   resource.data.get('fareBaseFare', 0.0) > 0
@@ -498,7 +498,7 @@ service cloud.firestore {
               )
             )
             || (
-              resource.data.status == 'accepted'
+              resource.data.status in ['accepted', 'arrived']
               && resource.data.driverResponse == 'accepted'
               && request.resource.data.status == 'cancelled'
               && request.resource.data.driverResponse == 'accepted'
@@ -517,7 +517,7 @@ service cloud.firestore {
               && request.resource.data.cancellationReason is string
               && request.resource.data.cancellationReason.size() > 0
               && request.resource.data.cancellationReason.size() <= 200
-              && request.resource.data.cancellationPreviousStatus == 'accepted'
+              && request.resource.data.cancellationPreviousStatus == resource.data.status
               && request.resource.data.cancellationFee == 0
               && request.resource.data.cancellationCurrency
                 == resource.data.currency
@@ -526,6 +526,18 @@ service cloud.firestore {
             )
             || (
               resource.data.status == 'accepted'
+              && resource.data.driverResponse == 'accepted'
+              && request.resource.data.status == 'arrived'
+              && request.resource.data.driverResponse == 'accepted'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'status',
+                'arrivedAt',
+                'updatedAt'
+              ])
+              && request.resource.data.arrivedAt is timestamp
+            )
+            || (
+              resource.data.status == 'arrived'
               && resource.data.driverResponse == 'accepted'
               && request.resource.data.status == 'in_progress'
               && request.resource.data.driverResponse == 'accepted'
@@ -669,7 +681,7 @@ service cloud.firestore {
         }
 
         function activeRideChat() {
-          return chatRide().status in ['accepted', 'in_progress'];
+          return chatRide().status in ['accepted', 'arrived', 'in_progress'];
         }
 
         function validChatSenderRole() {
@@ -754,7 +766,7 @@ service cloud.firestore {
         }
 
         function activeAudioChat() {
-          return audioRide().status in ['accepted', 'in_progress'];
+          return audioRide().status in ['accepted', 'arrived', 'in_progress'];
         }
 
         function pairedMessageAfterCreate() {

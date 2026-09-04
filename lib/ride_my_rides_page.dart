@@ -42,6 +42,7 @@ class RideMyRidesPage extends StatelessWidget {
   bool _isActiveStatus(String status) {
     return status == 'pending' ||
         status == 'accepted' ||
+        status == 'arrived' ||
         status == 'started' ||
         status == 'in_progress';
   }
@@ -50,20 +51,23 @@ class RideMyRidesPage extends StatelessWidget {
     if (status == 'in_progress' || status == 'started') {
       return 0;
     }
-    if (status == 'accepted') {
+    if (status == 'arrived') {
       return 1;
     }
-    if (status == 'pending') {
+    if (status == 'accepted') {
       return 2;
     }
-    if (status == 'completed') {
+    if (status == 'pending') {
       return 3;
     }
-    if (status == 'cancelled') {
+    if (status == 'completed') {
       return 4;
     }
-    if (status == 'rejected') {
+    if (status == 'cancelled') {
       return 5;
+    }
+    if (status == 'rejected') {
+      return 6;
     }
     return 6;
   }
@@ -107,6 +111,8 @@ class RideMyRidesPage extends StatelessWidget {
     switch (status) {
       case 'accepted':
         return 'ACCEPTED';
+      case 'arrived':
+        return 'ARRIVED';
       case 'started':
       case 'in_progress':
         return 'IN PROGRESS';
@@ -125,6 +131,8 @@ class RideMyRidesPage extends StatelessWidget {
     switch (status) {
       case 'accepted':
         return Colors.green;
+      case 'arrived':
+        return Colors.deepOrange;
       case 'started':
       case 'in_progress':
         return Colors.blue;
@@ -285,7 +293,9 @@ class RideMyRidesPage extends StatelessWidget {
     final Map<String, dynamic> data = ride.data();
     final String status = _status(data);
 
-    if (status != 'pending' && status != 'accepted') {
+    if (status != 'pending' &&
+        status != 'accepted' &&
+        status != 'arrived') {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('This ride can no longer be cancelled here.'),
@@ -306,7 +316,8 @@ class RideMyRidesPage extends StatelessWidget {
     String selectedReason = reasons.first;
     bool isSubmitting = false;
     final double baseFare = _toDouble(data['fareBaseFare']) ?? 0.0;
-    final double shownFee = status == 'accepted' && baseFare > 0
+    final double shownFee =
+        (status == 'accepted' || status == 'arrived') && baseFare > 0
         ? baseFare
         : 0.0;
     final String currency =
@@ -741,12 +752,15 @@ class RideMyRidesPage extends StatelessWidget {
     final bool canContactDriver = driverPhone.isNotEmpty &&
         (status == 'pending' ||
             status == 'accepted' ||
+            status == 'arrived' ||
             status == 'started' ||
             status == 'in_progress');
     final bool canTrack = driverId.isNotEmpty &&
         status != 'cancelled' &&
         status != 'rejected';
-    final bool canCancel = status == 'pending' || status == 'accepted';
+    final bool canCancel = status == 'pending' ||
+        status == 'accepted' ||
+        status == 'arrived';
 
     return Card(
       elevation: 1.5,
@@ -968,7 +982,7 @@ class RideMyRidesPage extends StatelessWidget {
                   ),
                   icon: const Icon(Icons.cancel_outlined),
                   label: Text(
-                    status == 'accepted'
+                    (status == 'accepted' || status == 'arrived')
                         ? 'Cancel Ride • Fee may apply'
                         : 'Cancel Ride • No fee',
                     style: const TextStyle(

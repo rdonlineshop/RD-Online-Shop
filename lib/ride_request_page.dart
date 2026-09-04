@@ -154,7 +154,7 @@ class _RideRequestPageState extends State<RideRequestPage> {
     ];
 
     String selectedReason = reasons.first;
-    final double fee = status == 'accepted'
+    final double fee = (status == 'accepted' || status == 'arrived')
         ? ((data['fareBaseFare'] is num)
             ? (data['fareBaseFare'] as num).toDouble()
             : double.tryParse(data['fareBaseFare']?.toString() ?? '') ?? 0.0)
@@ -179,8 +179,8 @@ class _RideRequestPageState extends State<RideRequestPage> {
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: <Widget>[
                   Text(
-                    status == 'accepted' && fee > 0
-                        ? 'The driver has already accepted this ride. '
+                    (status == 'accepted' || status == 'arrived') && fee > 0
+                        ? '${status == 'arrived' ? 'The driver has arrived at pickup. ' : 'The driver has already accepted this ride. '}'
                             'Cancellation fee: $currency ${fee.toStringAsFixed(0)}.'
                         : 'No cancellation fee applies before the driver accepts.',
                     style: const TextStyle(fontWeight: FontWeight.w700),
@@ -424,6 +424,30 @@ class _RideRequestPageState extends State<RideRequestPage> {
               title: 'Driver Accepted ✅',
               message:
                   '${driver.name} accepted your ride request. You can now track the driver.',
+              actionLabel: 'Track Driver',
+              onAction: () {
+                _openTracking(requestId);
+              },
+              secondaryActionLabel:
+                  _isCancelling ? 'Cancelling...' : 'Cancel Ride',
+              onSecondaryAction: _isCancelling
+                  ? null
+                  : () {
+                      _cancelCustomerRide(
+                        requestId: requestId,
+                        status: status,
+                        data: data,
+                      );
+                    },
+            );
+
+          case 'arrived':
+            return _requestStatusCard(
+              color: Colors.deepOrange,
+              icon: Icons.location_on_rounded,
+              title: 'Driver Arrived at Pickup 📍',
+              message:
+                  '${driver.name} has arrived at your pickup location. Please meet the driver and keep your Trip Start OTP ready.',
               actionLabel: 'Track Driver',
               onAction: () {
                 _openTracking(requestId);

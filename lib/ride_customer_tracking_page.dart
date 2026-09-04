@@ -211,7 +211,9 @@ class RideCustomerTrackingPage extends StatelessWidget {
             _statusCard(status),
             const SizedBox(height: 14),
             _fareCard(request, status),
-            if (status == 'pending' || status == 'accepted') ...<Widget>[
+            if (status == 'pending' ||
+                status == 'accepted' ||
+                status == 'arrived') ...<Widget>[
               const SizedBox(height: 14),
               _customerCancellationCard(
                 context: context,
@@ -292,7 +294,9 @@ class RideCustomerTrackingPage extends StatelessWidget {
                 ),
               ),
             ),
-            if (status == 'accepted' || status == 'in_progress') ...<Widget>[
+            if (status == 'accepted' ||
+                status == 'arrived' ||
+                status == 'in_progress') ...<Widget>[
               const SizedBox(height: 14),
               _communicationCard(
                 context: context,
@@ -301,7 +305,7 @@ class RideCustomerTrackingPage extends StatelessWidget {
                 customerName: customerName,
               ),
             ],
-            if (status == 'accepted' &&
+            if ((status == 'accepted' || status == 'arrived') &&
                 request['tripStartOtpRequired'] == true) ...<Widget>[
               const SizedBox(height: 14),
               _tripStartOtpCard(),
@@ -613,7 +617,7 @@ class RideCustomerTrackingPage extends StatelessWidget {
   }) {
     final String status =
         request['status']?.toString().trim().toLowerCase() ?? 'pending';
-    final double fee = status == 'accepted'
+    final double fee = (status == 'accepted' || status == 'arrived')
         ? (_toDouble(request['fareBaseFare']) ?? 0.0)
         : 0.0;
     final String currency =
@@ -638,7 +642,7 @@ class RideCustomerTrackingPage extends StatelessWidget {
             const SizedBox(height: 7),
             Text(
               fee > 0
-                  ? 'The driver has already accepted. '
+                  ? '${status == 'arrived' ? 'The driver has arrived at pickup. ' : 'The driver has already accepted. '}'
                       'Cancellation fee: $currency ${fee.toStringAsFixed(0)}.'
                   : 'You can cancel before the trip starts.',
               style: const TextStyle(
@@ -681,7 +685,7 @@ class RideCustomerTrackingPage extends StatelessWidget {
     bool isSubmitting = false;
     final String status =
         request['status']?.toString().trim().toLowerCase() ?? 'pending';
-    final double fee = status == 'accepted'
+    final double fee = (status == 'accepted' || status == 'arrived')
         ? (_toDouble(request['fareBaseFare']) ?? 0.0)
         : 0.0;
     final String currency =
@@ -1083,7 +1087,14 @@ class RideCustomerTrackingPage extends StatelessWidget {
         color = Colors.green;
         title = 'Driver Accepted';
         message =
-            'Your driver accepted the ride. Live tracking is ready.';
+            'Your driver accepted the ride and is heading to the pickup.';
+        break;
+      case 'arrived':
+        icon = Icons.location_on_rounded;
+        color = Colors.deepOrange;
+        title = 'Driver Arrived at Pickup';
+        message =
+            'Your driver has arrived. Please meet the driver and keep your Trip Start OTP ready.';
         break;
       case 'rejected':
         icon = Icons.cancel_rounded;
