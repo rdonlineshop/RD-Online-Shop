@@ -44,6 +44,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
       _rideWatchSubscription;
   StreamSubscription<Position>? _positionSubscription;
+  StreamSubscription<Position>? _availabilityPositionSubscription;
 
   String get _driverId => widget.driverId.trim();
 
@@ -93,12 +94,14 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
   void initState() {
     super.initState();
     _watchForActiveRide();
+    unawaited(_restoreAvailabilityLocationTracking());
   }
 
   @override
   void dispose() {
     _rideWatchSubscription?.cancel();
     _positionSubscription?.cancel();
+    _availabilityPositionSubscription?.cancel();
     super.dispose();
   }
 
@@ -144,10 +147,18 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
         if (nextRideId == null) {
           if (_activeRideRequestId != null) {
             _activeRideRequestId = null;
-            unawaited(_stopLiveLocationTracking(clearCurrentRide: true));
+            unawaited(
+              _stopLiveLocationTracking(
+                clearCurrentRide: true,
+              ).then(
+                (_) => _startAvailabilityLocationTrackingIfOnline(),
+              ),
+            );
             if (mounted) {
               setState(() {});
             }
+          } else {
+            unawaited(_startAvailabilityLocationTrackingIfOnline());
           }
           return;
         }
@@ -241,6 +252,106 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     return double.tryParse(
       value?.toString().trim() ?? '',
     );
+  }
+
+  Future<void> _restoreAvailabilityLocationTracking() async {
+    await _startAvailabilityLocationTrackingIfOnline();
+  }
+
+  Future<void> _startAvailabilityLocationTrackingIfOnline() async {
+    if (_driverId.isEmpty ||
+        _activeRideRequestId != null ||
+        _availabilityPositionSubscription != null) {
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snapshot =
+          await _driverRef.get();
+      final Map<String, dynamic> data =
+          snapshot.data() ?? <String, dynamic>{};
+
+      if (!snapshot.exists || data['isOnline'] != true) {
+        return;
+      }
+
+      await _startAvailabilityLocationTracking();
+    } catch (_) {
+      // A later Online toggle or ride-state refresh can retry.
+    }
+  }
+
+  Future<void> _writeAvailabilityPosition(
+    Position position,
+  ) async {
+    if (_driverId.isEmpty || _activeRideRequestId != null) {
+      return;
+    }
+
+    try {
+      await _driverRef.update(
+        <String, dynamic>{
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'locationUpdatedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+    } catch (_) {
+      // Foreground availability GPS retries on the next valid position.
+    }
+  }
+
+  Future<void> _startAvailabilityLocationTracking({
+    Position? initialPosition,
+  }) async {
+    if (_driverId.isEmpty ||
+        _activeRideRequestId != null ||
+        _availabilityPositionSubscription != null) {
+      return;
+    }
+
+    final Position? currentPosition =
+        initialPosition ?? await _getCurrentPosition();
+    if (currentPosition == null) {
+      return;
+    }
+
+    if (initialPosition == null) {
+      await _writeAvailabilityPosition(currentPosition);
+    }
+
+    _availabilityPositionSubscription =
+        Geolocator.getPositionStream(
+      locationSettings: const LocationSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: 10,
+      ),
+    ).listen(
+      (Position position) {
+        if (_activeRideRequestId == null) {
+          unawaited(_writeAvailabilityPosition(position));
+        }
+      },
+      onError: (Object error) {
+        if (!mounted) {
+          return;
+        }
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Nearby-driver live GPS temporarily stopped: $error',
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+  Future<void> _stopAvailabilityLocationTracking() async {
+    await _availabilityPositionSubscription?.cancel();
+    _availabilityPositionSubscription = null;
   }
 
   double _calculateLiveFare({
@@ -429,6 +540,8 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       return;
     }
 
+    await _stopAvailabilityLocationTracking();
+
     if (_positionSubscription != null &&
         _activeRideRequestId == cleanRideId) {
       return;
@@ -551,6 +664,10 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
           },
         );
 
+        await _startAvailabilityLocationTracking(
+          initialPosition: position,
+        );
+
         if (!mounted) {
           return;
         }
@@ -563,6 +680,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
           ),
         );
       } else {
+        await _stopAvailabilityLocationTracking();
         await _stopLiveLocationTracking();
 
         await _driverRef.update(
