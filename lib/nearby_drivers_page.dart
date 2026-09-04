@@ -1,4 +1,6 @@
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
+import 'package:latlong2/latlong.dart';
 
 import 'ride_request_page.dart';
 import 'services/ride_driver_service.dart';
@@ -87,6 +89,20 @@ class NearbyDriversPage extends StatelessWidget {
                   ),
                   sliver: SliverToBoxAdapter(
                     child: _tripCard(),
+                  ),
+                ),
+                SliverPadding(
+                  padding: const EdgeInsets.fromLTRB(
+                    16,
+                    16,
+                    16,
+                    0,
+                  ),
+                  sliver: SliverToBoxAdapter(
+                    child: _nearbyDriversMap(
+                      context,
+                      driverService,
+                    ),
                   ),
                 ),
                 SliverPadding(
@@ -510,46 +526,397 @@ class NearbyDriversPage extends StatelessWidget {
     );
   }
 
+  void _openRideRequest(
+    BuildContext context,
+    RideDriverNearby driver,
+  ) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => RideRequestPage(
+          driver: driver,
+          pickupAddress: pickupAddress,
+          destinationAddress: destinationAddress,
+          vehicleType: vehicleType,
+          pickupLatitude: pickupLatitude,
+          pickupLongitude: pickupLongitude,
+          destinationLatitude: destinationLatitude,
+          destinationLongitude: destinationLongitude,
+          routeDistanceKm: routeDistanceKm,
+          routeDurationMinutes: routeDurationMinutes,
+          estimatedFare: estimatedFare,
+          fareCurrency: fareCurrency,
+          fareUsesRoadRoute: fareUsesRoadRoute,
+          fareBaseFare: fareBaseFare,
+          farePerKm: farePerKm,
+          fareMinimumFare: fareMinimumFare,
+        ),
+      ),
+    );
+  }
+
+  Widget _nearbyDriversMap(
+    BuildContext context,
+    RideDriverService driverService,
+  ) {
+    return StreamBuilder<List<RideDriverNearby>>(
+      stream: driverService.nearbyDriversStream(
+        vehicleType: vehicleType,
+        pickupLatitude: pickupLatitude,
+        pickupLongitude: pickupLongitude,
+        radiusKm: 10,
+      ),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<List<RideDriverNearby>> snapshot,
+      ) {
+        final List<RideDriverNearby> drivers =
+            snapshot.data ?? <RideDriverNearby>[];
+
+        return Card(
+          elevation: 1.5,
+          clipBehavior: Clip.antiAlias,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Padding(
+                padding: const EdgeInsets.fromLTRB(16, 15, 16, 12),
+                child: Row(
+                  children: <Widget>[
+                    const CircleAvatar(
+                      backgroundColor: Color(0xFFE8F5E9),
+                      child: Icon(
+                        Icons.map_rounded,
+                        color: Colors.green,
+                      ),
+                    ),
+                    const SizedBox(width: 10),
+                    const Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            'Live Nearby Drivers Map',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          SizedBox(height: 2),
+                          Text(
+                            'Tap a driver marker to view and select that driver.',
+                            style: TextStyle(
+                              fontSize: 11.5,
+                              color: Colors.grey,
+                              fontWeight: FontWeight.w700,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                        horizontal: 9,
+                        vertical: 6,
+                      ),
+                      decoration: BoxDecoration(
+                        color: Colors.green.withValues(alpha: 0.12),
+                        borderRadius: BorderRadius.circular(18),
+                      ),
+                      child: Text(
+                        '${drivers.length} online',
+                        style: const TextStyle(
+                          color: Colors.green,
+                          fontSize: 11.5,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              SizedBox(
+                height: 330,
+                child: FlutterMap(
+                  options: MapOptions(
+                    initialCenter: LatLng(
+                      pickupLatitude,
+                      pickupLongitude,
+                    ),
+                    initialZoom: _nearbyMapZoom(drivers),
+                    minZoom: 3,
+                    maxZoom: 19,
+                  ),
+                  children: <Widget>[
+                    TileLayer(
+                      urlTemplate:
+                          'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                      userAgentPackageName:
+                          'com.example.rd_online_shop_new',
+                    ),
+                    MarkerLayer(
+                      markers: <Marker>[
+                        Marker(
+                          point: LatLng(
+                            pickupLatitude,
+                            pickupLongitude,
+                          ),
+                          width: 62,
+                          height: 62,
+                          child: Tooltip(
+                            message: 'Your pickup',
+                            child: Container(
+                              decoration: BoxDecoration(
+                                shape: BoxShape.circle,
+                                color: Colors.white,
+                                border: Border.all(
+                                  color: const Color(0xFF1565C0),
+                                  width: 3,
+                                ),
+                                boxShadow: const <BoxShadow>[
+                                  BoxShadow(
+                                    color: Colors.black26,
+                                    blurRadius: 8,
+                                  ),
+                                ],
+                              ),
+                              child: const Icon(
+                                Icons.my_location_rounded,
+                                color: Color(0xFF1565C0),
+                                size: 30,
+                              ),
+                            ),
+                          ),
+                        ),
+                        for (final RideDriverNearby driver in drivers)
+                          Marker(
+                            point: LatLng(
+                              driver.latitude,
+                              driver.longitude,
+                            ),
+                            width: 72,
+                            height: 72,
+                            child: Tooltip(
+                              message:
+                                  '${driver.name} • ${_driverDistanceText(driver)}',
+                              child: GestureDetector(
+                                onTap: () => _showDriverFromMap(
+                                  context,
+                                  driver,
+                                ),
+                                child: Container(
+                                  decoration: BoxDecoration(
+                                    shape: BoxShape.circle,
+                                    color: Colors.white,
+                                    border: Border.all(
+                                      color: Colors.green,
+                                      width: 3,
+                                    ),
+                                    boxShadow: const <BoxShadow>[
+                                      BoxShadow(
+                                        color: Colors.black26,
+                                        blurRadius: 8,
+                                      ),
+                                    ],
+                                  ),
+                                  child: Icon(
+                                    vehicleType
+                                                .trim()
+                                                .toLowerCase()
+                                                .contains('bike')
+                                        ? Icons.two_wheeler_rounded
+                                        : Icons.local_taxi_rounded,
+                                    color: Colors.green,
+                                    size: 34,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    const RichAttributionWidget(
+                      attributions: <SourceAttribution>[
+                        TextSourceAttribution(
+                          'OpenStreetMap contributors',
+                        ),
+                      ],
+                    ),
+                  ],
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.fromLTRB(14, 10, 14, 14),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    const Icon(
+                      Icons.info_outline_rounded,
+                      size: 18,
+                      color: Color(0xFF607D8B),
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(
+                      child: Text(
+                        snapshot.hasError
+                            ? 'Live map is temporarily unavailable. The driver list below can still be used.'
+                            : drivers.isEmpty
+                                ? 'No online $vehicleType driver with a GPS position is currently within 10 km.'
+                                : 'Green markers are online drivers. Their markers update when the driver app sends a new foreground GPS position.',
+                        style: const TextStyle(
+                          color: Color(0xFF607D8B),
+                          fontSize: 11.5,
+                          height: 1.35,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  double _nearbyMapZoom(
+    List<RideDriverNearby> drivers,
+  ) {
+    if (drivers.isEmpty) {
+      return 14;
+    }
+
+    double farthestKm = 0;
+    for (final RideDriverNearby driver in drivers) {
+      if (driver.distanceKm > farthestKm) {
+        farthestKm = driver.distanceKm;
+      }
+    }
+
+    if (farthestKm > 7) return 11.5;
+    if (farthestKm > 4) return 12.2;
+    if (farthestKm > 2) return 13;
+    if (farthestKm > 1) return 13.8;
+    return 15;
+  }
+
+  String _driverDistanceText(
+    RideDriverNearby driver,
+  ) {
+    return driver.distanceKm < 1
+        ? '${(driver.distanceKm * 1000).round()} m'
+        : '${driver.distanceKm.toStringAsFixed(1)} km';
+  }
+
+  Future<void> _showDriverFromMap(
+    BuildContext context,
+    RideDriverNearby driver,
+  ) async {
+    await showModalBottomSheet<void>(
+      context: context,
+      showDragHandle: true,
+      builder: (BuildContext sheetContext) {
+        return SafeArea(
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 20),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Row(
+                  children: <Widget>[
+                    _driverAvatar(driver),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(
+                            driver.name,
+                            style: const TextStyle(
+                              fontSize: 20,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Wrap(
+                            spacing: 10,
+                            runSpacing: 4,
+                            children: <Widget>[
+                              _miniInfo(
+                                Icons.directions_car_rounded,
+                                driver.vehicleType,
+                              ),
+                              if (driver.vehicleNumber.isNotEmpty)
+                                _miniInfo(
+                                  Icons.badge_outlined,
+                                  driver.vehicleNumber,
+                                ),
+                              _miniInfo(
+                                Icons.near_me_rounded,
+                                _driverDistanceText(driver),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+                    const Icon(
+                      Icons.circle,
+                      color: Colors.green,
+                      size: 13,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                RideDriverPublicRatingBadge(
+                  driverId: driver.driverId,
+                ),
+                const SizedBox(height: 16),
+                FilledButton.icon(
+                  onPressed: () {
+                    Navigator.pop(sheetContext);
+                    _openRideRequest(
+                      context,
+                      driver,
+                    );
+                  },
+                  icon: const Icon(
+                    Icons.check_circle_outline_rounded,
+                  ),
+                  label: const Text(
+                    'Select This Driver',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   Widget _driverCard(
     BuildContext context,
     RideDriverNearby driver,
   ) {
-    final String distance =
-        driver.distanceKm < 1
-            ? '${(driver.distanceKm * 1000).round()} m'
-            : '${driver.distanceKm.toStringAsFixed(1)} km';
+    final String distance = _driverDistanceText(driver);
 
     return Card(
       elevation: 1.5,
       clipBehavior: Clip.antiAlias,
       child: InkWell(
-        onTap: () {
-          Navigator.push<void>(
-            context,
-            MaterialPageRoute<void>(
-              builder: (_) => RideRequestPage(
-                driver: driver,
-                pickupAddress: pickupAddress,
-                destinationAddress: destinationAddress,
-                vehicleType: vehicleType,
-                pickupLatitude: pickupLatitude,
-                pickupLongitude: pickupLongitude,
-                destinationLatitude:
-                    destinationLatitude,
-                destinationLongitude:
-                    destinationLongitude,
-                routeDistanceKm: routeDistanceKm,
-                routeDurationMinutes: routeDurationMinutes,
-                estimatedFare: estimatedFare,
-                fareCurrency: fareCurrency,
-                fareUsesRoadRoute: fareUsesRoadRoute,
-                fareBaseFare: fareBaseFare,
-                farePerKm: farePerKm,
-                fareMinimumFare: fareMinimumFare,
-              ),
-            ),
-          );
-        },
+        onTap: () => _openRideRequest(
+          context,
+          driver,
+        ),
         child: Padding(
           padding: const EdgeInsets.all(14),
           child: Row(
