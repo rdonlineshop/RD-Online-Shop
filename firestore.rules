@@ -429,6 +429,31 @@ service cloud.firestore {
       allow update: if isAdmin()
         || (customerOwnsRequest()
           && rideIdentityUnchanged()
+          && resource.data.status == 'completed'
+          && request.resource.data.status == 'completed'
+          && !resource.data.keys().hasAny([
+            'driverRating',
+            'driverReview',
+            'driverRatedAt',
+            'driverRatingVersion'
+          ])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'driverRating',
+            'driverReview',
+            'driverRatedAt',
+            'driverRatingVersion',
+            'updatedAt'
+          ])
+          && request.resource.data.driverRating is int
+          && request.resource.data.driverRating >= 1
+          && request.resource.data.driverRating <= 5
+          && request.resource.data.driverReview is string
+          && request.resource.data.driverReview.size() <= 500
+          && request.resource.data.driverRatedAt is timestamp
+          && request.resource.data.driverRatingVersion == 1
+          && request.resource.data.updatedAt is timestamp)
+        || (customerOwnsRequest()
+          && rideIdentityUnchanged()
           && resource.data.status in ['pending', 'accepted', 'arrived']
           && request.resource.data.status == 'cancelled'
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -820,6 +845,224 @@ service cloud.firestore {
 
         allow update, delete: if false;
       }
+    }
+
+    // RD Ride SOS alerts. One active slot is used per ride + sender role
+    // to prevent repeated taps from creating duplicate active alerts.
+    match /ride_sos_alerts/{alertId} {
+      function sourceRidePath() {
+        return /databases/$(database)/documents/ride_requests/$(request.resource.data.rideRequestId);
+      }
+
+      function sourceRideExists() {
+        return exists(sourceRidePath());
+      }
+
+      function sourceRide() {
+        return get(sourceRidePath()).data;
+      }
+
+      function validSosCreateShape() {
+        return request.resource.data.keys().hasOnly([
+          'rideRequestId',
+          'customerAuthUid',
+          'customerId',
+          'driverId',
+          'triggeredBy',
+          'triggeredByUid',
+          'reason',
+          'status',
+          'customerName',
+          'customerPhone',
+          'driverName',
+          'driverPhone',
+          'rideStatusSnapshot',
+          'pickupAddress',
+          'destinationAddress',
+          'latitude',
+          'longitude',
+          'locationAddress',
+          'createdAt',
+          'updatedAt',
+          'resolvedAt'
+        ])
+        && request.resource.data.rideRequestId is string
+        && request.resource.data.rideRequestId.size() > 0
+        && request.resource.data.customerAuthUid is string
+        && request.resource.data.customerAuthUid.size() > 0
+        && request.resource.data.customerId is string
+        && request.resource.data.customerId.size() > 0
+        && request.resource.data.driverId is string
+        && request.resource.data.driverId.size() > 0
+        && request.resource.data.triggeredBy in ['customer', 'driver']
+        && request.resource.data.triggeredByUid == request.auth.uid
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() > 0
+        && request.resource.data.reason.size() <= 200
+        && request.resource.data.status == 'active'
+        && request.resource.data.customerName is string
+        && request.resource.data.customerPhone is string
+        && request.resource.data.driverName is string
+        && request.resource.data.driverPhone is string
+        && request.resource.data.rideStatusSnapshot
+          in ['accepted', 'arrived', 'in_progress']
+        && request.resource.data.pickupAddress is string
+        && request.resource.data.destinationAddress is string
+        && (
+          request.resource.data.latitude == null
+          || (
+            request.resource.data.latitude is number
+            && request.resource.data.latitude >= -90
+            && request.resource.data.latitude <= 90
+          )
+        )
+        && (
+          request.resource.data.longitude == null
+          || (
+            request.resource.data.longitude is number
+            && request.resource.data.longitude >= -180
+            && request.resource.data.longitude <= 180
+          )
+        )
+        && request.resource.data.locationAddress is string
+        && request.resource.data.locationAddress.size() <= 250
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.resolvedAt == null;
+      }
+
+      function sosAlertIdMatches() {
+        return alertId
+          == request.resource.data.rideRequestId
+            + '__'
+            + request.resource.data.triggeredBy;
+      }
+
+      function sosMatchesSourceRide() {
+        return sourceRideExists()
+          && sourceRide().status in ['accepted', 'arrived', 'in_progress']
+          && request.resource.data.rideStatusSnapshot == sourceRide().status
+          && request.resource.data.customerAuthUid
+            == sourceRide().customerAuthUid
+          && request.resource.data.customerId == sourceRide().customerId
+          && request.resource.data.driverId == sourceRide().driverId
+          && request.resource.data.customerName
+            == sourceRide().get('customerName', '')
+          && request.resource.data.customerPhone
+            == sourceRide().get('customerPhone', '')
+          && request.resource.data.driverName
+            == sourceRide().get('driverName', '')
+          && request.resource.data.driverPhone
+            == sourceRide().get('driverPhone', '')
+          && request.resource.data.pickupAddress
+            == sourceRide().get('pickupAddress', '')
+          && request.resource.data.destinationAddress
+            == sourceRide().get('destinationAddress', '');
+      }
+
+      function customerCanCreateSos() {
+        return request.resource.data.triggeredBy == 'customer'
+          && sourceRide().customerAuthUid == request.auth.uid;
+      }
+
+      function driverCanCreateSos() {
+        return request.resource.data.triggeredBy == 'driver'
+          && sourceRide().driverId == request.auth.uid;
+      }
+
+      allow create: if signedIn()
+        && validSosCreateShape()
+        && sosAlertIdMatches()
+        && sosMatchesSourceRide()
+        && (
+          customerCanCreateSos()
+          || driverCanCreateSos()
+        );
+
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && (
+            resource.data.customerAuthUid == request.auth.uid
+            || resource.data.driverId == request.auth.uid
+          )
+        );
+
+      allow update: if (
+        isAdmin()
+        && resource.data.status == 'active'
+        && request.resource.data.status == 'resolved'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'resolvedAt',
+          'updatedAt'
+        ])
+        && request.resource.data.resolvedAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+      )
+      || (
+        signedIn()
+        && resource.data.status in ['active', 'resolved']
+        && request.resource.data.status == 'active'
+        && validSosCreateShape()
+        && sosAlertIdMatches()
+        && sosMatchesSourceRide()
+        && request.resource.data.rideRequestId == resource.data.rideRequestId
+        && request.resource.data.customerAuthUid == resource.data.customerAuthUid
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.driverId == resource.data.driverId
+        && request.resource.data.triggeredBy == resource.data.triggeredBy
+        && request.resource.data.triggeredByUid == resource.data.triggeredByUid
+        && (
+          customerCanCreateSos()
+          || driverCanCreateSos()
+        )
+      );
+
+      allow delete: if isAdmin();
+    }
+
+    match /ride_driver_ratings/{rideRequestId} {
+      function sourceRatedRide() {
+        return getAfter(
+          /databases/$(database)/documents/ride_requests/$(rideRequestId)
+        ).data;
+      }
+
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          'rideRequestId',
+          'driverId',
+          'rating',
+          'createdAt',
+          'ratingVersion'
+        ])
+        && request.resource.data.rideRequestId == rideRequestId
+        && request.resource.data.driverId is string
+        && request.resource.data.driverId.size() > 0
+        && request.resource.data.rating is int
+        && request.resource.data.rating >= 1
+        && request.resource.data.rating <= 5
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.ratingVersion == 1
+        && sourceRatedRide().status == 'completed'
+        && sourceRatedRide().driverId == request.resource.data.driverId
+        && sourceRatedRide().driverRating == request.resource.data.rating
+        && (
+          sourceRatedRide().customerAuthUid == request.auth.uid
+          || isAdmin()
+          || (
+            exists(
+              /databases/$(database)/documents/ride_drivers/$(request.auth.uid)
+            )
+            && rideDriverData().role == 'ride_driver'
+            && sourceRatedRide().driverId == request.auth.uid
+          )
+        );
+
+      allow update, delete: if isAdmin();
     }
 
     match /products/{productId} {

@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'ride_driver_agreement_page.dart';
+import 'widgets/ride_driver_rating_summary.dart';
 
 class AdminRideDriverManagementPage extends StatelessWidget {
   const AdminRideDriverManagementPage({super.key});
@@ -813,6 +814,12 @@ class _DriverCard extends StatelessWidget {
               value: licenceVerified ? 'Yes' : 'No',
             ),
             _InfoRow(label: 'Online', value: online ? 'Yes' : 'No'),
+            const SizedBox(height: 12),
+            RideDriverPrivateRatingSummary(
+              driverId: doc.id,
+              title: 'Customer Rating',
+              showRecentReviews: true,
+            ),
             const Divider(height: 24),
             Row(
               children: <Widget>[

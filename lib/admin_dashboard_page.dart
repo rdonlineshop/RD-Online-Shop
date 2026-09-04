@@ -8,6 +8,7 @@ import 'admin_order_page.dart';
 import 'admin_product_page.dart';
 import 'admin_ride_driver_management_page.dart';
 import 'admin_ride_history_page.dart';
+import 'admin_ride_sos_page.dart';
 import 'admin_ride_fare_settings_page.dart';
 import 'admin_seller_page.dart';
 
@@ -200,6 +201,16 @@ class AdminDashboardPage extends StatelessWidget {
               context,
               MaterialPageRoute<void>(
                 builder: (_) => const AdminRideHistoryPage(),
+              ),
+            ),
+          ),
+          _dashboardCard(
+            icon: Icons.sos_rounded,
+            title: 'Ride SOS',
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminRideSosPage(),
               ),
             ),
           ),

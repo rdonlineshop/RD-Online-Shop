@@ -1,4 +1,6 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
@@ -6,6 +8,7 @@ import 'package:url_launcher/url_launcher.dart';
 
 import 'ride_chat_page.dart';
 import 'services/ride_request_service.dart';
+import 'services/ride_sos_service.dart';
 
 class RideCustomerTrackingPage extends StatelessWidget {
   const RideCustomerTrackingPage({
@@ -211,6 +214,14 @@ class RideCustomerTrackingPage extends StatelessWidget {
             _statusCard(status),
             const SizedBox(height: 14),
             _fareCard(request, status),
+            if (status == 'completed') ...<Widget>[
+              const SizedBox(height: 14),
+              _driverRatingCard(
+                context: context,
+                request: request,
+                driverName: driverName,
+              ),
+            ],
             if (status == 'pending' ||
                 status == 'accepted' ||
                 status == 'arrived') ...<Widget>[
@@ -303,6 +314,11 @@ class RideCustomerTrackingPage extends StatelessWidget {
                 driverName: driverName,
                 driverPhone: driverPhone,
                 customerName: customerName,
+              ),
+              const SizedBox(height: 14),
+              _customerSosCard(
+                context: context,
+                request: request,
               ),
             ],
             if ((status == 'accepted' || status == 'arrived') &&
@@ -453,6 +469,603 @@ class RideCustomerTrackingPage extends StatelessWidget {
         ),
       ),
     );
+  }
+
+
+
+  int? _toRating(dynamic value) {
+    final int? rating = value is num
+        ? value.round()
+        : int.tryParse(value?.toString().trim() ?? '');
+
+    if (rating == null || rating < 1 || rating > 5) {
+      return null;
+    }
+
+    return rating;
+  }
+
+  Widget _driverRatingCard({
+    required BuildContext context,
+    required Map<String, dynamic> request,
+    required String driverName,
+  }) {
+    final int? savedRating = _toRating(request['driverRating']);
+    final String savedReview =
+        request['driverReview']?.toString().trim() ?? '';
+    final bool alreadyRated = savedRating != null;
+
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                CircleAvatar(
+                  backgroundColor: Colors.amber.withValues(alpha: 0.14),
+                  child: const Icon(
+                    Icons.star_rounded,
+                    color: Colors.amber,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    alreadyRated
+                        ? 'Your Driver Rating'
+                        : 'Rate Your Driver',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              alreadyRated
+                  ? 'Thank you for rating $driverName.'
+                  : 'How was your ride with $driverName?',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List<Widget>.generate(
+                5,
+                (int index) => Icon(
+                  index < (savedRating ?? 0)
+                      ? Icons.star_rounded
+                      : Icons.star_border_rounded,
+                  color: Colors.amber,
+                  size: 34,
+                ),
+              ),
+            ),
+            if (alreadyRated)
+              _DriverRatingPublicSync(
+                rideRequestId: rideRequestId.trim(),
+                driverId: driverId.trim(),
+                rating: savedRating,
+              ),
+            if (alreadyRated && savedReview.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF7F8FA),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  savedReview,
+                  style: const TextStyle(
+                    height: 1.35,
+                    fontWeight: FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+            if (!alreadyRated) ...<Widget>[
+              const SizedBox(height: 12),
+              FilledButton.icon(
+                onPressed: () => _showDriverRatingDialog(
+                  context: context,
+                  driverName: driverName,
+                ),
+                icon: const Icon(Icons.star_rate_rounded),
+                label: const Text(
+                  'Rate Driver',
+                  style: TextStyle(fontWeight: FontWeight.w900),
+                ),
+              ),
+              const SizedBox(height: 7),
+              const Text(
+                'You can submit one rating after the trip is completed.',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontSize: 11.5,
+                  color: Colors.blueGrey,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _showDriverRatingDialog({
+    required BuildContext context,
+    required String driverName,
+  }) async {
+    int selectedRating = 0;
+    bool isSubmitting = false;
+    final TextEditingController reviewController = TextEditingController();
+
+    try {
+      await showDialog<void>(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext dialogContext) {
+          return StatefulBuilder(
+            builder: (
+              BuildContext dialogContext,
+              StateSetter setDialogState,
+            ) {
+              Future<void> submitRating() async {
+                if (isSubmitting || selectedRating < 1) {
+                  return;
+                }
+
+                final String review = reviewController.text.trim();
+                if (review.length > 500) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text(
+                        'Review can be up to 500 characters.',
+                      ),
+                    ),
+                  );
+                  return;
+                }
+
+                setDialogState(() {
+                  isSubmitting = true;
+                });
+
+                try {
+                  final String cleanRideId = rideRequestId.trim();
+                  final DocumentReference<Map<String, dynamic>> rideRef =
+                      FirebaseFirestore.instance
+                          .collection('ride_requests')
+                          .doc(cleanRideId);
+                  final DocumentReference<Map<String, dynamic>> publicRatingRef =
+                      FirebaseFirestore.instance
+                          .collection('ride_driver_ratings')
+                          .doc(cleanRideId);
+
+                  await FirebaseFirestore.instance.runTransaction(
+                    (Transaction transaction) async {
+                      final DocumentSnapshot<Map<String, dynamic>> snapshot =
+                          await transaction.get(rideRef);
+                      final Map<String, dynamic>? data = snapshot.data();
+
+                      if (!snapshot.exists || data == null) {
+                        throw StateError('Ride not found.');
+                      }
+
+                      final String status =
+                          data['status']?.toString().trim().toLowerCase() ?? '';
+                      if (status != 'completed') {
+                        throw StateError(
+                          'The trip must be completed before rating the driver.',
+                        );
+                      }
+
+                      if (_toRating(data['driverRating']) != null) {
+                        throw StateError(
+                          'A rating has already been submitted for this ride.',
+                        );
+                      }
+
+                      final String sourceDriverId =
+                          data['driverId']?.toString().trim() ?? '';
+                      if (sourceDriverId.isEmpty) {
+                        throw StateError('Driver information is missing.');
+                      }
+
+                      transaction.update(
+                        rideRef,
+                        <String, dynamic>{
+                          'driverRating': selectedRating,
+                          'driverReview': review,
+                          'driverRatedAt': FieldValue.serverTimestamp(),
+                          'driverRatingVersion': 1,
+                          'updatedAt': FieldValue.serverTimestamp(),
+                        },
+                      );
+
+                      transaction.set(
+                        publicRatingRef,
+                        <String, dynamic>{
+                          'rideRequestId': cleanRideId,
+                          'driverId': sourceDriverId,
+                          'rating': selectedRating,
+                          'createdAt': FieldValue.serverTimestamp(),
+                          'ratingVersion': 1,
+                        },
+                      );
+                    },
+                  );
+
+                  if (!dialogContext.mounted) {
+                    return;
+                  }
+
+                  Navigator.pop(dialogContext);
+
+                  if (!context.mounted) {
+                    return;
+                  }
+
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Thank you. Your driver rating was saved.'),
+                    ),
+                  );
+                } catch (error) {
+                  if (!dialogContext.mounted) {
+                    return;
+                  }
+
+                  setDialogState(() {
+                    isSubmitting = false;
+                  });
+
+                  if (context.mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      SnackBar(
+                        content: Text('Could not save rating: $error'),
+                      ),
+                    );
+                  }
+                }
+              }
+
+              return AlertDialog(
+                title: Text('Rate $driverName'),
+                content: SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      const Text(
+                        'Tap the stars to rate your completed ride.',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
+                      const SizedBox(height: 14),
+                      Row(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        children: List<Widget>.generate(
+                          5,
+                          (int index) {
+                            final int value = index + 1;
+                            return IconButton(
+                              tooltip: '$value star${value == 1 ? '' : 's'}',
+                              onPressed: isSubmitting
+                                  ? null
+                                  : () {
+                                      setDialogState(() {
+                                        selectedRating = value;
+                                      });
+                                    },
+                              icon: Icon(
+                                value <= selectedRating
+                                    ? Icons.star_rounded
+                                    : Icons.star_border_rounded,
+                                color: Colors.amber,
+                                size: 36,
+                              ),
+                            );
+                          },
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: reviewController,
+                        enabled: !isSubmitting,
+                        maxLength: 500,
+                        minLines: 3,
+                        maxLines: 5,
+                        decoration: const InputDecoration(
+                          labelText: 'Review (optional)',
+                          hintText: 'Write about your ride experience...',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                actions: <Widget>[
+                  TextButton(
+                    onPressed: isSubmitting
+                        ? null
+                        : () => Navigator.pop(dialogContext),
+                    child: const Text('Not Now'),
+                  ),
+                  FilledButton.icon(
+                    onPressed: isSubmitting || selectedRating < 1
+                        ? null
+                        : submitRating,
+                    icon: isSubmitting
+                        ? const SizedBox(
+                            width: 18,
+                            height: 18,
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
+                        : const Icon(Icons.star_rounded),
+                    label: Text(
+                      isSubmitting ? 'Submitting...' : 'Submit Rating',
+                    ),
+                  ),
+                ],
+              );
+            },
+          );
+        },
+      );
+    } finally {
+      reviewController.dispose();
+    }
+  }
+
+  Widget _customerSosCard({
+    required BuildContext context,
+    required Map<String, dynamic> request,
+  }) {
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const Row(
+              children: <Widget>[
+                CircleAvatar(
+                  backgroundColor: Color(0xFFFFEBEE),
+                  child: Icon(
+                    Icons.sos_rounded,
+                    color: Colors.red,
+                  ),
+                ),
+                SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    'Emergency Safety',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Use SOS only for a real safety, accident or medical emergency. '
+              'The ride stays active unless it is separately cancelled or completed.',
+              style: TextStyle(
+                color: Colors.blueGrey,
+                fontSize: 12.5,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 12),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.red,
+                foregroundColor: Colors.white,
+              ),
+              onPressed: () => _sendCustomerSos(
+                context: context,
+                request: request,
+              ),
+              icon: const Icon(Icons.sos_rounded),
+              label: const Text(
+                'SOS / Emergency',
+                style: TextStyle(fontWeight: FontWeight.w900),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<Position?> _tryGetEmergencyPosition() async {
+    try {
+      final bool enabled = await Geolocator.isLocationServiceEnabled();
+      if (!enabled) {
+        return null;
+      }
+
+      LocationPermission permission = await Geolocator.checkPermission();
+
+      if (permission == LocationPermission.denied) {
+        permission = await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission == LocationPermission.deniedForever) {
+        return null;
+      }
+
+       return Geolocator.getCurrentPosition(
+        locationSettings: const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _sendCustomerSos({
+    required BuildContext context,
+    required Map<String, dynamic> request,
+  }) async {
+    final List<String> reasons = <String>[
+      'Accident',
+      'Medical emergency',
+      'Safety threat',
+      'Driver or passenger conflict',
+      'Unsafe location or route',
+      'Other emergency',
+    ];
+
+    String selectedReason = reasons.first;
+
+    final String? reason = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext dialogContext,
+            StateSetter setDialogState,
+          ) {
+            return AlertDialog(
+              title: const Row(
+                children: <Widget>[
+                  Icon(Icons.sos_rounded, color: Colors.red),
+                  SizedBox(width: 8),
+                  Expanded(child: Text('Send SOS Alert?')),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  const Text(
+                    'This sends an emergency record to RD Admin with this ride '
+                    'and your best available GPS location.',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedReason,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Emergency reason',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: reasons
+                        .map(
+                          (String item) => DropdownMenuItem<String>(
+                            value: item,
+                            child: Text(
+                              item,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (String? value) {
+                      if (value != null) {
+                        setDialogState(() {
+                          selectedReason = value;
+                        });
+                      }
+                    },
+                  ),
+                ],
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, selectedReason),
+                  icon: const Icon(Icons.sos_rounded),
+                  label: const Text('Send SOS'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (reason == null || !context.mounted) {
+      return;
+    }
+
+    final String authUid =
+        FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+
+    if (authUid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Customer login is required for SOS.')),
+      );
+      return;
+    }
+
+    final Position? position = await _tryGetEmergencyPosition();
+
+    final double? fallbackLat = _toDouble(request['pickupLatitude']);
+    final double? fallbackLng = _toDouble(request['pickupLongitude']);
+
+    final double? latitude = position?.latitude ?? fallbackLat;
+    final double? longitude = position?.longitude ?? fallbackLng;
+    final String locationAddress = position != null
+        ? 'Current customer GPS'
+        : 'Pickup location fallback — live customer GPS unavailable';
+
+    try {
+      await RideSosService().createAlert(
+        ride: request,
+        triggeredBy: 'customer',
+        triggeredByUid: authUid,
+        reason: reason,
+        latitude: latitude,
+        longitude: longitude,
+        locationAddress: locationAddress,
+      );
+
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'SOS sent to RD Admin. If there is immediate danger, contact local emergency services.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not send SOS: $error')),
+      );
+    }
   }
 
 
@@ -1238,6 +1851,66 @@ class RideCustomerTrackingPage extends StatelessWidget {
       ),
     );
   }
+}
+
+
+class _DriverRatingPublicSync extends StatefulWidget {
+  const _DriverRatingPublicSync({
+    required this.rideRequestId,
+    required this.driverId,
+    required this.rating,
+  });
+
+  final String rideRequestId;
+  final String driverId;
+  final int rating;
+
+  @override
+  State<_DriverRatingPublicSync> createState() =>
+      _DriverRatingPublicSyncState();
+}
+
+class _DriverRatingPublicSyncState extends State<_DriverRatingPublicSync> {
+  @override
+  void initState() {
+    super.initState();
+    _sync();
+  }
+
+  Future<void> _sync() async {
+    final String rideId = widget.rideRequestId.trim();
+    final String driverId = widget.driverId.trim();
+    if (rideId.isEmpty || driverId.isEmpty) {
+      return;
+    }
+
+    try {
+      final DocumentReference<Map<String, dynamic>> ref =
+          FirebaseFirestore.instance
+              .collection('ride_driver_ratings')
+              .doc(rideId);
+      final DocumentSnapshot<Map<String, dynamic>> existing = await ref.get();
+      if (existing.exists) {
+        return;
+      }
+
+      await ref.set(
+        <String, dynamic>{
+          'rideRequestId': rideId,
+          'driverId': driverId,
+          'rating': widget.rating,
+          'createdAt': FieldValue.serverTimestamp(),
+          'ratingVersion': 1,
+        },
+      );
+    } catch (_) {
+      // This is only a backward-compatible sync for ratings saved before the
+      // public rating index existed. The source ride rating remains intact.
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) => const SizedBox.shrink();
 }
 
 class _MapPin extends StatelessWidget {

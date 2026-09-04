@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:convert';
 
+import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart' as foundation;
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'nearby_drivers_page.dart';
 import 'ride_location_picker_page.dart';
@@ -26,6 +29,10 @@ class RideBookingPage extends StatefulWidget {
 }
 
 class _RideBookingPageState extends State<RideBookingPage> {
+  final TextEditingController _customerNameController =
+      TextEditingController();
+  final TextEditingController _customerPhoneController =
+      TextEditingController();
   final TextEditingController _pickupController =
       TextEditingController();
   final TextEditingController _destinationController =
@@ -95,6 +102,7 @@ class _RideBookingPageState extends State<RideBookingPage> {
   void initState() {
     super.initState();
     _fareRule = RideFareService.defaultRuleFor(widget.vehicleType);
+    unawaited(_loadCustomerContact());
     unawaited(_loadFareSettings());
 
     if (_supportsNativeGeocoding) {
@@ -139,9 +147,112 @@ class _RideBookingPageState extends State<RideBookingPage> {
   @override
   void dispose() {
     _incomingShareSubscription?.cancel();
+    _customerNameController.dispose();
+    _customerPhoneController.dispose();
     _pickupController.dispose();
     _destinationController.dispose();
     super.dispose();
+  }
+
+  Future<void> _loadCustomerContact() async {
+    String name = '';
+    String phone = '';
+
+    final User? user = FirebaseAuth.instance.currentUser;
+
+    if (user != null && !user.isAnonymous) {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> document =
+            await FirebaseFirestore.instance
+                .collection('customers')
+                .doc(user.uid)
+                .get();
+
+        final Map<String, dynamic> data =
+            document.data() ?? <String, dynamic>{};
+
+        if (document.exists &&
+            data['role']?.toString().trim() == 'customer') {
+          name = data['name']?.toString().trim() ?? '';
+          phone = data['phone']?.toString().trim() ?? '';
+        }
+      } catch (_) {
+        // Local saved contact below keeps ride booking usable.
+      }
+    }
+
+    try {
+      final SharedPreferences prefs = await SharedPreferences.getInstance();
+
+      if (name.isEmpty) {
+        name = prefs.getString('ride_customer_name')?.trim() ??
+            prefs.getString('name')?.trim() ??
+            '';
+      }
+
+      if (phone.isEmpty) {
+        phone = prefs.getString('ride_customer_phone')?.trim() ??
+            prefs.getString('phone')?.trim() ??
+            '';
+      }
+    } catch (_) {
+      // The customer can still type the details manually.
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    if (_customerNameController.text.trim().isEmpty && name.isNotEmpty) {
+      _customerNameController.text = name;
+    }
+
+    if (_customerPhoneController.text.trim().isEmpty && phone.isNotEmpty) {
+      _customerPhoneController.text = phone;
+    }
+  }
+
+  Future<void> _saveCustomerContact() async {
+    final String name = _customerNameController.text.trim();
+    final String phone = _customerPhoneController.text.trim();
+
+    final SharedPreferences prefs = await SharedPreferences.getInstance();
+
+    await prefs.setString('ride_customer_name', name);
+    await prefs.setString('ride_customer_phone', phone);
+
+    // Keep compatibility with the existing RideRequestService fallback.
+    await prefs.setString('name', name);
+    await prefs.setString('phone', phone);
+
+    final User? user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.isAnonymous) {
+      return;
+    }
+
+    try {
+      final DocumentReference<Map<String, dynamic>> customerRef =
+          FirebaseFirestore.instance.collection('customers').doc(user.uid);
+
+      final DocumentSnapshot<Map<String, dynamic>> document =
+          await customerRef.get();
+      final Map<String, dynamic> data =
+          document.data() ?? <String, dynamic>{};
+
+      if (document.exists &&
+          data['role']?.toString().trim() == 'customer') {
+        await customerRef.set(
+          <String, dynamic>{
+            'name': name,
+            'phone': phone,
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+          SetOptions(merge: true),
+        );
+      }
+    } catch (_) {
+      // Local saved details are enough for the current ride request.
+    }
   }
 
   Future<void> _loadFareSettings() async {
@@ -561,6 +672,21 @@ class _RideBookingPageState extends State<RideBookingPage> {
             false;
 
     if (!valid) {
+      return;
+    }
+
+    try {
+      await _saveCustomerContact();
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Could not save customer contact: $error'),
+        ),
+      );
       return;
     }
 
@@ -1311,6 +1437,8 @@ class _RideBookingPageState extends State<RideBookingPage> {
                   children: <Widget>[
                     _selectedVehicleCard(),
                     const SizedBox(height: 18),
+                    _customerDetailsCard(),
+                    const SizedBox(height: 18),
                     _locationCard(),
                     const SizedBox(height: 18),
                     _summaryCard(),
@@ -1425,6 +1553,94 @@ class _RideBookingPageState extends State<RideBookingPage> {
             color: Colors.white,
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _customerDetailsCard() {
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const Row(
+              children: <Widget>[
+                CircleAvatar(
+                  backgroundColor: Color(0xFFE3F2FD),
+                  child: Icon(
+                    Icons.person_outline_rounded,
+                    color: Color(0xFF1565C0),
+                  ),
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'Customer Details',
+                    style: TextStyle(
+                      fontSize: 19,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              controller: _customerNameController,
+              textInputAction: TextInputAction.next,
+              textCapitalization: TextCapitalization.words,
+              decoration: InputDecoration(
+                labelText: 'Customer Name',
+                hintText: 'Enter full name',
+                prefixIcon: const Icon(Icons.person_rounded),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              validator: (String? value) {
+                final String name = value?.trim() ?? '';
+                if (name.length < 2) {
+                  return 'Please enter customer name';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller: _customerPhoneController,
+              keyboardType: TextInputType.phone,
+              textInputAction: TextInputAction.done,
+              decoration: InputDecoration(
+                labelText: 'Phone Number',
+                hintText: 'Enter contact number',
+                prefixIcon: const Icon(Icons.phone_rounded),
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(14),
+                ),
+              ),
+              validator: (String? value) {
+                final String phone = value?.trim() ?? '';
+                final String digits = phone.replaceAll(RegExp(r'[^0-9]'), '');
+
+                if (digits.length < 6 || digits.length > 15) {
+                  return 'Please enter a valid phone number';
+                }
+                return null;
+              },
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'These details are saved for future rides and are shared with the selected driver for ride contact and SOS safety records.',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 11.5,
+                height: 1.35,
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

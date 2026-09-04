@@ -19,6 +19,8 @@ import 'ride_driver_auth_page.dart';
 import 'ride_driver_earnings_page.dart';
 import 'ride_driver_reactivation_page.dart';
 import 'services/ride_request_service.dart';
+import 'services/ride_sos_service.dart';
+import 'widgets/ride_driver_rating_summary.dart';
 
 class RideDriverRequestsPage extends StatefulWidget {
   const RideDriverRequestsPage({
@@ -1041,6 +1043,176 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     }
   }
 
+  Future<void> _sendDriverSos(
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
+  ) async {
+    final List<String> reasons = <String>[
+      'Accident',
+      'Medical emergency',
+      'Safety threat',
+      'Passenger conflict',
+      'Vehicle emergency',
+      'Other emergency',
+    ];
+
+    String selectedReason = reasons.first;
+
+    final String? reason = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext dialogContext,
+            StateSetter setDialogState,
+          ) {
+            return AlertDialog(
+              title: const Row(
+                children: <Widget>[
+                  Icon(Icons.sos_rounded, color: Colors.red),
+                  SizedBox(width: 8),
+                  Expanded(child: Text('Send SOS Alert?')),
+                ],
+              ),
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  const Text(
+                    'This sends an emergency record to RD Admin with this ride '
+                    'and your best available GPS location.',
+                    style: TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  const SizedBox(height: 14),
+                  DropdownButtonFormField<String>(
+                    initialValue: selectedReason,
+                    isExpanded: true,
+                    decoration: const InputDecoration(
+                      labelText: 'Emergency reason',
+                      border: OutlineInputBorder(),
+                    ),
+                    items: reasons
+                        .map(
+                          (String item) => DropdownMenuItem<String>(
+                            value: item,
+                            child: Text(
+                              item,
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ),
+                        )
+                        .toList(),
+                    onChanged: (String? value) {
+                      if (value != null) {
+                        setDialogState(() {
+                          selectedReason = value;
+                        });
+                      }
+                    },
+                  ),
+                ],
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () =>
+                      Navigator.pop(dialogContext, selectedReason),
+                  icon: const Icon(Icons.sos_rounded),
+                  label: const Text('Send SOS'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    if (reason == null || !mounted) {
+      return;
+    }
+
+    final String authUid =
+        FirebaseAuth.instance.currentUser?.uid.trim() ?? '';
+
+    if (authUid.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Ride Driver login is required for SOS.')),
+      );
+      return;
+    }
+
+    Position? position;
+    try {
+      position = await _getCurrentPosition();
+    } catch (_) {
+      position = null;
+    }
+
+    double? latitude = position?.latitude;
+    double? longitude = position?.longitude;
+    String locationAddress = position != null
+        ? 'Current driver GPS'
+        : 'Last known driver GPS';
+
+    if (latitude == null || longitude == null) {
+      try {
+        final DocumentSnapshot<Map<String, dynamic>> driverSnapshot =
+            await _driverRef.get();
+        final Map<String, dynamic> driverData =
+            driverSnapshot.data() ?? <String, dynamic>{};
+
+        latitude = _toDouble(driverData['latitude'] ?? driverData['lat']);
+        longitude = _toDouble(driverData['longitude'] ?? driverData['lng']);
+
+        if (latitude == null || longitude == null) {
+          locationAddress = 'Driver GPS unavailable';
+        }
+      } catch (_) {
+        locationAddress = 'Driver GPS unavailable';
+      }
+    }
+
+    try {
+      await RideSosService().createAlert(
+        ride: request.data(),
+        triggeredBy: 'driver',
+        triggeredByUid: authUid,
+        reason: reason,
+        latitude: latitude,
+        longitude: longitude,
+        locationAddress: locationAddress,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'SOS sent to RD Admin. If there is immediate danger, contact local emergency services.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not send SOS: $error')),
+      );
+    }
+  }
+
+
   Future<void> _startTrip(
     QueryDocumentSnapshot<Map<String, dynamic>> request,
   ) async {
@@ -1850,6 +2022,21 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                     ],
                   ),
                 ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: Colors.red,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: _updatingRideStatus
+                      ? null
+                      : () => _sendDriverSos(ride),
+                  icon: const Icon(Icons.sos_rounded),
+                  label: const Text(
+                    'SOS / Emergency',
+                    style: TextStyle(fontWeight: FontWeight.w900),
+                  ),
+                ),
                 const SizedBox(height: 14),
                 _locationRow(
                   icon: Icons.my_location_rounded,
@@ -2199,6 +2386,12 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                     padding: const EdgeInsets.all(16),
                     children: <Widget>[
                       _onlineStatusCard(),
+                      const SizedBox(height: 18),
+                      RideDriverPrivateRatingSummary(
+                        driverId: _driverId,
+                        title: 'My Customer Rating',
+                        showRecentReviews: true,
+                      ),
                       const SizedBox(height: 18),
                       RideDriverEarningsSummaryCard(
                         driverId: _driverId,

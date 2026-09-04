@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'ride_request_page.dart';
 import 'services/ride_driver_service.dart';
+import 'widgets/ride_driver_rating_summary.dart';
 
 class NearbyDriversPage extends StatelessWidget {
   const NearbyDriversPage({
@@ -618,12 +619,9 @@ class NearbyDriversPage extends StatelessWidget {
                           Icons.near_me_rounded,
                           distance,
                         ),
-                        if (driver.rating > 0)
-                          _miniInfo(
-                            Icons.star_rounded,
-                            driver.rating
-                                .toStringAsFixed(1),
-                          ),
+                        RideDriverPublicRatingBadge(
+                          driverId: driver.driverId,
+                        ),
                       ],
                     ),
                   ],

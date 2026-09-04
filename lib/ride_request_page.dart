@@ -5,6 +5,7 @@ import 'order_data.dart';
 import 'ride_customer_tracking_page.dart';
 import 'services/ride_driver_service.dart';
 import 'services/ride_request_service.dart';
+import 'widgets/ride_driver_rating_summary.dart';
 
 class RideRequestPage extends StatefulWidget {
   const RideRequestPage({
@@ -698,11 +699,9 @@ class _RideRequestPageState extends State<RideRequestPage> {
                         Icons.near_me_rounded,
                         '${driver.distanceKm.toStringAsFixed(1)} km',
                       ),
-                      if (driver.rating > 0)
-                        _miniInfo(
-                          Icons.star_rounded,
-                          driver.rating.toStringAsFixed(1),
-                        ),
+                      RideDriverPublicRatingBadge(
+                        driverId: driver.driverId,
+                      ),
                     ],
                   ),
                 ],
