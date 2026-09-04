@@ -44,6 +44,9 @@ class _RideDriverAuthPageState
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _uploadingLicense = false;
+  bool _checkingSavedSession = true;
+
+  Map<String, dynamic>? _rememberedDriverData;
 
   String _licenseFrontUrl = '';
   String _licenseBackUrl = '';
@@ -64,6 +67,228 @@ class _RideDriverAuthPageState
     'Pickup',
     'Truck',
   ];
+
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restoreSavedDriverSession();
+    });
+  }
+
+  void _finishSavedSessionCheck({
+    Map<String, dynamic>? rememberedDriverData,
+  }) {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _checkingSavedSession = false;
+      _rememberedDriverData = rememberedDriverData;
+    });
+  }
+
+  Future<void> _restoreSavedDriverSession() async {
+    final User? user = FirebaseAuth.instance.currentUser;
+
+    if (user == null || user.isAnonymous) {
+      _finishSavedSessionCheck();
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> doc =
+          await FirebaseFirestore.instance
+              .collection('ride_drivers')
+              .doc(user.uid)
+              .get();
+
+      if (!doc.exists) {
+        _finishSavedSessionCheck();
+        return;
+      }
+
+      final Map<String, dynamic> data =
+          doc.data() ?? <String, dynamic>{};
+
+      final String role =
+          data['role']?.toString().trim() ?? '';
+
+      // Another RD role may currently be signed in. Do not sign it out just
+      // because the user opened the Ride Driver entry page.
+      if (role != 'ride_driver') {
+        _finishSavedSessionCheck();
+        return;
+      }
+
+      final bool opened = await _openDriverAccount(
+        user: user,
+        data: data,
+        showStatusDialog: false,
+      );
+
+      if (!opened) {
+        _emailController.text =
+            user.email?.trim() ?? data['email']?.toString().trim() ?? '';
+
+        _finishSavedSessionCheck(
+          rememberedDriverData: data,
+        );
+      }
+    } catch (_) {
+      _finishSavedSessionCheck();
+    }
+  }
+
+  Future<bool> _openDriverAccount({
+    required User user,
+    required Map<String, dynamic> data,
+    required bool showStatusDialog,
+  }) async {
+    final bool isActive = data['isActive'] == true;
+    final bool isApproved = data['isApproved'] == true;
+    final bool licenseVerified =
+        data['drivingLicenseVerified'] == true;
+    final String approvalStatus =
+        data['approvalStatus']?.toString().trim().toLowerCase() ?? '';
+    final bool isSuspended =
+        isApproved && !isActive && approvalStatus == 'suspended';
+
+    // A suspended, already-approved driver may still enter the driver
+    // dashboard to see the amount due and submit a reactivation request.
+    // Suspension only blocks Online / new-ride access.
+    if (isSuspended && licenseVerified) {
+      if (!mounted) {
+        return false;
+      }
+
+      Navigator.pushReplacement<void, void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => RideDriverRequestsPage(
+            driverId: user.uid,
+          ),
+        ),
+      );
+      return true;
+    }
+
+    if (!isApproved || !isActive || !licenseVerified) {
+      if (!mounted) {
+        return false;
+      }
+
+      if (showStatusDialog) {
+        final bool rejected = approvalStatus == 'rejected';
+
+        await showDialog<void>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              icon: Icon(
+                rejected
+                    ? Icons.cancel_rounded
+                    : Icons.pending_actions_rounded,
+                size: 42,
+              ),
+              title: Text(
+                rejected
+                    ? 'Driver Account Rejected'
+                    : 'Approval Pending',
+              ),
+              content: Text(
+                rejected
+                    ? 'This Ride Driver account is currently rejected. '
+                        'Contact Admin if you need the account reviewed again.'
+                    : 'Your Ride Driver account is not active yet. '
+                        'Admin approval and driving licence verification '
+                        'are required.',
+              ),
+              actions: <Widget>[
+                FilledButton(
+                  onPressed: () {
+                    Navigator.pop(dialogContext);
+                  },
+                  child: const Text('OK'),
+                ),
+              ],
+            );
+          },
+        );
+      }
+
+      if (mounted) {
+        setState(() {
+          _rememberedDriverData = data;
+        });
+      }
+
+      return false;
+    }
+
+    if (!mounted) {
+      return false;
+    }
+
+    Navigator.pushReplacement<void, void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => RideDriverRequestsPage(
+          driverId: user.uid,
+        ),
+      ),
+    );
+
+    return true;
+  }
+
+  Future<void> _refreshRememberedDriver() async {
+    if (_checkingSavedSession) {
+      return;
+    }
+
+    setState(() {
+      _checkingSavedSession = true;
+    });
+
+    await _restoreSavedDriverSession();
+  }
+
+  Future<void> _logoutRememberedDriver() async {
+    if (_isLoading) {
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      await FirebaseAuth.instance.signOut();
+      await FirebaseAuth.instance.signInAnonymously();
+
+      if (!mounted) {
+        return;
+      }
+
+      _emailController.clear();
+      _passwordController.clear();
+
+      setState(() {
+        _rememberedDriverData = null;
+        _isRegistering = false;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _checkingSavedSession = false;
+        });
+      }
+    }
+  }
 
   @override
   void dispose() {
@@ -379,6 +604,14 @@ class _RideDriverAuthPageState
         );
       },
     );
+
+    if (mounted) {
+      setState(() {
+        _checkingSavedSession = true;
+      });
+    }
+
+    await _restoreSavedDriverSession();
   }
 
   Future<void> _loginDriver() async {
@@ -414,15 +647,8 @@ class _RideDriverAuthPageState
     final Map<String, dynamic> data =
         doc.data() ?? <String, dynamic>{};
 
-    final bool isActive = data['isActive'] == true;
-    final bool isApproved = data['isApproved'] == true;
-    final bool licenseVerified =
-        data['drivingLicenseVerified'] == true;
-    final String role = data['role']?.toString().trim() ?? '';
-    final String approvalStatus =
-        data['approvalStatus']?.toString().trim().toLowerCase() ?? '';
-    final bool isSuspended =
-        isApproved && !isActive && approvalStatus == 'suspended';
+    final String role =
+        data['role']?.toString().trim() ?? '';
 
     if (role != 'ride_driver') {
       await FirebaseAuth.instance.signOut();
@@ -432,77 +658,13 @@ class _RideDriverAuthPageState
       );
     }
 
-    // A suspended, already-approved driver may still enter the driver
-    // dashboard to see the amount due and submit a reactivation request.
-    // Suspension only blocks Online / new-ride access.
-    if (isSuspended && licenseVerified) {
-      if (!mounted) {
-        return;
-      }
-
-      Navigator.pushReplacement<void, void>(
-        context,
-        MaterialPageRoute<void>(
-          builder: (_) => RideDriverRequestsPage(
-            driverId: user.uid,
-          ),
-        ),
-      );
-      return;
-    }
-
-    if (!isApproved || !isActive || !licenseVerified) {
-      if (!mounted) {
-        return;
-      }
-
-      final bool rejected = approvalStatus == 'rejected';
-      await showDialog<void>(
-        context: context,
-        builder: (BuildContext dialogContext) {
-          return AlertDialog(
-            icon: Icon(
-              rejected
-                  ? Icons.cancel_rounded
-                  : Icons.pending_actions_rounded,
-              size: 42,
-            ),
-            title: Text(
-              rejected ? 'Driver Account Rejected' : 'Approval Pending',
-            ),
-            content: Text(
-              rejected
-                  ? 'This Ride Driver account is currently rejected. Contact Admin if you need the account reviewed again.'
-                  : 'Your Ride Driver account is not active yet. Admin approval and driving licence verification are required.',
-            ),
-            actions: <Widget>[
-              FilledButton(
-                onPressed: () {
-                  Navigator.pop(dialogContext);
-                },
-                child: const Text('OK'),
-              ),
-            ],
-          );
-        },
-      );
-
-      return;
-    }
-
-    if (!mounted) {
-      return;
-    }
-
-    Navigator.pushReplacement<void, void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => RideDriverRequestsPage(
-          driverId: user.uid,
-        ),
-      ),
+    await _openDriverAccount(
+      user: user,
+      data: data,
+      showStatusDialog: true,
     );
   }
+
 
   void _toggleMode() {
     if (_isLoading) {
@@ -516,6 +678,176 @@ class _RideDriverAuthPageState
 
   @override
   Widget build(BuildContext context) {
+    if (_checkingSavedSession) {
+      return Scaffold(
+        backgroundColor: const Color(0xFFF7F8FA),
+        appBar: AppBar(
+          title: const Text(
+            'Ride Driver',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          centerTitle: true,
+        ),
+        body: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              CircularProgressIndicator(),
+              SizedBox(height: 14),
+              Text(
+                'Checking saved Ride Driver account...',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final Map<String, dynamic>? remembered =
+        _rememberedDriverData;
+
+    if (remembered != null) {
+      final String approvalStatus =
+          remembered['approvalStatus']
+                  ?.toString()
+                  .trim()
+                  .toLowerCase() ??
+              '';
+
+      final bool rejected =
+          approvalStatus == 'rejected';
+
+      final String name =
+          remembered['name']?.toString().trim() ?? '';
+
+      final String email =
+          remembered['email']?.toString().trim() ??
+              FirebaseAuth.instance.currentUser?.email ??
+              '';
+
+      return Scaffold(
+        backgroundColor: const Color(0xFFF7F8FA),
+        appBar: AppBar(
+          title: const Text(
+            'Ride Driver Account',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          centerTitle: true,
+        ),
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: 620,
+              ),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(18),
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(22),
+                    child: Column(
+                      crossAxisAlignment:
+                          CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        Icon(
+                          rejected
+                              ? Icons.cancel_rounded
+                              : Icons
+                                  .pending_actions_rounded,
+                          size: 58,
+                          color: rejected
+                              ? Colors.red
+                              : Colors.orange,
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          rejected
+                              ? 'Driver Account Rejected'
+                              : 'Approval Pending',
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        if (name.isNotEmpty)
+                          Text(
+                            name,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        if (email.isNotEmpty) ...<Widget>[
+                          const SizedBox(height: 4),
+                          Text(
+                            email,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.grey.shade700,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        Text(
+                          rejected
+                              ? 'This account remains saved on this device. '
+                                  'Contact Admin if you need the account '
+                                  'reviewed again.'
+                              : 'Your Ride Driver account remains signed in. '
+                                  'You do not need to enter email or password '
+                                  'again while waiting for approval and '
+                                  'licence verification.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.grey.shade800,
+                            height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        FilledButton.icon(
+                          onPressed: _isLoading
+                              ? null
+                              : _refreshRememberedDriver,
+                          icon: const Icon(
+                            Icons.refresh_rounded,
+                          ),
+                          label: const Text(
+                            'Check Account Status',
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: _isLoading
+                              ? null
+                              : _logoutRememberedDriver,
+                          icon: const Icon(
+                            Icons.logout_rounded,
+                          ),
+                          label: const Text(
+                            'Logout / Use Another Account',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF7F8FA),
       appBar: AppBar(

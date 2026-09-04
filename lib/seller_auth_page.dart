@@ -41,13 +41,81 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
   bool _isLoading = false;
   bool _isGettingLocation = false;
   bool _showPassword = false;
+  bool _checkingExistingSession = true;
   double? _shopLatitude;
   double? _shopLongitude;
-  
+
   FirebaseAuth get _auth => FirebaseAuth.instance;
 
   CollectionReference<Map<String, dynamic>> get _sellers =>
       FirebaseFirestore.instance.collection('sellers');
+
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _openRememberedSellerSession();
+    });
+  }
+
+  Future<void> _openRememberedSellerSession() async {
+    try {
+      final User? user = _auth.currentUser;
+
+      if (user == null || user.isAnonymous) {
+        if (mounted) {
+          setState(() {
+            _checkingExistingSession = false;
+          });
+        }
+        return;
+      }
+
+      final DocumentSnapshot<Map<String, dynamic>> sellerDocument =
+          await _sellers.doc(user.uid).get();
+
+      final Map<String, dynamic> seller =
+          sellerDocument.data() ?? <String, dynamic>{};
+
+      final bool isSeller = sellerDocument.exists &&
+          seller['role']?.toString().trim() == 'seller';
+
+      if (!isSeller) {
+        if (mounted) {
+          setState(() {
+            _checkingExistingSession = false;
+          });
+        }
+        return;
+      }
+
+      await _sellers.doc(user.uid).set(
+        <String, dynamic>{
+          'lastSessionOpenedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.pushReplacement<void, void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => const SellerDashboardPage(),
+        ),
+      );
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _checkingExistingSession = false;
+        });
+      }
+    }
+  }
 
   Future<void> _restoreCustomerSession() async {
     await _auth.signOut();
@@ -250,14 +318,19 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
         },
       );
 
-      await _restoreCustomerSession();
-
       if (!mounted) {
         return;
       }
 
       _message(
-        'Seller account created. Please wait for Admin approval before login.',
+        'Seller account created. Your login is saved on this device until you logout.',
+      );
+
+      Navigator.pushReplacement<void, void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => const SellerDashboardPage(),
+        ),
       );
     } catch (error) {
       if (createdUser != null) {
@@ -306,15 +379,6 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
 
       throw Exception(
         'This account is not registered as a seller.',
-      );
-    }
-
-    if (seller['isActive'] == false) {
-      await _restoreCustomerSession();
-
-      throw Exception(
-        'Your seller account is inactive. '
-        'Please contact RD Online Shop admin.',
       );
     }
 
@@ -466,6 +530,26 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_checkingExistingSession) {
+      return const Scaffold(
+        body: Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              CircularProgressIndicator(),
+              SizedBox(height: 14),
+              Text(
+                'Opening saved seller account...',
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(

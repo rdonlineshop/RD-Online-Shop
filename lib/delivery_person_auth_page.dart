@@ -32,6 +32,181 @@ class _DeliveryPersonAuthPageState
   bool _isRegistering = false;
   bool _isLoading = false;
   bool _obscurePassword = true;
+  bool _checkingSavedSession = true;
+
+  Map<String, dynamic>? _rememberedDeliveryData;
+
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restoreSavedDeliverySession();
+    });
+  }
+
+  void _finishSavedSessionCheck({
+    Map<String, dynamic>? rememberedDeliveryData,
+  }) {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _checkingSavedSession = false;
+      _rememberedDeliveryData = rememberedDeliveryData;
+    });
+  }
+
+  Future<void> _restoreSavedDeliverySession() async {
+    final User? user = FirebaseAuth.instance.currentUser;
+
+    if (user == null || user.isAnonymous) {
+      _finishSavedSessionCheck();
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> doc =
+          await FirebaseFirestore.instance
+              .collection('delivery_persons')
+              .doc(user.uid)
+              .get();
+
+      if (!doc.exists) {
+        // Another RD role may currently be signed in. Do not sign it out just
+        // because Delivery Person was opened.
+        _finishSavedSessionCheck();
+        return;
+      }
+
+      final Map<String, dynamic> data =
+          doc.data() ?? <String, dynamic>{};
+
+      final String role =
+          data['role']?.toString().trim() ?? '';
+
+      if (role != 'delivery_person') {
+        _finishSavedSessionCheck();
+        return;
+      }
+
+      final bool opened = await _openDeliveryAccount(
+        user: user,
+        data: data,
+        showStatusMessage: false,
+      );
+
+      if (!opened) {
+        _emailController.text =
+            user.email?.trim() ?? data['email']?.toString().trim() ?? '';
+
+        _finishSavedSessionCheck(
+          rememberedDeliveryData: data,
+        );
+      }
+    } catch (_) {
+      _finishSavedSessionCheck();
+    }
+  }
+
+  Future<bool> _openDeliveryAccount({
+    required User user,
+    required Map<String, dynamic> data,
+    required bool showStatusMessage,
+  }) async {
+    final bool isActive =
+        data['isActive'] != false;
+    final bool isApproved =
+        data['isApproved'] == true;
+
+    if (!isActive || !isApproved) {
+      if (showStatusMessage) {
+        _showMessage(
+          !isActive
+              ? 'This delivery person account is inactive.'
+              : 'Your delivery person account is waiting for Admin approval.',
+        );
+      }
+
+      if (mounted) {
+        setState(() {
+          _rememberedDeliveryData = data;
+        });
+      }
+
+      return false;
+    }
+
+    final String now =
+        DateTime.now().toIso8601String();
+
+    await FirebaseFirestore.instance
+        .collection('delivery_persons')
+        .doc(user.uid)
+        .set(
+      <String, dynamic>{
+        'isOnline': true,
+        'updatedAt': now,
+      },
+      SetOptions(
+        merge: true,
+      ),
+    );
+
+    if (!mounted) {
+      return false;
+    }
+
+    await _openDashboard();
+    return true;
+  }
+
+  Future<void> _refreshRememberedDelivery() async {
+    if (_checkingSavedSession) {
+      return;
+    }
+
+    setState(() {
+      _checkingSavedSession = true;
+    });
+
+    await _restoreSavedDeliverySession();
+  }
+
+  Future<void> _logoutRememberedDelivery() async {
+    if (_isLoading) {
+      return;
+    }
+
+    setState(() {
+      _isLoading = true;
+    });
+
+    try {
+      await FirebaseAuth.instance.signOut();
+      await FirebaseAuth.instance.signInAnonymously();
+
+      if (!mounted) {
+        return;
+      }
+
+      _emailController.clear();
+      _passwordController.clear();
+
+      setState(() {
+        _rememberedDeliveryData = null;
+        _isRegistering = false;
+      });
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isLoading = false;
+          _checkingSavedSession = false;
+        });
+      }
+    }
+  }
 
   Future<void> _restoreCustomerSession() async {
     await FirebaseAuth.instance.signOut();
@@ -157,15 +332,19 @@ class _DeliveryPersonAuthPageState
         ),
       );
 
-      await _restoreCustomerSession();
-
       if (!mounted) {
         return;
       }
 
       _showMessage(
-        'Account created. Please wait for Admin approval before login.',
+        'Account created. Your Delivery Person account is saved on this device while waiting for Admin approval.',
       );
+
+      setState(() {
+        _checkingSavedSession = true;
+      });
+
+      await _restoreSavedDeliverySession();
     } on FirebaseAuthException catch (error) {
       String message =
           'Could not create account.';
@@ -247,17 +426,14 @@ class _DeliveryPersonAuthPageState
         return;
       }
 
-      final DocumentSnapshot<
-              Map<String, dynamic>>
-          doc =
+      final DocumentSnapshot<Map<String, dynamic>> doc =
           await FirebaseFirestore.instance
               .collection('delivery_persons')
               .doc(user.uid)
               .get();
 
-      // Delivery person collection मा account नभए
-      // Seller/Customer account बाट Delivery Dashboard
-      // खोल्न दिँदैन.
+      // A Seller/Customer/Admin/Ride Driver account must never be treated as
+      // a Delivery Person account.
       if (!doc.exists) {
         await _restoreCustomerSession();
 
@@ -272,12 +448,10 @@ class _DeliveryPersonAuthPageState
       }
 
       final Map<String, dynamic> data =
-          doc.data() ??
-              <String, dynamic>{};
+          doc.data() ?? <String, dynamic>{};
 
       final String role =
-          data['role']?.toString().trim() ??
-              '';
+          data['role']?.toString().trim() ?? '';
 
       if (role != 'delivery_person') {
         await _restoreCustomerSession();
@@ -292,64 +466,22 @@ class _DeliveryPersonAuthPageState
         return;
       }
 
-      final bool isActive =
-          data['isActive'] != false;
-
-      if (!isActive) {
-        await _restoreCustomerSession();
-
-        if (!mounted) {
-          return;
-        }
-
-        _showMessage(
-          'This delivery person account is inactive.',
-        );
-        return;
-      }
-
-      final bool isApproved =
-          data['isApproved'] == true;
-
-      if (!isApproved) {
-        await _restoreCustomerSession();
-
-        if (!mounted) {
-          return;
-        }
-
-        _showMessage(
-          'Your delivery person account is waiting for Admin approval.',
-        );
-        return;
-      }
-
-      final String now =
-          DateTime.now().toIso8601String();
-
-      await FirebaseFirestore.instance
-          .collection('delivery_persons')
-          .doc(user.uid)
-          .set(
-        <String, dynamic>{
-          'isOnline': true,
-          'updatedAt': now,
-        },
-        SetOptions(
-          merge: true,
-        ),
+      final bool opened =
+          await _openDeliveryAccount(
+        user: user,
+        data: data,
+        showStatusMessage: true,
       );
 
-      if (!mounted) {
-        return;
+      if (!opened && mounted) {
+        setState(() {
+          _rememberedDeliveryData = data;
+        });
+      } else if (opened && mounted) {
+        _showMessage(
+          'Delivery person login successful.',
+        );
       }
-
-      _showMessage(
-        'Delivery person login successful.',
-      );
-
-      // LOGIN SUCCESS -> DELIVERY DASHBOARD
-      await _openDashboard();
     } on FirebaseAuthException catch (error) {
       String message =
           'Could not login.';
@@ -444,6 +576,174 @@ class _DeliveryPersonAuthPageState
   Widget build(
     BuildContext context,
   ) {
+    if (_checkingSavedSession) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text(
+            'Delivery Person',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          centerTitle: true,
+        ),
+        body: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              CircularProgressIndicator(),
+              SizedBox(height: 14),
+              Text(
+                'Checking saved Delivery Person account...',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    final Map<String, dynamic>? remembered =
+        _rememberedDeliveryData;
+
+    if (remembered != null) {
+      final bool isActive =
+          remembered['isActive'] != false;
+      final bool isApproved =
+          remembered['isApproved'] == true;
+
+      final String name =
+          remembered['name']?.toString().trim() ?? '';
+
+      final String email =
+          remembered['email']?.toString().trim() ??
+              FirebaseAuth.instance.currentUser?.email ??
+              '';
+
+      final String title =
+          !isActive
+              ? 'Delivery Account Inactive'
+              : !isApproved
+                  ? 'Approval Pending'
+                  : 'Delivery Person Account';
+
+      final String message =
+          !isActive
+              ? 'This Delivery Person account remains saved on this device, but it is currently inactive.'
+              : !isApproved
+                  ? 'Your Delivery Person account remains signed in. You do not need to enter email or password again while waiting for Admin approval.'
+                  : 'Your Delivery Person account is saved on this device.';
+
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text(
+            'Delivery Person Account',
+            style: TextStyle(
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          centerTitle: true,
+        ),
+        body: SafeArea(
+          child: Center(
+            child: ConstrainedBox(
+              constraints: const BoxConstraints(
+                maxWidth: 520,
+              ),
+              child: SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(22),
+                    child: Column(
+                      crossAxisAlignment:
+                          CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        Icon(
+                          !isActive
+                              ? Icons.block_rounded
+                              : Icons
+                                  .pending_actions_rounded,
+                          size: 58,
+                          color: !isActive
+                              ? Colors.red
+                              : Colors.orange,
+                        ),
+                        const SizedBox(height: 14),
+                        Text(
+                          title,
+                          textAlign: TextAlign.center,
+                          style: const TextStyle(
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        if (name.isNotEmpty)
+                          Text(
+                            name,
+                            textAlign: TextAlign.center,
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w800,
+                            ),
+                          ),
+                        if (email.isNotEmpty) ...<Widget>[
+                          const SizedBox(height: 4),
+                          Text(
+                            email,
+                            textAlign: TextAlign.center,
+                            style: TextStyle(
+                              color: Colors.grey.shade700,
+                            ),
+                          ),
+                        ],
+                        const SizedBox(height: 16),
+                        Text(
+                          message,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: Colors.grey.shade800,
+                            height: 1.4,
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        FilledButton.icon(
+                          onPressed: _isLoading
+                              ? null
+                              : _refreshRememberedDelivery,
+                          icon: const Icon(
+                            Icons.refresh_rounded,
+                          ),
+                          label: const Text(
+                            'Check Account Status',
+                          ),
+                        ),
+                        const SizedBox(height: 10),
+                        OutlinedButton.icon(
+                          onPressed: _isLoading
+                              ? null
+                              : _logoutRememberedDelivery,
+                          icon: const Icon(
+                            Icons.logout_rounded,
+                          ),
+                          label: const Text(
+                            'Logout / Use Another Account',
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: Text(

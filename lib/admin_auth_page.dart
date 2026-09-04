@@ -24,6 +24,80 @@ class _AdminAuthPageState extends State<AdminAuthPage> {
 
   bool _isLoading = false;
   bool _hidePassword = true;
+  bool _checkingSavedSession = true;
+
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restoreSavedAdminSession();
+    });
+  }
+
+  void _finishSavedSessionCheck() {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _checkingSavedSession = false;
+    });
+  }
+
+  Future<void> _restoreSavedAdminSession() async {
+    final User? user = FirebaseAuth.instance.currentUser;
+
+    if (user == null || user.isAnonymous) {
+      _finishSavedSessionCheck();
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> adminDocument =
+          await FirebaseFirestore.instance
+              .collection('admins')
+              .doc(user.uid)
+              .get();
+
+      if (!adminDocument.exists) {
+        // Another RD role may currently be signed in. Do not sign it out just
+        // because the Admin entry page was opened.
+        _finishSavedSessionCheck();
+        return;
+      }
+
+      final Map<String, dynamic> admin =
+          adminDocument.data() ?? <String, dynamic>{};
+
+      final String role =
+          admin['role']?.toString().trim() ?? '';
+
+      final bool allowedRole =
+          role == 'admin' || role == 'superAdmin';
+
+      final bool isActive =
+          admin['isActive'] == true;
+
+      if (!allowedRole || !isActive) {
+        _finishSavedSessionCheck();
+        return;
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.pushReplacement<void, void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => const AdminDashboardPage(),
+        ),
+      );
+    } catch (_) {
+      _finishSavedSessionCheck();
+    }
+  }
 
   Future<void> _restoreCustomerSession() async {
     await FirebaseAuth.instance.signOut();
@@ -129,6 +203,31 @@ class _AdminAuthPageState extends State<AdminAuthPage> {
 
   @override
   Widget build(BuildContext context) {
+    if (_checkingSavedSession) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Admin'),
+          centerTitle: true,
+        ),
+        body: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              CircularProgressIndicator(),
+              SizedBox(height: 14),
+              Text(
+                'Checking saved Admin account...',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Admin Login'),

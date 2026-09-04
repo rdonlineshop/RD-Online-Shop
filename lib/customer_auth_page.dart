@@ -27,6 +27,94 @@ class _CustomerAuthPageState extends State<CustomerAuthPage> {
   bool _isRegistering = false;
   bool _isLoading = false;
   bool _hidePassword = true;
+  bool _checkingSavedSession = true;
+
+  @override
+  void initState() {
+    super.initState();
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _restoreSavedCustomerSession();
+    });
+  }
+
+  void _finishSavedSessionCheck() {
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _checkingSavedSession = false;
+    });
+  }
+
+  Future<void> _restoreSavedCustomerSession() async {
+    final FirebaseAuth auth = FirebaseAuth.instance;
+    final User? user = auth.currentUser;
+
+    if (user == null || user.isAnonymous) {
+      _finishSavedSessionCheck();
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>>
+          customerDocument =
+          await FirebaseFirestore.instance
+              .collection('customers')
+              .doc(user.uid)
+              .get();
+
+      if (!customerDocument.exists) {
+        // Another RD role may currently be signed in. Do not sign it out just
+        // because the Customer entry page was opened.
+        _finishSavedSessionCheck();
+        return;
+      }
+
+      final Map<String, dynamic> customer =
+          customerDocument.data() ??
+              <String, dynamic>{};
+
+      final String role =
+          customer['role']?.toString().trim() ?? '';
+
+      if (role != 'customer' ||
+          customer['isActive'] == false) {
+        _finishSavedSessionCheck();
+        return;
+      }
+
+      await activateRegisteredCustomerSession(user);
+
+      await FirebaseFirestore.instance
+          .collection('customers')
+          .doc(user.uid)
+          .set(
+        <String, dynamic>{
+          'lastLoginAt':
+              FieldValue.serverTimestamp(),
+          'updatedAt':
+              FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      // CustomerAuthPage is normally opened from Home/Profile.
+      // A valid saved customer session closes this page immediately.
+      if (Navigator.of(context).canPop()) {
+        Navigator.pop(context, true);
+      } else {
+        _finishSavedSessionCheck();
+      }
+    } catch (_) {
+      _finishSavedSessionCheck();
+    }
+  }
 
   @override
   void dispose() {
@@ -280,6 +368,31 @@ class _CustomerAuthPageState extends State<CustomerAuthPage> {
   @override
   Widget build(BuildContext context) {
     const Color rdRed = Color(0xFFE50914);
+
+    if (_checkingSavedSession) {
+      return Scaffold(
+        appBar: AppBar(
+          title: const Text('Customer Account'),
+          centerTitle: true,
+        ),
+        body: const Center(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              CircularProgressIndicator(),
+              SizedBox(height: 14),
+              Text(
+                'Checking saved Customer account...',
+                textAlign: TextAlign.center,
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       appBar: AppBar(
