@@ -286,6 +286,263 @@ class RideMyRidesPage extends StatelessWidget {
   }
 
 
+  Future<void> _showRideReceipt({
+    required BuildContext context,
+    required QueryDocumentSnapshot<Map<String, dynamic>> ride,
+  }) async {
+    final Map<String, dynamic> data = ride.data();
+    final String status = _status(data);
+
+    if (status != 'completed') {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Receipt is available after the ride is completed.'),
+        ),
+      );
+      return;
+    }
+
+    final String requestId =
+        data['rideRequestId']?.toString().trim().isNotEmpty == true
+            ? data['rideRequestId'].toString().trim()
+            : ride.id;
+    final String currency =
+        data['currency']?.toString().trim().isNotEmpty == true
+            ? data['currency'].toString().trim()
+            : 'Rs.';
+
+    final String driverName =
+        data['driverName']?.toString().trim().isNotEmpty == true
+            ? data['driverName'].toString().trim()
+            : 'Ride Driver';
+    final String vehicleType =
+        data['vehicleType']?.toString().trim().isNotEmpty == true
+            ? data['vehicleType'].toString().trim()
+            : 'RD Ride';
+    final String vehicleNumber =
+        data['vehicleNumber']?.toString().trim() ?? '';
+    final String pickup =
+        data['pickupAddress']?.toString().trim() ?? '';
+    final String destination =
+        data['destinationAddress']?.toString().trim() ?? '';
+
+    final double? finalDistance =
+        _toDouble(data['finalDistanceKm']) ??
+        _toDouble(data['actualDistanceKm']) ??
+        _toDouble(data['routeDistanceKm']);
+    final double? finalFare =
+        _toDouble(data['finalFare']) ??
+        _toDouble(data['liveFare']) ??
+        _toDouble(data['estimatedFare']);
+    final double? baseFare = _toDouble(data['fareBaseFare']);
+    final double? perKm = _toDouble(data['farePerKm']);
+    final double? minimumFare = _toDouble(data['fareMinimumFare']);
+    final double? commissionPercent =
+        _toDouble(data['rdCommissionPercent']);
+    final double? finalCommission =
+        _toDouble(data['finalRdCommission']);
+    final double? driverNetIncome =
+        _toDouble(data['driverNetIncome']);
+
+    final dynamic completedAt =
+        data['tripCompletedAt'] ?? data['updatedAt'] ?? data['createdAt'];
+
+    String money(double? value, {int decimals = 0}) {
+      if (value == null) {
+        return '--';
+      }
+      return '$currency ${value.toStringAsFixed(decimals)}';
+    }
+
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          icon: const Icon(
+            Icons.receipt_long_rounded,
+            color: _rdBlue,
+            size: 38,
+          ),
+          title: const Text(
+            'RD Ride Receipt',
+            textAlign: TextAlign.center,
+            style: TextStyle(fontWeight: FontWeight.w900),
+          ),
+          content: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 560),
+            child: SingleChildScrollView(
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Container(
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: _rdBlue.withValues(alpha: 0.07),
+                      borderRadius: BorderRadius.circular(14),
+                      border: Border.all(
+                        color: _rdBlue.withValues(alpha: 0.18),
+                      ),
+                    ),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        _receiptLine('Ride ID', requestId),
+                        _receiptLine(
+                          'Completed',
+                          _dateText(completedAt),
+                        ),
+                        _receiptLine('Driver', driverName),
+                        _receiptLine('Vehicle', vehicleType),
+                        if (vehicleNumber.isNotEmpty)
+                          _receiptLine(
+                            'Vehicle No.',
+                            vehicleNumber,
+                          ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'Route',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _receiptLine(
+                    'Pickup',
+                    pickup.isEmpty ? 'Not available' : pickup,
+                  ),
+                  _receiptLine(
+                    'Destination',
+                    destination.isEmpty ? 'Not available' : destination,
+                  ),
+                  _receiptLine(
+                    'Final distance',
+                    finalDistance == null
+                        ? '--'
+                        : '${finalDistance.toStringAsFixed(2)} km',
+                  ),
+                  const Divider(height: 26),
+                  const Text(
+                    'Fare Breakdown',
+                    style: TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  _receiptLine(
+                    'Base fare',
+                    money(baseFare),
+                  ),
+                  _receiptLine(
+                    'Per km rate',
+                    perKm == null
+                        ? '--'
+                        : '$currency ${perKm.toStringAsFixed(0)}/km',
+                  ),
+                  _receiptLine(
+                    'Minimum fare',
+                    money(minimumFare),
+                  ),
+                  _receiptLine(
+                    'Final fare',
+                    money(finalFare),
+                    emphasize: true,
+                  ),
+                  if (commissionPercent != null ||
+                      finalCommission != null ||
+                      driverNetIncome != null) ...<Widget>[
+                    const Divider(height: 26),
+                    const Text(
+                      'RD Settlement',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    _receiptLine(
+                      'RD commission',
+                      finalCommission == null
+                          ? (commissionPercent == null
+                              ? '--'
+                              : '${commissionPercent.toStringAsFixed(1)}%')
+                          : '${money(finalCommission, decimals: 2)}'
+                              '${commissionPercent == null ? '' : ' • ${commissionPercent.toStringAsFixed(1)}%'}',
+                    ),
+                    _receiptLine(
+                      'Driver net income',
+                      money(driverNetIncome, decimals: 2),
+                      emphasize: true,
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Text(
+                    'This receipt uses the fare and commission snapshot saved '
+                    'with this completed ride.',
+                    style: TextStyle(
+                      color: Colors.grey.shade700,
+                      fontSize: 11.5,
+                      height: 1.35,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          actions: <Widget>[
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Done'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _receiptLine(
+    String label,
+    String value, {
+    bool emphasize = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          SizedBox(
+            width: 125,
+            child: Text(
+              '$label:',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontSize: 12.5,
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+              style: TextStyle(
+                fontSize: emphasize ? 14.5 : 12.5,
+                fontWeight:
+                    emphasize ? FontWeight.w900 : FontWeight.w800,
+                height: 1.3,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+
   Future<void> _showCustomerCancellationDialog({
     required BuildContext context,
     required QueryDocumentSnapshot<Map<String, dynamic>> ride,
@@ -951,8 +1208,27 @@ class RideMyRidesPage extends StatelessWidget {
               const SizedBox(height: 14),
               _cancellationDetails(data),
             ],
-            if (canTrack) ...<Widget>[
+            if (status == 'completed') ...<Widget>[
               const SizedBox(height: 16),
+              SizedBox(
+                height: 50,
+                child: OutlinedButton.icon(
+                  onPressed: () => _showRideReceipt(
+                    context: context,
+                    ride: ride,
+                  ),
+                  icon: const Icon(Icons.receipt_long_rounded),
+                  label: const Text(
+                    'View Receipt & Fare Breakdown',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+            if (canTrack) ...<Widget>[
+              const SizedBox(height: 10),
               SizedBox(
                 height: 50,
                 child: FilledButton.icon(
