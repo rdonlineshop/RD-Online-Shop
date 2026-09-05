@@ -8,6 +8,7 @@ import 'data/wishlist_data.dart';
 import 'firebase_options.dart';
 import 'home_page.dart';
 import 'services/notification_service.dart';
+import 'services/ride_driver_foreground_alert_service.dart';
 import 'services/platform_capabilities.dart';
 import 'services/ride_incoming_share_service.dart';
 
@@ -98,6 +99,10 @@ class _StartupGateState extends State<StartupGate> {
     }
 
     debugPrint('RD STARTUP: Firebase Auth ready.');
+
+    await RideDriverForegroundAlertService.instance.initialize();
+    debugPrint('RD STARTUP: Ride Driver foreground alert ready.');
+
 
     if (PlatformCapabilities.supportsPushNotifications) {
       try {

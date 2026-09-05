@@ -5,6 +5,7 @@ import 'dart:math' as math;
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:crypto/crypto.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart' as foundation;
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
@@ -18,6 +19,7 @@ import 'ride_driver_agreement_page.dart';
 import 'ride_driver_auth_page.dart';
 import 'ride_driver_earnings_page.dart';
 import 'ride_driver_reactivation_page.dart';
+import 'services/platform_capabilities.dart';
 import 'services/ride_request_service.dart';
 import 'services/ride_sos_service.dart';
 import 'widgets/ride_driver_rating_summary.dart';
@@ -45,6 +47,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       _rideWatchSubscription;
   StreamSubscription<Position>? _positionSubscription;
   StreamSubscription<Position>? _availabilityPositionSubscription;
+  StreamSubscription<String>? _fcmTokenRefreshSubscription;
 
   String get _driverId => widget.driverId.trim();
 
@@ -95,6 +98,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     super.initState();
     _watchForActiveRide();
     unawaited(_restoreAvailabilityLocationTracking());
+    unawaited(_registerDriverPushNotifications());
   }
 
   @override
@@ -102,6 +106,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     _rideWatchSubscription?.cancel();
     _positionSubscription?.cancel();
     _availabilityPositionSubscription?.cancel();
+    _fcmTokenRefreshSubscription?.cancel();
     super.dispose();
   }
 
@@ -178,6 +183,72 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     );
   }
 
+  Future<void> _saveDriverFcmToken(String rawToken) async {
+    final String token = rawToken.trim();
+
+    if (_driverId.isEmpty || token.isEmpty) {
+      return;
+    }
+
+    await _driverRef.update(
+      <String, dynamic>{
+        'fcmToken': token,
+        'fcmTokens': FieldValue.arrayUnion(<String>[token]),
+        'fcmTokenUpdatedAt': FieldValue.serverTimestamp(),
+        'notificationsEnabled': true,
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+    );
+  }
+
+  Future<void> _registerDriverPushNotifications() async {
+    if (_driverId.isEmpty ||
+        !PlatformCapabilities.supportsPushNotifications) {
+      return;
+    }
+
+    try {
+      final FirebaseMessaging messaging = FirebaseMessaging.instance;
+
+      final NotificationSettings settings =
+          await messaging.requestPermission(
+        alert: true,
+        badge: true,
+        sound: true,
+      );
+
+      if (settings.authorizationStatus ==
+          AuthorizationStatus.denied) {
+        return;
+      }
+
+      final String? token = await messaging.getToken();
+
+      if (token != null && token.trim().isNotEmpty) {
+        await _saveDriverFcmToken(token);
+      }
+
+      await _fcmTokenRefreshSubscription?.cancel();
+      _fcmTokenRefreshSubscription =
+          messaging.onTokenRefresh.listen(
+        (String refreshedToken) {
+          unawaited(
+            _saveDriverFcmToken(refreshedToken).catchError(
+              (Object _) {
+                // A later token refresh or page reopen retries automatically.
+              },
+            ),
+          );
+        },
+        onError: (Object _) {
+          // Push token refresh can retry on a later app session.
+        },
+      );
+    } catch (_) {
+      // Push setup must never block the Ride Driver page.
+    }
+  }
+
   Future<Position?> _getCurrentPosition() async {
     final bool serviceEnabled =
         await Geolocator.isLocationServiceEnabled();
@@ -241,6 +312,32 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       locationSettings: const LocationSettings(
         accuracy: LocationAccuracy.high,
       ),
+    );
+  }
+
+  LocationSettings _livePositionSettings({
+    required int distanceFilter,
+    required String notificationText,
+  }) {
+    if (!foundation.kIsWeb &&
+        foundation.defaultTargetPlatform == TargetPlatform.android) {
+      return AndroidSettings(
+        accuracy: LocationAccuracy.high,
+        distanceFilter: distanceFilter,
+        intervalDuration: const Duration(seconds: 5),
+        foregroundNotificationConfig: ForegroundNotificationConfig(
+          notificationTitle: 'RD Ride live location active',
+          notificationText: notificationText,
+          notificationChannelName: 'RD Ride Live Location',
+          enableWakeLock: true,
+          setOngoing: true,
+        ),
+      );
+    }
+
+    return LocationSettings(
+      accuracy: LocationAccuracy.high,
+      distanceFilter: distanceFilter,
     );
   }
 
@@ -323,9 +420,10 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
 
     _availabilityPositionSubscription =
         Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
+      locationSettings: _livePositionSettings(
         distanceFilter: 10,
+        notificationText:
+            'You are online. RD Ride is sharing your location so nearby customers can find you.',
       ),
     ).listen(
       (Position position) {
@@ -558,9 +656,10 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     await _writeDriverPosition(currentPosition, cleanRideId);
 
     _positionSubscription = Geolocator.getPositionStream(
-      locationSettings: const LocationSettings(
-        accuracy: LocationAccuracy.high,
+      locationSettings: _livePositionSettings(
         distanceFilter: 5,
+        notificationText:
+            'RD Ride is sharing your live location for the active trip.',
       ),
     ).listen(
       (Position position) {

@@ -282,8 +282,30 @@ service cloud.firestore {
             'longitude',
             'locationUpdatedAt',
             'currentRideRequestId',
+            'fcmToken',
+            'fcmTokens',
+            'fcmTokenUpdatedAt',
+            'notificationsEnabled',
             'updatedAt'
           ])
+          && (
+            !('fcmToken' in request.resource.data)
+            || (
+              request.resource.data.fcmToken is string
+              && request.resource.data.fcmToken.size() <= 4096
+            )
+          )
+          && (
+            !('fcmTokens' in request.resource.data)
+            || (
+              request.resource.data.fcmTokens is list
+              && request.resource.data.fcmTokens.size() <= 20
+            )
+          )
+          && (
+            !('notificationsEnabled' in request.resource.data)
+            || request.resource.data.notificationsEnabled is bool
+          )
           && (
             request.resource.data.isOnline == false
             || (
