@@ -7,6 +7,7 @@ import 'admin_notification_center_page.dart';
 import 'admin_order_page.dart';
 import 'admin_product_page.dart';
 import 'admin_ride_driver_management_page.dart';
+import 'admin_ride_earnings_page.dart';
 import 'admin_ride_history_page.dart';
 import 'admin_ride_sos_page.dart';
 import 'admin_ride_fare_settings_page.dart';
@@ -80,8 +81,7 @@ class AdminDashboardPage extends StatelessWidget {
           );
         }
 
-        final DocumentSnapshot<Map<String, dynamic>>? document =
-            snapshot.data;
+        final DocumentSnapshot<Map<String, dynamic>>? document = snapshot.data;
         final Map<String, dynamic> admin =
             document?.data() ?? <String, dynamic>{};
 
@@ -179,8 +179,7 @@ class AdminDashboardPage extends StatelessWidget {
             onTap: () => Navigator.push<void>(
               context,
               MaterialPageRoute<void>(
-                builder: (_) =>
-                    const AdminRideDriverManagementPage(),
+                builder: (_) => const AdminRideDriverManagementPage(),
               ),
             ),
           ),
@@ -191,6 +190,16 @@ class AdminDashboardPage extends StatelessWidget {
               context,
               MaterialPageRoute<void>(
                 builder: (_) => const AdminRideFareSettingsPage(),
+              ),
+            ),
+          ),
+          _dashboardCard(
+            icon: Icons.account_balance_wallet_rounded,
+            title: 'Ride Commission',
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const AdminRideEarningsPage(),
               ),
             ),
           ),
