@@ -70,6 +70,22 @@ service cloud.firestore {
         && rideDriverData().role == 'ride_driver';
     }
 
+    function busOperatorData() {
+      return get(
+        /databases/$(database)/documents/bus_operators/$(request.auth.uid)
+      ).data;
+    }
+
+    function isActiveBusOperator() {
+      return signedIn()
+        && exists(
+          /databases/$(database)/documents/bus_operators/$(request.auth.uid)
+        )
+        && busOperatorData().role == 'busOperator'
+        && busOperatorData().isApproved == true
+        && busOperatorData().isActive == true;
+    }
+
     match /admins/{adminId} {
       allow read: if signedIn() && request.auth.uid == adminId;
       allow read: if isAdmin();
@@ -1429,6 +1445,1004 @@ service cloud.firestore {
     match /ride_fare_settings/{fareId} {
       allow read: if signedIn();
       allow create, update, delete: if isAdmin();
+    }
+
+
+
+    // ============================================================
+    // RD TICKET BOOKINGS
+    // ============================================================
+    // Customer can create/read only their own booking requests.
+    // Customers cannot self-confirm payment, provider verification,
+    // PNR or e-ticket issuance. Those fields are locked on create.
+    match /ticket_bookings/{bookingId} {
+      function ticketOwner() {
+        return signedIn()
+          && resource.data.customerAuthUid == request.auth.uid;
+      }
+
+      allow read: if isAdmin() || ticketOwner();
+
+      allow create: if signedIn()
+        && request.resource.data.bookingId == bookingId
+        && request.resource.data.bookingVersion == 2
+        && request.resource.data.serviceType == 'flight'
+        && request.resource.data.customerAuthUid == request.auth.uid
+        && request.resource.data.customerId is string
+
+        && request.resource.data.tripType
+          in ['one_way', 'round_trip']
+        && request.resource.data.from is string
+        && request.resource.data.from.size() > 0
+        && request.resource.data.from.size() <= 120
+        && request.resource.data.to is string
+        && request.resource.data.to.size() > 0
+        && request.resource.data.to.size() <= 120
+        && request.resource.data.from
+          != request.resource.data.to
+        && request.resource.data.departureDate is timestamp
+        && (
+          request.resource.data.returnDate == null
+          || request.resource.data.returnDate is timestamp
+        )
+
+        && request.resource.data.adultCount is int
+        && request.resource.data.adultCount >= 1
+        && request.resource.data.adultCount <= 9
+        && request.resource.data.childCount is int
+        && request.resource.data.childCount >= 0
+        && request.resource.data.childCount <= 8
+        && request.resource.data.infantCount is int
+        && request.resource.data.infantCount >= 0
+        && request.resource.data.infantCount
+          <= request.resource.data.adultCount
+        && request.resource.data.passengerCount is int
+        && request.resource.data.passengerCount
+          == request.resource.data.adultCount
+            + request.resource.data.childCount
+            + request.resource.data.infantCount
+        && request.resource.data.passengerCount >= 1
+        && request.resource.data.passengerCount <= 9
+        && request.resource.data.passengerNames is list
+        && request.resource.data.passengerNames.size()
+          == request.resource.data.passengerCount
+        && request.resource.data.passengerTypes is list
+        && request.resource.data.passengerTypes.size()
+          == request.resource.data.passengerCount
+
+        && request.resource.data.contactPhone is string
+        && request.resource.data.contactPhone.size() >= 7
+        && request.resource.data.contactPhone.size() <= 30
+        && request.resource.data.contactEmail is string
+        && request.resource.data.contactEmail.size() <= 180
+        && request.resource.data.cabinClass
+          in ['Economy', 'Premium Economy', 'Business']
+        && request.resource.data.directOnly is bool
+        && request.resource.data.flexibleDates is bool
+
+        && request.resource.data.airlineName is string
+        && request.resource.data.airlineName.size() > 0
+        && request.resource.data.flightNumber is string
+        && request.resource.data.flightNumber.size() > 0
+        && request.resource.data.outboundDeparture is timestamp
+        && request.resource.data.outboundArrival is timestamp
+        && (
+          request.resource.data.returnDeparture == null
+          || request.resource.data.returnDeparture is timestamp
+        )
+        && (
+          request.resource.data.returnArrival == null
+          || request.resource.data.returnArrival is timestamp
+        )
+        && request.resource.data.baggage is string
+        && request.resource.data.refundable is bool
+
+        && request.resource.data.baseFare is number
+        && request.resource.data.baseFare >= 0
+        && request.resource.data.taxes is number
+        && request.resource.data.taxes >= 0
+        && request.resource.data.serviceFee is number
+        && request.resource.data.serviceFee >= 0
+        && request.resource.data.totalFare is number
+        && request.resource.data.totalFare >= 0
+        && request.resource.data.totalFare
+          >= request.resource.data.baseFare
+            + request.resource.data.taxes
+            + request.resource.data.serviceFee - 0.05
+        && request.resource.data.totalFare
+          <= request.resource.data.baseFare
+            + request.resource.data.taxes
+            + request.resource.data.serviceFee + 0.05
+        && request.resource.data.currency == 'Rs.'
+
+        && request.resource.data.quoteId is string
+        && request.resource.data.quoteId.size() > 0
+        && request.resource.data.quoteSource == 'demo'
+        && request.resource.data.quoteExpiresAt is timestamp
+
+        // Anti-fraud locks: customer cannot create a fake
+        // verified/paid/issued ticket.
+        && request.resource.data.providerVerified == false
+        && request.resource.data.providerName == ''
+        && request.resource.data.providerBookingReference == ''
+        && request.resource.data.pnr == ''
+        && request.resource.data.eTicketNumber == ''
+        && request.resource.data.bookingStatus
+          == 'request_submitted'
+        && request.resource.data.paymentStatus
+          == 'not_started'
+        && request.resource.data.ticketStatus
+          == 'not_issued'
+        && request.resource.data.fraudReviewStatus
+          == 'unreviewed'
+
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+
+        && request.resource.data.keys().hasOnly([
+          'bookingId',
+          'bookingVersion',
+          'serviceType',
+          'customerAuthUid',
+          'customerId',
+          'tripType',
+          'from',
+          'to',
+          'departureDate',
+          'returnDate',
+          'adultCount',
+          'childCount',
+          'infantCount',
+          'passengerCount',
+          'passengerNames',
+          'passengerTypes',
+          'contactPhone',
+          'contactEmail',
+          'cabinClass',
+          'directOnly',
+          'flexibleDates',
+          'airlineName',
+          'flightNumber',
+          'outboundDeparture',
+          'outboundArrival',
+          'returnDeparture',
+          'returnArrival',
+          'baggage',
+          'refundable',
+          'baseFare',
+          'taxes',
+          'serviceFee',
+          'totalFare',
+          'currency',
+          'quoteId',
+          'quoteSource',
+          'quoteExpiresAt',
+          'providerVerified',
+          'providerName',
+          'providerBookingReference',
+          'pnr',
+          'eTicketNumber',
+          'bookingStatus',
+          'paymentStatus',
+          'ticketStatus',
+          'fraudReviewStatus',
+          'createdAt',
+          'updatedAt'
+        ]);
+
+      // Only trusted admin-side workflow can review/change
+      // provider/payment/ticket issuance fields.
+      allow update, delete: if isAdmin();
+    }
+
+
+    // ============================================================
+    // RD BUS OPERATORS
+    // ============================================================
+    match /bus_operators/{operatorId} {
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && request.auth.uid == operatorId
+        );
+
+      // Registration creates only a pending/unapproved operator.
+      allow create: if signedIn()
+        && request.auth.uid == operatorId
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.operatorId == request.auth.uid
+        && request.resource.data.role == 'busOperator'
+        && request.resource.data.isApproved == false
+        && request.resource.data.isActive == false
+        && request.resource.data.status == 'pending'
+        && request.resource.data.companyName is string
+        && request.resource.data.companyName.size() > 0
+        && request.resource.data.ownerName is string
+        && request.resource.data.ownerName.size() > 0
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 7
+        && request.resource.data.phone.size() <= 30
+        && request.resource.data.address is string
+        && request.resource.data.email is string;
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && request.auth.uid == operatorId
+          && request.resource.data.authUid
+            == resource.data.authUid
+          && request.resource.data.operatorId
+            == resource.data.operatorId
+          && request.resource.data.role
+            == resource.data.role
+          && request.resource.data.isApproved
+            == resource.data.isApproved
+          && request.resource.data.isActive
+            == resource.data.isActive
+          && request.resource.data.status
+            == resource.data.status
+          && request.resource.data
+            .diff(resource.data)
+            .affectedKeys()
+            .hasOnly([
+              'companyName',
+              'ownerName',
+              'phone',
+              'address',
+              'registrationNumber',
+              'email',
+              'lastLoginAt',
+              'updatedAt'
+            ])
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // ============================================================
+    // RD BUS SCHEDULES
+    // ============================================================
+    match /bus_schedules/{scheduleId} {
+      // Signed-in users can search schedules. Customer app itself
+      // only shows active + fare-approved schedules.
+      allow read: if signedIn();
+
+      // New operator schedules always start with PENDING fare approval.
+      // Admin approval is required before the schedule can become active.
+      allow create: if isActiveBusOperator()
+        && request.resource.data.scheduleId == scheduleId
+        && request.resource.data.operatorId == request.auth.uid
+        && request.resource.data.operatorName
+          == busOperatorData().companyName
+        && request.resource.data.operatorPhone
+          == busOperatorData().phone
+        && request.resource.data.busStaffName is string
+        && request.resource.data.busStaffName.size() > 0
+        && request.resource.data.busStaffName.size() <= 120
+        && request.resource.data.busStaffPhone is string
+        && request.resource.data.busStaffPhone.size() >= 7
+        && request.resource.data.busStaffPhone.size() <= 30
+        && request.resource.data.from is string
+        && request.resource.data.from.size() > 0
+        && request.resource.data.to is string
+        && request.resource.data.to.size() > 0
+        && request.resource.data.routeDateKey is string
+        && request.resource.data.routeDateKey.size() > 0
+        && request.resource.data.travelDate is timestamp
+        && request.resource.data.busName is string
+        && request.resource.data.busName.size() > 0
+        && request.resource.data.busNumber is string
+        && request.resource.data.busNumber.size() > 0
+        && request.resource.data.busType is string
+        && request.resource.data.busType.size() > 0
+        && request.resource.data.seatLayout in ['2+2', '2+1', '1+1']
+        && request.resource.data.seatRows is int
+        && request.resource.data.seatRows >= 5
+        && request.resource.data.seatRows <= 14
+        && request.resource.data.seatCodes is list
+        && request.resource.data.seatCodes.size() > 0
+        && request.resource.data.departureAt is timestamp
+        && request.resource.data.arrivalAt is timestamp
+        && request.resource.data.boardingPoints is list
+        && request.resource.data.boardingPoints.size() > 0
+        && request.resource.data.dropPoints is list
+        && request.resource.data.dropPoints.size() > 0
+        && request.resource.data.farePerSeat is number
+        && request.resource.data.farePerSeat >= 0
+        && request.resource.data.pendingFarePerSeat is number
+        && request.resource.data.pendingFarePerSeat
+          == request.resource.data.farePerSeat
+        && request.resource.data.serviceFee == 0
+        && request.resource.data.commissionPercent
+          == busOperatorData().get('commissionPercent', 0)
+        && request.resource.data.currency == 'Rs.'
+        && request.resource.data.isActive == false
+        && request.resource.data.requestedActive is bool
+        && request.resource.data.fareApprovalStatus == 'pending'
+        && request.resource.data.fareEverApproved == false
+        && request.resource.data.fareChangeRequestedBy == request.auth.uid
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
+
+      // Admin may approve/reject fare and change any schedule fields.
+      allow update: if isAdmin();
+
+      // Operator may edit own schedule details, request a new fare,
+      // or toggle active state after the schedule has been approved.
+      // The already-approved fare itself and RD commission cannot be
+      // changed directly by the operator.
+      allow update: if isActiveBusOperator()
+        && resource.data.operatorId == request.auth.uid
+        && request.resource.data.operatorId == resource.data.operatorId
+        && request.resource.data.scheduleId == resource.data.scheduleId
+        && request.resource.data.operatorName == busOperatorData().companyName
+        && request.resource.data.operatorPhone == busOperatorData().phone
+        && request.resource.data.farePerSeat == resource.data.farePerSeat
+        && (
+          request.resource.data.get('serviceFee', 0) == 0
+          || request.resource.data.get('serviceFee', 0)
+            == resource.data.get('serviceFee', 0)
+        )
+        && (
+          request.resource.data.get(
+            'commissionPercent',
+            resource.data.get('commissionPercent', 0)
+          ) == resource.data.get('commissionPercent', 0)
+          || request.resource.data.get('commissionPercent', 0)
+            == busOperatorData().get('commissionPercent', 0)
+        )
+        && request.resource.data.requestedActive is bool
+        && request.resource.data.get('fareEverApproved', true)
+          == resource.data.get('fareEverApproved', true)
+        && (
+          // No fare-status change: normal schedule edit / active toggle.
+          (
+            request.resource.data.get('fareApprovalStatus', 'approved')
+              == resource.data.get('fareApprovalStatus', 'approved')
+            && request.resource.data.get('pendingFarePerSeat', -1)
+              == resource.data.get('pendingFarePerSeat', -1)
+          )
+          ||
+          // Submit or replace a pending fare request.
+          (
+            request.resource.data.fareApprovalStatus == 'pending'
+            && request.resource.data.pendingFarePerSeat is number
+            && request.resource.data.pendingFarePerSeat >= 0
+            && request.resource.data.fareChangeRequestedBy
+              == request.auth.uid
+          )
+          ||
+          // Cancel a pending/rejected request by returning to the
+          // already-approved fare. The approved fare value is unchanged.
+          (
+            request.resource.data.fareApprovalStatus == 'approved'
+            && !request.resource.data.keys().hasAny(['pendingFarePerSeat'])
+          )
+        )
+        && (
+          request.resource.data.isActive == resource.data.isActive
+          || resource.data.get('fareEverApproved', true) == true
+        );
+
+      allow delete: if isAdmin()
+        || (
+          isActiveBusOperator()
+          && resource.data.operatorId == request.auth.uid
+        );
+    }
+
+    // ============================================================
+    // RD BUS SEAT LOCKS
+    // ============================================================
+    match /bus_seat_locks/{lockId} {
+      // Customers need to see occupied seat codes.
+      allow read: if signedIn();
+
+      allow create: if isAdmin()
+        || (
+          isActiveBusOperator()
+          && request.resource.data.operatorId
+            == request.auth.uid
+          && request.resource.data.scheduleId is string
+          && request.resource.data.bookingId is string
+          && exists(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          )
+          && get(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.operatorId == request.auth.uid
+        )
+        || (
+          // Customer may reserve a selected seat only as part of
+          // the same atomic transaction that creates their booking.
+          signedIn()
+          && request.resource.data.customerAuthUid
+            == request.auth.uid
+          && request.resource.data.active == true
+          && request.resource.data.status == 'reserved'
+          && request.resource.data.scheduleId is string
+          && request.resource.data.bookingId is string
+          && request.resource.data.operatorId is string
+          && request.resource.data.seat is string
+          && existsAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          )
+          && getAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.customerAuthUid == request.auth.uid
+          && getAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.bookingId == request.resource.data.bookingId
+          && getAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.scheduleId == request.resource.data.scheduleId
+          && getAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.operatorId == request.resource.data.operatorId
+          && request.resource.data.seat in getAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.selectedSeats
+        );
+
+      allow update: if isAdmin()
+        || (
+          isActiveBusOperator()
+          && resource.data.operatorId == request.auth.uid
+          && request.resource.data.operatorId
+            == resource.data.operatorId
+        )
+        || (
+          // Customer may reuse only an INACTIVE old seat-lock
+          // while atomically creating their own booking.
+          signedIn()
+          && resource.data.get('active', false) == false
+          && request.resource.data.customerAuthUid
+            == request.auth.uid
+          && request.resource.data.active == true
+          && request.resource.data.status == 'reserved'
+          && request.resource.data.scheduleId
+            == resource.data.scheduleId
+          && request.resource.data.seat
+            == resource.data.seat
+          && request.resource.data.bookingId is string
+          && request.resource.data.operatorId is string
+          && existsAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          )
+          && getAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.customerAuthUid == request.auth.uid
+          && getAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.scheduleId == request.resource.data.scheduleId
+          && getAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.operatorId == request.resource.data.operatorId
+          && request.resource.data.seat in getAfter(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.selectedSeats
+          && request.resource.data.keys().hasOnly([
+            'lockId',
+            'operatorId',
+            'scheduleId',
+            'bookingId',
+            'customerAuthUid',
+            'seat',
+            'status',
+            'active',
+            'reservedAt'
+          ])
+        );
+
+      allow delete: if isAdmin()
+        || (
+          isActiveBusOperator()
+          && resource.data.operatorId == request.auth.uid
+        );
+    }
+
+    // ============================================================
+    // RD BUS PUBLIC TICKET VERIFICATION
+    // ============================================================
+    match /bus_ticket_public_verify/{verificationToken} {
+      // Exact-token ticket verification.
+      allow get: if signedIn();
+      allow list: if false;
+
+      allow create: if isAdmin()
+        || (
+          isActiveBusOperator()
+          && request.resource.data.operatorId
+            == request.auth.uid
+          && request.resource.data.bookingId is string
+          && exists(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          )
+          && get(
+            /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
+          ).data.operatorId == request.auth.uid
+        );
+
+      allow update, delete: if isAdmin()
+        || (
+          isActiveBusOperator()
+          && (
+            resource.data.get('operatorId', '') == request.auth.uid
+            || (
+              resource.data.bookingId is string
+              && exists(
+                /databases/$(database)/documents/bus_ticket_bookings/$(resource.data.bookingId)
+              )
+              && get(
+                /databases/$(database)/documents/bus_ticket_bookings/$(resource.data.bookingId)
+              ).data.operatorId == request.auth.uid
+            )
+          )
+          && request.resource.data.get('operatorId', request.auth.uid)
+            == request.auth.uid
+        );
+    }
+
+    // ============================================================
+    // RD BUS OPERATOR MONTHLY FEE PAYMENTS
+    // ============================================================
+    match /bus_operator_monthly_fee_payments/{paymentId} {
+      function paymentOperatorExists() {
+        return request.resource.data.operatorId is string
+          && exists(
+            /databases/$(database)/documents/bus_operators/$(request.resource.data.operatorId)
+          );
+      }
+
+      function paymentOperatorData() {
+        return get(
+          /databases/$(database)/documents/bus_operators/$(request.resource.data.operatorId)
+        ).data;
+      }
+
+      function immutablePaymentCore() {
+        return request.resource.data.paymentId == resource.data.paymentId
+          && request.resource.data.operatorId == resource.data.operatorId
+          && request.resource.data.operatorName == resource.data.operatorName
+          && request.resource.data.operatorPhone == resource.data.operatorPhone
+          && request.resource.data.monthKey == resource.data.monthKey
+          && request.resource.data.monthLabel == resource.data.monthLabel
+          && request.resource.data.year == resource.data.year
+          && request.resource.data.month == resource.data.month
+          && request.resource.data.monthlyFeeAmount
+            == resource.data.monthlyFeeAmount
+          && request.resource.data.commissionPercentSnapshot
+            == resource.data.commissionPercentSnapshot
+          && request.resource.data.createdAt == resource.data.createdAt;
+      }
+
+      allow read: if isAdmin()
+        || (
+          isActiveBusOperator()
+          && resource.data.operatorId == request.auth.uid
+        );
+
+      // Operator submits only bank/wallet/online proof. Operator cannot mark PAID.
+      allow create: if isActiveBusOperator()
+        && request.resource.data.keys().hasOnly([
+          'paymentId',
+          'receiptNumber',
+          'operatorId',
+          'operatorName',
+          'operatorPhone',
+          'monthKey',
+          'monthLabel',
+          'year',
+          'month',
+          'monthlyFeeAmount',
+          'commissionPercentSnapshot',
+          'paymentStatus',
+          'paymentMethod',
+          'paymentReference',
+          'submittedByOperatorUid',
+          'recordedByAdminUid',
+          'submittedAt',
+          'createdAt',
+          'updatedAt'
+        ])
+        && request.resource.data.paymentId == paymentId
+        && request.resource.data.operatorId == request.auth.uid
+        && request.resource.data.operatorName
+          == busOperatorData().companyName
+        && request.resource.data.operatorPhone
+          == busOperatorData().phone
+        && request.resource.data.monthKey is string
+        && request.resource.data.monthKey.size() == 6
+        && request.resource.data.monthLabel is string
+        && request.resource.data.year is int
+        && request.resource.data.month is int
+        && request.resource.data.month >= 1
+        && request.resource.data.month <= 12
+        && request.resource.data.monthlyFeeAmount is number
+        && request.resource.data.monthlyFeeAmount
+          == busOperatorData().get('monthlyFee', 0)
+        && request.resource.data.monthlyFeeAmount > 0
+        && request.resource.data.commissionPercentSnapshot
+          == busOperatorData().get('commissionPercent', 0)
+        && request.resource.data.paymentStatus == 'submitted'
+        && request.resource.data.paymentMethod
+          in ['Bank', 'eSewa', 'Khalti', 'connectIPS', 'Other']
+        && request.resource.data.paymentReference is string
+        && request.resource.data.paymentReference.size() > 0
+        && request.resource.data.paymentReference.size() <= 200
+        && request.resource.data.submittedByOperatorUid == request.auth.uid
+        && request.resource.data.recordedByAdminUid == ''
+        && request.resource.data.receiptNumber == '';
+
+      // A rejected proof may be corrected and resubmitted by the same operator.
+      allow update: if isActiveBusOperator()
+        && resource.data.operatorId == request.auth.uid
+        && resource.data.paymentStatus == 'rejected'
+        && immutablePaymentCore()
+        && request.resource.data.paymentStatus == 'submitted'
+        && request.resource.data.paymentMethod
+          in ['Bank', 'eSewa', 'Khalti', 'connectIPS', 'Other']
+        && request.resource.data.paymentReference is string
+        && request.resource.data.paymentReference.size() > 0
+        && request.resource.data.paymentReference.size() <= 200
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'paymentStatus',
+          'paymentMethod',
+          'paymentReference',
+          'submittedAt',
+          'updatedAt'
+        ]);
+
+      // Admin may record cash directly as PAID when no record exists.
+      allow create: if isAdmin()
+        && paymentOperatorExists()
+        && request.resource.data.paymentId == paymentId
+        && request.resource.data.operatorName
+          == paymentOperatorData().companyName
+        && request.resource.data.operatorPhone
+          == paymentOperatorData().phone
+        && request.resource.data.monthKey is string
+        && request.resource.data.monthKey.size() == 6
+        && request.resource.data.year is int
+        && request.resource.data.month is int
+        && request.resource.data.month >= 1
+        && request.resource.data.month <= 12
+        && request.resource.data.monthlyFeeAmount is number
+        && request.resource.data.monthlyFeeAmount
+          == paymentOperatorData().get('monthlyFee', 0)
+        && request.resource.data.paymentStatus == 'paid'
+        && request.resource.data.paymentMethod == 'Cash'
+        && request.resource.data.paymentReference == ''
+        && request.resource.data.receiptNumber is string
+        && request.resource.data.receiptNumber.size() > 0
+        && request.resource.data.recordedByAdminUid == request.auth.uid;
+
+      // Admin verifies submitted proof, rejects it, or records cash after rejection.
+      allow update: if isAdmin()
+        && immutablePaymentCore()
+        && (
+          (
+            resource.data.paymentStatus == 'submitted'
+            && request.resource.data.paymentStatus == 'paid'
+            && request.resource.data.receiptNumber is string
+            && request.resource.data.receiptNumber.size() > 0
+            && request.resource.data.recordedByAdminUid == request.auth.uid
+            && request.resource.data.verifiedByAdminUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'paymentStatus',
+              'receiptNumber',
+              'recordedByAdminUid',
+              'verifiedByAdminUid',
+              'verifiedAt',
+              'paidAt',
+              'updatedAt'
+            ])
+          )
+          || (
+            resource.data.paymentStatus == 'submitted'
+            && request.resource.data.paymentStatus == 'rejected'
+            && request.resource.data.rejectionReason is string
+            && request.resource.data.rejectionReason.size() > 0
+            && request.resource.data.rejectedByAdminUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'paymentStatus',
+              'rejectionReason',
+              'rejectedByAdminUid',
+              'rejectedAt',
+              'updatedAt'
+            ])
+          )
+          || (
+            resource.data.paymentStatus == 'rejected'
+            && request.resource.data.paymentStatus == 'paid'
+            && request.resource.data.paymentMethod == 'Cash'
+            && request.resource.data.paymentReference == ''
+            && request.resource.data.receiptNumber is string
+            && request.resource.data.receiptNumber.size() > 0
+            && request.resource.data.recordedByAdminUid == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'paymentStatus',
+              'paymentMethod',
+              'paymentReference',
+              'receiptNumber',
+              'recordedByAdminUid',
+              'paidAt',
+              'updatedAt'
+            ])
+          )
+        );
+
+      // Financial ledger records are never deleted from the app.
+      allow delete: if false;
+    }
+
+    // ============================================================
+    // RD BUS TICKET BOOKINGS
+    // ============================================================
+    match /bus_ticket_bookings/{bookingId} {
+      function busTicketOwner() {
+        return signedIn()
+          && resource.data.customerAuthUid == request.auth.uid;
+      }
+
+      function busOperatorOwnBooking() {
+        return isActiveBusOperator()
+          && resource.data.operatorId == request.auth.uid;
+      }
+
+      function bookingScheduleExists() {
+        return exists(
+          /databases/$(database)/documents/bus_schedules/$(request.resource.data.scheduleId)
+        );
+      }
+
+      function bookingScheduleData() {
+        return get(
+          /databases/$(database)/documents/bus_schedules/$(request.resource.data.scheduleId)
+        ).data;
+      }
+
+      allow read: if isAdmin()
+        || busTicketOwner()
+        || busOperatorOwnBooking();
+
+      allow create: if signedIn()
+        && bookingScheduleExists()
+        && bookingScheduleData().isActive == true
+        && bookingScheduleData().get('fareApprovalStatus', 'approved')
+          == 'approved'
+
+        && request.resource.data.bookingId == bookingId
+        && request.resource.data.bookingCode is string
+        && request.resource.data.bookingCode.size() > 0
+        && request.resource.data.bookingVersion == 2
+        && request.resource.data.serviceType == 'bus'
+        && request.resource.data.customerAuthUid == request.auth.uid
+        && request.resource.data.customerId is string
+
+        && request.resource.data.operatorId
+          == bookingScheduleData().operatorId
+        && request.resource.data.operatorName
+          == bookingScheduleData().operatorName
+        && request.resource.data.operatorPhone
+          == bookingScheduleData().operatorPhone
+        && request.resource.data.busStaffName
+          == (
+            bookingScheduleData().get('busStaffName', '').size() > 0
+              ? bookingScheduleData().get('busStaffName', '')
+              : bookingScheduleData().operatorName
+          )
+        && request.resource.data.busStaffPhone
+          == (
+            bookingScheduleData().get('busStaffPhone', '').size() > 0
+              ? bookingScheduleData().get('busStaffPhone', '')
+              : bookingScheduleData().operatorPhone
+          )
+        && request.resource.data.from
+          == bookingScheduleData().from
+        && request.resource.data.to
+          == bookingScheduleData().to
+        && request.resource.data.busName
+          == bookingScheduleData().busName
+        && request.resource.data.busNumber
+          == bookingScheduleData().busNumber
+        && request.resource.data.busType
+          == bookingScheduleData().busType
+        && request.resource.data.departureAt
+          == bookingScheduleData().departureAt
+        && request.resource.data.arrivalAt
+          == bookingScheduleData().arrivalAt
+
+        && request.resource.data.travelDate
+          == bookingScheduleData().travelDate
+        && request.resource.data.passengerCount is int
+        && request.resource.data.passengerCount >= 1
+        && request.resource.data.passengerCount <= 6
+        && request.resource.data.passengerNames is list
+        && request.resource.data.passengerNames.size()
+          == request.resource.data.passengerCount
+        && request.resource.data.passengerPhones is list
+        && request.resource.data.passengerPhones.size()
+          == request.resource.data.passengerCount
+        && request.resource.data.contactPhone is string
+        && request.resource.data.contactPhone.size() >= 7
+        && request.resource.data.contactPhone.size() <= 30
+        && request.resource.data.contactEmail is string
+        && request.resource.data.contactEmail.size() <= 180
+
+        && request.resource.data.boardingPoint is string
+        && request.resource.data.boardingPoint
+          in bookingScheduleData().boardingPoints
+        && request.resource.data.dropPoint is string
+        && request.resource.data.dropPoint
+          in bookingScheduleData().dropPoints
+
+        && request.resource.data.selectedSeats is list
+        && request.resource.data.selectedSeats.size()
+          == request.resource.data.passengerCount
+        && request.resource.data.selectedSeats.toSet().size()
+          == request.resource.data.passengerCount
+        && request.resource.data.selectedSeats.hasOnly(
+          bookingScheduleData().seatCodes
+        )
+
+        && request.resource.data.farePerSeat
+          == bookingScheduleData().farePerSeat
+        && request.resource.data.serviceFee == 0
+        && request.resource.data.baseFare is number
+        && request.resource.data.baseFare
+          >= bookingScheduleData().farePerSeat
+            * request.resource.data.passengerCount - 0.05
+        && request.resource.data.baseFare
+          <= bookingScheduleData().farePerSeat
+            * request.resource.data.passengerCount + 0.05
+        && request.resource.data.commissionPercent
+          == bookingScheduleData().get('commissionPercent', 0)
+        && request.resource.data.rdCommissionAmount is number
+        && request.resource.data.rdCommissionAmount
+          >= request.resource.data.baseFare
+            * request.resource.data.commissionPercent / 100 - 0.05
+        && request.resource.data.rdCommissionAmount
+          <= request.resource.data.baseFare
+            * request.resource.data.commissionPercent / 100 + 0.05
+        && request.resource.data.operatorNetAmount is number
+        && request.resource.data.operatorNetAmount
+          >= request.resource.data.baseFare
+            - request.resource.data.rdCommissionAmount - 0.05
+        && request.resource.data.operatorNetAmount
+          <= request.resource.data.baseFare
+            - request.resource.data.rdCommissionAmount + 0.05
+        && request.resource.data.totalFare is number
+        && request.resource.data.totalFare
+          >= request.resource.data.baseFare - 0.05
+        && request.resource.data.totalFare
+          <= request.resource.data.baseFare + 0.05
+        && request.resource.data.currency == 'Rs.'
+        && request.resource.data.scheduleSource == 'operator'
+
+        && request.resource.data.paymentOption
+          in ['online', 'pay_on_bus']
+        && (
+          (
+            request.resource.data.paymentOption == 'pay_on_bus'
+            && request.resource.data.paymentMethod == 'Pay on Bus'
+            && request.resource.data.paymentStatus
+              == 'pay_on_bus_pending'
+          )
+          || (
+            request.resource.data.paymentOption == 'online'
+            && request.resource.data.paymentMethod
+              in ['eSewa', 'Khalti', 'connectIPS', 'Bank', 'Card']
+            && request.resource.data.paymentStatus
+              == 'online_pending'
+          )
+        )
+        && request.resource.data.paymentReference == ''
+
+        && request.resource.data.operatorVerified == false
+        && request.resource.data.seatLockStatus == 'reserved'
+        && request.resource.data.bookingStatus
+          == 'request_submitted'
+        && request.resource.data.ticketStatus == 'not_issued'
+        && request.resource.data.qrVerificationToken == ''
+
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+
+        && request.resource.data.keys().hasOnly([
+          'bookingId',
+          'bookingCode',
+          'bookingVersion',
+          'serviceType',
+          'customerAuthUid',
+          'customerId',
+          'from',
+          'to',
+          'travelDate',
+          'passengerCount',
+          'passengerNames',
+          'passengerPhones',
+          'contactPhone',
+          'contactEmail',
+          'scheduleId',
+          'operatorId',
+          'operatorName',
+          'operatorPhone',
+          'busStaffName',
+          'busStaffPhone',
+          'busName',
+          'busNumber',
+          'busType',
+          'departureAt',
+          'arrivalAt',
+          'boardingPoint',
+          'dropPoint',
+          'selectedSeats',
+          'farePerSeat',
+          'baseFare',
+          'serviceFee',
+          'commissionPercent',
+          'rdCommissionAmount',
+          'operatorNetAmount',
+          'totalFare',
+          'currency',
+          'scheduleSource',
+          'operatorVerified',
+          'seatLockStatus',
+          'paymentOption',
+          'paymentMethod',
+          'paymentReference',
+          'paymentStatus',
+          'bookingStatus',
+          'ticketStatus',
+          'qrVerificationToken',
+          'createdAt',
+          'updatedAt'
+        ]);
+
+      // Admin controls every booking.
+      allow update, delete: if isAdmin();
+
+      // Approved Bus Operator may update only status/verification
+      // fields on its own bookings. Customer/fare/operator identity
+      // fields remain immutable.
+      allow update: if busOperatorOwnBooking()
+        && request.resource.data
+          .diff(resource.data)
+          .affectedKeys()
+          .hasOnly([
+            'operatorVerified',
+            'operatorVerifiedAt',
+            'seatLockStatus',
+            'paymentStatus',
+            'paidAt',
+            'bookingStatus',
+            'ticketStatus',
+            'qrVerificationToken',
+            'issuedAt',
+            'cancelReason',
+            'cancelledAt',
+            'boardingStatus',
+            'boardingConfirmedAt',
+            'boardingConfirmedBy',
+            'boardingConfirmationMethod',
+            'updatedAt'
+          ])
+        && (
+          request.resource.data.paymentStatus
+            == resource.data.paymentStatus
+          || (
+            resource.data.paymentOption == 'pay_on_bus'
+            && request.resource.data.paymentStatus == 'paid'
+          )
+          || (
+            resource.data.paymentStatus == 'paid'
+            && request.resource.data.paymentStatus
+              == 'refund_pending'
+          )
+        );
+
+      allow delete: if false;
     }
 
     match /{document=**} {
