@@ -8,6 +8,7 @@ import 'data/wishlist_data.dart';
 import 'firebase_options.dart';
 import 'home_page.dart';
 import 'services/notification_service.dart';
+import 'services/bus_ticket_in_app_notice_service.dart';
 import 'services/ride_driver_foreground_alert_service.dart';
 import 'services/platform_capabilities.dart';
 import 'services/ride_incoming_share_service.dart';
@@ -52,6 +53,8 @@ class RDOnlineShop extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      scaffoldMessengerKey:
+          NotificationService.messengerKey,
       debugShowCheckedModeBanner: false,
       title: 'RD Online Shop',
       theme: ThemeData(
@@ -99,6 +102,11 @@ class _StartupGateState extends State<StartupGate> {
     }
 
     debugPrint('RD STARTUP: Firebase Auth ready.');
+
+    await BusTicketInAppNoticeService.instance.initialize();
+    debugPrint(
+      'RD STARTUP: Bus Ticket in-app notice ready.',
+    );
 
     await RideDriverForegroundAlertService.instance.initialize();
     debugPrint('RD STARTUP: Ride Driver foreground alert ready.');

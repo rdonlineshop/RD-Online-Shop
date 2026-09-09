@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
@@ -145,9 +146,10 @@ class _BusTicketBookingPageState
 
     const Map<String, String> aliases =
         <String, String>{
-      'काठमाडौं': 'kathmandu',
-      'काठमाण्डौं': 'kathmandu',
-      'काठमाण्डौ': 'kathmandu',
+      'काठमाडौं': 'ktm',
+      'काठमाण्डौं': 'ktm',
+      'काठमाण्डौ': 'ktm',
+      'kathmandu': 'ktm',
       'पोखरा': 'pokhara',
       'चितवन': 'chitwan',
       'नारायणगढ': 'narayangadh',
@@ -191,11 +193,16 @@ class _BusTicketBookingPageState
     final String search =
         _normalizeBusSearch(query);
 
+    final DateTime now = DateTime.now();
+
     final Iterable<_DemoBusSchedule> source =
         _allBuses.where(
       (_DemoBusSchedule bus) =>
-          _busTypeFilter == 'Any' ||
-          bus.busType == _busTypeFilter,
+          bus.isActive &&
+          bus.isFareApproved &&
+          bus.departureAt.isAfter(now) &&
+          (_busTypeFilter == 'Any' ||
+              bus.busType == _busTypeFilter),
     );
 
     if (search.isEmpty) {
@@ -230,6 +237,66 @@ class _BusTicketBookingPageState
     ).toList();
   }
 
+  Future<Set<String>> _onlineOperatorIds(
+    Iterable<_DemoBusSchedule> buses,
+  ) async {
+    final Set<String> operatorIds = buses
+        .map((_DemoBusSchedule bus) => bus.operatorId)
+        .where((String id) => id.isNotEmpty)
+        .toSet();
+
+    if (operatorIds.isEmpty) {
+      return <String>{};
+    }
+
+    final List<
+            DocumentSnapshot<Map<String, dynamic>>>
+        presenceDocs = await Future.wait(
+      operatorIds.map(
+        (String operatorId) =>
+            FirebaseFirestore.instance
+                .collection('bus_operator_presence')
+                .doc(operatorId)
+                .get(),
+      ),
+    );
+
+    return presenceDocs
+        .where(
+          (
+            DocumentSnapshot<Map<String, dynamic>>
+                document,
+          ) =>
+              document.exists &&
+              document.data()?['isOnline'] == true,
+        )
+        .map(
+          (
+            DocumentSnapshot<Map<String, dynamic>>
+                document,
+          ) =>
+              document.id,
+        )
+        .toSet();
+  }
+
+  Future<bool> _operatorIsOnline(
+    String operatorId,
+  ) async {
+    if (operatorId.isEmpty) {
+      return false;
+    }
+
+    final DocumentSnapshot<Map<String, dynamic>>
+        document = await FirebaseFirestore.instance
+            .collection('bus_operator_presence')
+            .doc(operatorId)
+            .get();
+
+    return document.exists &&
+        document.data()?['isOnline'] == true;
+  }
+
   Future<void> _loadAllBuses() async {
     try {
       final QuerySnapshot<Map<String, dynamic>> snapshot =
@@ -237,14 +304,9 @@ class _BusTicketBookingPageState
               .collection('bus_schedules')
               .get();
 
-      final DateTime today = DateTime.now();
-      final DateTime todayStart = DateTime(
-        today.year,
-        today.month,
-        today.day,
-      );
+      final DateTime now = DateTime.now();
 
-      final List<_DemoBusSchedule> buses =
+      final List<_DemoBusSchedule> candidates =
           snapshot.docs
               .map(_DemoBusSchedule.fromDoc)
               .where(
@@ -253,7 +315,19 @@ class _BusTicketBookingPageState
                     bus.isFareApproved &&
                     bus.operatorId.isNotEmpty &&
                     bus.seatCodes.isNotEmpty &&
-                    !bus.arrivalAt.isBefore(todayStart),
+                    bus.departureAt.isAfter(now),
+              )
+              .toList();
+
+      final Set<String> onlineOperatorIds =
+          await _onlineOperatorIds(candidates);
+
+      final List<_DemoBusSchedule> buses =
+          candidates
+              .where(
+                (_DemoBusSchedule bus) =>
+                    onlineOperatorIds
+                        .contains(bus.operatorId),
               )
               .toList()
             ..sort(
@@ -289,6 +363,58 @@ class _BusTicketBookingPageState
         });
       }
     }
+  }
+
+  List<String> _voiceRouteCities(String value) {
+    final String normalized = _normalizeBusSearch(value);
+
+    const Set<String> knownCities = <String>{
+      'ktm',
+      'pokhara',
+      'chitwan',
+      'narayangadh',
+      'butwal',
+      'bhairahawa',
+      'biratnagar',
+      'dharan',
+      'janakpur',
+      'nepalgunj',
+      'dhangadhi',
+      'gorkha',
+      'damauli',
+      'tanahun',
+      'hetauda',
+    };
+
+    final List<String> cities = <String>[];
+
+    for (final String token
+        in normalized.split(RegExp(r'\s+'))) {
+      if (knownCities.contains(token) &&
+          !cities.contains(token)) {
+        cities.add(token);
+      }
+    }
+
+    return cities;
+  }
+
+  Future<void> _runVoiceSearch(String words) async {
+    final List<String> cities =
+        _voiceRouteCities(words);
+
+    // If a route was spoken, copy it into the exact route fields and
+    // run the same Firestore search as the Search Buses button.
+    if (cities.length >= 2) {
+      _fromController.text = cities[0];
+      _toController.text = cities[1];
+      await _searchBuses();
+      return;
+    }
+
+    // For a bus/operator/number voice query, refresh first so an
+    // operator going OFFLINE or a departed bus disappears immediately.
+    await _loadAllBuses();
   }
 
   Future<void> _toggleVoiceSearch() async {
@@ -364,6 +490,10 @@ class _BusTicketBookingPageState
         );
 
         _applyQuickSearch(words);
+
+        if (result.finalResult) {
+          unawaited(_runVoiceSearch(words));
+        }
       },
       listenOptions: stt.SpeechListenOptions(
         partialResults: true,
@@ -490,7 +620,9 @@ class _BusTicketBookingPageState
               )
               .get();
 
-      final List<_DemoBusSchedule> buses =
+      final DateTime now = DateTime.now();
+
+      final List<_DemoBusSchedule> candidates =
           snapshot.docs
               .map(_DemoBusSchedule.fromDoc)
               .where(
@@ -499,9 +631,22 @@ class _BusTicketBookingPageState
                     bus.isFareApproved &&
                     bus.operatorId.isNotEmpty &&
                     bus.seatCodes.isNotEmpty &&
+                    bus.departureAt.isAfter(now) &&
                     (_busTypeFilter == 'Any' ||
                         bus.busType ==
                             _busTypeFilter),
+              )
+              .toList();
+
+      final Set<String> onlineOperatorIds =
+          await _onlineOperatorIds(candidates);
+
+      final List<_DemoBusSchedule> buses =
+          candidates
+              .where(
+                (_DemoBusSchedule bus) =>
+                    onlineOperatorIds
+                        .contains(bus.operatorId),
               )
               .toList()
             ..sort(
@@ -523,7 +668,7 @@ class _BusTicketBookingPageState
 
       if (buses.isEmpty) {
         _message(
-          'No active bus found for this route/date.',
+          'No ONLINE active bus found for this route/date.',
         );
       }
     } on FirebaseException catch (error) {
@@ -706,11 +851,28 @@ class _BusTicketBookingPageState
       return;
     }
 
+    if (!bus.departureAt.isAfter(DateTime.now())) {
+      _message(
+        'This bus has already departed. Please choose another bus.',
+      );
+      return;
+    }
+
     setState(() {
       _submitting = true;
     });
 
     try {
+      final bool operatorOnline =
+          await _operatorIsOnline(bus.operatorId);
+
+      if (!operatorOnline) {
+        _message(
+          'This Bus Operator is OFFLINE now. Please choose an ONLINE bus.',
+        );
+        return;
+      }
+
       String customerId = '';
 
       try {

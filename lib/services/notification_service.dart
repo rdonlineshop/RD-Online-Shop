@@ -4,12 +4,17 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:firebase_messaging/firebase_messaging.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'platform_capabilities.dart';
 
 class NotificationService {
   NotificationService._();
+
+  static final GlobalKey<ScaffoldMessengerState>
+      messengerKey =
+      GlobalKey<ScaffoldMessengerState>();
 
   static final FirebaseMessaging _messaging =
       FirebaseMessaging.instance;
@@ -131,16 +136,69 @@ class NotificationService {
           FirebaseMessaging.onMessage.listen(
         (RemoteMessage message) {
           final String title =
-              message.notification?.title ?? '';
+              message.notification?.title?.trim() ?? '';
 
           final String body =
-              message.notification?.body ?? '';
+              message.notification?.body?.trim() ?? '';
 
           debugPrint(
             'FCM foreground message: '
             '${title.isEmpty ? 'No title' : title}'
             '${body.isEmpty ? '' : ' - $body'}',
           );
+
+          if (title.isEmpty && body.isEmpty) {
+            return;
+          }
+
+          final ScaffoldMessengerState? messenger =
+              messengerKey.currentState;
+
+          if (messenger == null) {
+            return;
+          }
+
+          messenger
+            ..hideCurrentSnackBar()
+            ..showSnackBar(
+              SnackBar(
+                duration: const Duration(seconds: 7),
+                behavior: SnackBarBehavior.floating,
+                content: Row(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: <Widget>[
+                    const Icon(
+                      Icons.notifications_active_rounded,
+                      color: Colors.white,
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                        children: <Widget>[
+                          if (title.isNotEmpty)
+                            Text(
+                              title,
+                              style: const TextStyle(
+                                fontWeight:
+                                    FontWeight.w900,
+                              ),
+                            ),
+                          if (title.isNotEmpty &&
+                              body.isNotEmpty)
+                            const SizedBox(height: 3),
+                          if (body.isNotEmpty)
+                            Text(body),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            );
         },
         onError: (Object error) {
           debugPrint(

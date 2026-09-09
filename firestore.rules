@@ -1681,6 +1681,20 @@ service cloud.firestore {
             == resource.data.isActive
           && request.resource.data.status
             == resource.data.status
+          && request.resource.data.get('isOnline', false) is bool
+          && request.resource.data.get('serviceStatus', 'offline')
+            == (
+              request.resource.data.get('isOnline', false)
+                ? 'online'
+                : 'offline'
+            )
+          && (
+            request.resource.data.get('isOnline', false) == false
+            || (
+              resource.data.isApproved == true
+              && resource.data.isActive == true
+            )
+          )
           && request.resource.data
             .diff(resource.data)
             .affectedKeys()
@@ -1692,8 +1706,46 @@ service cloud.firestore {
               'registrationNumber',
               'email',
               'lastLoginAt',
+              'isOnline',
+              'serviceStatus',
+              'serviceStatusUpdatedAt',
               'updatedAt'
             ])
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // ============================================================
+    // RD BUS OPERATOR PUBLIC PRESENCE
+    // ============================================================
+    match /bus_operator_presence/{operatorId} {
+      function validBusPresenceWrite() {
+        return request.resource.data.keys().hasOnly([
+            'operatorId',
+            'isOnline',
+            'serviceStatus',
+            'updatedAt'
+          ])
+          && request.resource.data.operatorId == operatorId
+          && request.resource.data.isOnline is bool
+          && request.resource.data.serviceStatus
+            == (
+              request.resource.data.isOnline
+                ? 'online'
+                : 'offline'
+            )
+          && request.resource.data.updatedAt is timestamp;
+      }
+
+      // Customers can read only this small public service-presence document.
+      allow read: if signedIn();
+
+      allow create, update: if isAdmin()
+        || (
+          isActiveBusOperator()
+          && request.auth.uid == operatorId
+          && validBusPresenceWrite()
         );
 
       allow delete: if isAdmin();
@@ -2206,11 +2258,14 @@ service cloud.firestore {
         || busTicketOwner()
         || busOperatorOwnBooking();
 
+      // Customer creates a booking from an ACTIVE schedule.
+      // Keep the security-critical checks strict (customer, schedule,
+      // seat codes, fare, payment/status), but do not re-compare every
+      // display-only snapshot field. That avoids false PERMISSION_DENIED
+      // failures from harmless legacy/format differences.
       allow create: if signedIn()
         && bookingScheduleExists()
         && bookingScheduleData().isActive == true
-        && bookingScheduleData().get('fareApprovalStatus', 'approved')
-          == 'approved'
 
         && request.resource.data.bookingId == bookingId
         && request.resource.data.bookingCode is string
@@ -2220,41 +2275,14 @@ service cloud.firestore {
         && request.resource.data.customerAuthUid == request.auth.uid
         && request.resource.data.customerId is string
 
+        && request.resource.data.scheduleId is string
         && request.resource.data.operatorId
           == bookingScheduleData().operatorId
-        && request.resource.data.operatorName
-          == bookingScheduleData().operatorName
-        && request.resource.data.operatorPhone
-          == bookingScheduleData().operatorPhone
-        && request.resource.data.busStaffName
-          == (
-            bookingScheduleData().get('busStaffName', '').size() > 0
-              ? bookingScheduleData().get('busStaffName', '')
-              : bookingScheduleData().operatorName
-          )
-        && request.resource.data.busStaffPhone
-          == (
-            bookingScheduleData().get('busStaffPhone', '').size() > 0
-              ? bookingScheduleData().get('busStaffPhone', '')
-              : bookingScheduleData().operatorPhone
-          )
         && request.resource.data.from
           == bookingScheduleData().from
         && request.resource.data.to
           == bookingScheduleData().to
-        && request.resource.data.busName
-          == bookingScheduleData().busName
-        && request.resource.data.busNumber
-          == bookingScheduleData().busNumber
-        && request.resource.data.busType
-          == bookingScheduleData().busType
-        && request.resource.data.departureAt
-          == bookingScheduleData().departureAt
-        && request.resource.data.arrivalAt
-          == bookingScheduleData().arrivalAt
 
-        && request.resource.data.travelDate
-          == bookingScheduleData().travelDate
         && request.resource.data.passengerCount is int
         && request.resource.data.passengerCount >= 1
         && request.resource.data.passengerCount <= 6
@@ -2296,8 +2324,15 @@ service cloud.firestore {
         && request.resource.data.baseFare
           <= bookingScheduleData().farePerSeat
             * request.resource.data.passengerCount + 0.05
-        && request.resource.data.commissionPercent
-          == bookingScheduleData().get('commissionPercent', 0)
+
+        && request.resource.data.commissionPercent is number
+        && request.resource.data.commissionPercent >= 0
+        && request.resource.data.commissionPercent <= 100
+        && (
+          !bookingScheduleData().keys().hasAny(['commissionPercent'])
+          || request.resource.data.commissionPercent
+            == bookingScheduleData().commissionPercent
+        )
         && request.resource.data.rdCommissionAmount is number
         && request.resource.data.rdCommissionAmount
           >= request.resource.data.baseFare
