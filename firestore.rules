@@ -1630,11 +1630,183 @@ service cloud.firestore {
           'updatedAt'
         ]);
 
+
+      // Flight booking v3: richer passenger/preferences/payment foundation.
+      // Keep this rule intentionally compact so Firestore can compile it
+      // safely. Security-critical fields remain locked on customer create;
+      // only Admin can later verify provider/payment or issue a real ticket.
+      allow create: if signedIn()
+        && request.resource.data.bookingId == bookingId
+        && request.resource.data.bookingVersion == 3
+        && request.resource.data.serviceType == 'flight'
+        && request.resource.data.customerAuthUid == request.auth.uid
+        && request.resource.data.customerId is string
+
+        && request.resource.data.travelScope
+          in ['domestic', 'international']
+        && request.resource.data.tripType
+          in ['one_way', 'round_trip']
+        && request.resource.data.from is string
+        && request.resource.data.from.size() > 0
+        && request.resource.data.to is string
+        && request.resource.data.to.size() > 0
+        && request.resource.data.from != request.resource.data.to
+        && request.resource.data.fromCode is string
+        && request.resource.data.fromCode.size() == 3
+        && request.resource.data.toCode is string
+        && request.resource.data.toCode.size() == 3
+        && request.resource.data.departureDate is timestamp
+
+        && request.resource.data.adultCount is int
+        && request.resource.data.adultCount >= 1
+        && request.resource.data.childCount is int
+        && request.resource.data.childCount >= 0
+        && request.resource.data.infantCount is int
+        && request.resource.data.infantCount >= 0
+        && request.resource.data.infantCount
+          <= request.resource.data.adultCount
+        && request.resource.data.passengerCount is int
+        && request.resource.data.passengerCount
+          == request.resource.data.adultCount
+            + request.resource.data.childCount
+            + request.resource.data.infantCount
+        && request.resource.data.passengerCount >= 1
+        && request.resource.data.passengerCount <= 9
+        && request.resource.data.passengerNames is list
+        && request.resource.data.passengerNames.size()
+          == request.resource.data.passengerCount
+        && request.resource.data.passengerTypes is list
+        && request.resource.data.passengerTypes.size()
+          == request.resource.data.passengerCount
+        && request.resource.data.passengerDob is list
+        && request.resource.data.passengerDob.size()
+          == request.resource.data.passengerCount
+
+        && request.resource.data.contactPhone is string
+        && request.resource.data.contactPhone.size() >= 7
+        && request.resource.data.contactEmail is string
+        && request.resource.data.cabinClass
+          in ['Economy', 'Premium Economy', 'Business', 'First Class']
+
+        && request.resource.data.airlineName is string
+        && request.resource.data.airlineName.size() > 0
+        && request.resource.data.flightNumber is string
+        && request.resource.data.flightNumber.size() > 0
+        && request.resource.data.outboundDeparture is timestamp
+        && request.resource.data.outboundArrival is timestamp
+
+        && request.resource.data.baseFare is number
+        && request.resource.data.baseFare >= 0
+        && request.resource.data.taxes is number
+        && request.resource.data.taxes >= 0
+        && request.resource.data.serviceFee is number
+        && request.resource.data.serviceFee >= 0
+        && request.resource.data.totalFare is number
+        && request.resource.data.totalFare >= 0
+        && request.resource.data.currency == 'Rs.'
+
+        && request.resource.data.paymentOption
+          in ['online', 'pay_at_office']
+        && request.resource.data.paymentMethod is string
+        && request.resource.data.paymentReference == ''
+        && (
+          request.resource.data.paymentStatus == 'online_pending'
+          || request.resource.data.paymentStatus == 'pay_at_office_pending'
+        )
+
+        && request.resource.data.quoteId is string
+        && request.resource.data.quoteId.size() > 0
+        && request.resource.data.quoteSource == 'demo'
+        && request.resource.data.quoteExpiresAt is timestamp
+
+        // Anti-fraud locks: customer cannot self-verify or self-issue.
+        && request.resource.data.providerVerified == false
+        && request.resource.data.providerName == ''
+        && request.resource.data.providerBookingReference == ''
+        && request.resource.data.pnr == ''
+        && request.resource.data.eTicketNumber == ''
+        && request.resource.data.qrVerificationToken == ''
+        && request.resource.data.bookingStatus == 'request_submitted'
+        && request.resource.data.ticketStatus == 'not_issued'
+        && request.resource.data.fraudReviewStatus == 'unreviewed'
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
+
       // Only trusted admin-side workflow can review/change
       // provider/payment/ticket issuance fields.
       allow update, delete: if isAdmin();
     }
 
+
+
+    // ============================================================
+    // RD FLIGHT CANCELLATION / REFUND REQUESTS
+    // ============================================================
+    match /flight_cancellation_requests/{requestId} {
+      function cancellationOwner() {
+        return signedIn()
+          && resource.data.customerAuthUid == request.auth.uid;
+      }
+
+      function sourceFlightBookingExists() {
+        return request.resource.data.bookingId is string
+          && exists(
+            /databases/$(database)/documents/ticket_bookings/$(request.resource.data.bookingId)
+          );
+      }
+
+      function sourceFlightBooking() {
+        return get(
+          /databases/$(database)/documents/ticket_bookings/$(request.resource.data.bookingId)
+        ).data;
+      }
+
+      allow read: if isAdmin() || cancellationOwner();
+
+      allow create: if signedIn()
+        && request.resource.data.requestId == requestId
+        && request.resource.data.customerAuthUid == request.auth.uid
+        && sourceFlightBookingExists()
+        && sourceFlightBooking().serviceType == 'flight'
+        && sourceFlightBooking().customerAuthUid == request.auth.uid
+        && request.resource.data.bookingId
+          == sourceFlightBooking().bookingId
+        && request.resource.data.airlineName is string
+        && request.resource.data.flightNumber is string
+        && request.resource.data.from is string
+        && request.resource.data.to is string
+        && request.resource.data.reason is string
+        && request.resource.data.reason.size() >= 3
+        && request.resource.data.reason.size() <= 500
+        && request.resource.data.status == 'pending'
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.keys().hasOnly([
+          'requestId',
+          'bookingId',
+          'customerAuthUid',
+          'airlineName',
+          'flightNumber',
+          'from',
+          'to',
+          'reason',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ]);
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ============================================================
+    // RD FLIGHT PUBLIC QR / TOKEN VERIFICATION
+    // ============================================================
+    match /flight_ticket_public_verify/{token} {
+      // App users, including the anonymous customer session, can verify
+      // a token. Only Admin may create/change verification records.
+      allow read: if signedIn();
+      allow create, update, delete: if isAdmin();
+    }
 
     // ============================================================
     // RD BUS OPERATORS

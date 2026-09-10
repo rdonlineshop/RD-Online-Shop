@@ -16,6 +16,7 @@ import 'admin_ride_history_page.dart';
 import 'admin_ride_sos_page.dart';
 import 'admin_ride_fare_settings_page.dart';
 import 'admin_seller_page.dart';
+import 'flight_ticket_booking_page.dart';
 
 class AdminDashboardPage extends StatefulWidget {
   const AdminDashboardPage({super.key});
@@ -520,6 +521,17 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             title: 'Bus Tickets',
             badgeCount: _busAttentionCount,
             onTap: _openBusTicketManagement,
+          ),
+          _dashboardCard(
+            icon: Icons.flight_takeoff_rounded,
+            title: 'Flight Tickets',
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    const AdminFlightTicketManagementPage(),
+              ),
+            ),
           ),
           _dashboardCard(
             icon: Icons.drive_eta_rounded,

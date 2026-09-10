@@ -1,6 +1,13 @@
+import 'dart:convert';
+import 'dart:math';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:crypto/crypto.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart';
 
 class FlightTicketBookingPage extends StatefulWidget {
   const FlightTicketBookingPage({super.key});
@@ -15,6 +22,34 @@ class _FlightTicketBookingPageState
   static const Color _rdBlue = Color(0xFF1565C0);
   static const Color _rdGreen = Color(0xFF2E7D32);
 
+  static const Map<String, String> _airportCodes = <String, String>{
+    'kathmandu': 'KTM',
+    'pokhara': 'PKR',
+    'bharatpur': 'BHR',
+    'bhairahawa': 'BWA',
+    'biratnagar': 'BIR',
+    'nepalgunj': 'KEP',
+    'janakpur': 'JKR',
+    'simara': 'SIF',
+    'dhangadhi': 'DHI',
+    'bhadrapur': 'BDP',
+    'lukla': 'LUA',
+    'jomsom': 'JMO',
+    'delhi': 'DEL',
+    'new delhi': 'DEL',
+    'dubai': 'DXB',
+    'doha': 'DOH',
+    'riyadh': 'RUH',
+    'jeddah': 'JED',
+    'dammam': 'DMM',
+    'bangkok': 'BKK',
+    'singapore': 'SIN',
+    'kuala lumpur': 'KUL',
+    'seoul': 'ICN',
+    'tokyo': 'NRT',
+    'london': 'LHR',
+  };
+
   final TextEditingController _fromController =
       TextEditingController();
   final TextEditingController _toController =
@@ -25,27 +60,45 @@ class _FlightTicketBookingPageState
       TextEditingController();
 
   final List<TextEditingController> _passengerNameControllers =
-      <TextEditingController>[
-    TextEditingController(),
-  ];
+      <TextEditingController>[TextEditingController()];
+  final List<TextEditingController> _documentNumberControllers =
+      <TextEditingController>[TextEditingController()];
+  final List<DateTime?> _passengerDob = <DateTime?>[null];
+  final List<DateTime?> _passportExpiry = <DateTime?>[null];
+  final List<String> _passengerGender = <String>['Male'];
+  final List<String> _passengerNationality = <String>['Nepal'];
+  final List<String> _documentType =
+      <String>['Citizenship / National ID'];
+  final List<String> _seatPreference = <String>['Any'];
+  final List<String> _mealPreference = <String>['Standard'];
+  final List<bool> _specialAssistance = <bool>[false];
 
   DateTime _departureDate =
       DateTime.now().add(const Duration(days: 1));
   DateTime? _returnDate;
 
+  String _travelScope = 'domestic';
   String _tripType = 'one_way';
   String _cabinClass = 'Economy';
+  String _sortBy = 'Recommended';
+  String _airlineFilter = 'All Airlines';
+  String _maxStops = 'Any';
+  String _timeFilter = 'Any Time';
+  String _paymentOption = 'online';
+  String _paymentMethod = 'eSewa';
 
   int _adultCount = 1;
   int _childCount = 0;
   int _infantCount = 0;
 
   bool _directOnly = false;
+  bool _refundableOnly = false;
   bool _flexibleDates = false;
   bool _termsAccepted = false;
   bool _searching = false;
   bool _submitting = false;
 
+  List<_DemoFlightQuote> _allQuotes = <_DemoFlightQuote>[];
   List<_DemoFlightQuote> _quotes = <_DemoFlightQuote>[];
   _DemoFlightQuote? _selectedQuote;
 
@@ -61,6 +114,11 @@ class _FlightTicketBookingPageState
 
     for (final TextEditingController controller
         in _passengerNameControllers) {
+      controller.dispose();
+    }
+
+    for (final TextEditingController controller
+        in _documentNumberControllers) {
       controller.dispose();
     }
 
@@ -82,8 +140,45 @@ class _FlightTicketBookingPageState
     return '${_two(hour12)}:${_two(value.minute)} $amPm';
   }
 
+  String _durationText(int minutes) {
+    final int hours = minutes ~/ 60;
+    final int rest = minutes % 60;
+    return rest == 0 ? '${hours}h' : '${hours}h ${rest}m';
+  }
+
+  String _airportCode(String value) {
+    final String trimmed = value.trim();
+    final String normalized = trimmed.toLowerCase();
+
+    for (final MapEntry<String, String> entry
+        in _airportCodes.entries) {
+      if (normalized == entry.key ||
+          normalized.contains(entry.key)) {
+        return entry.value;
+      }
+    }
+
+    final RegExpMatch? match =
+        RegExp(r'\(([A-Za-z]{3})\)').firstMatch(trimmed);
+    if (match != null) {
+      return match.group(1)!.toUpperCase();
+    }
+
+    if (trimmed.length == 3) {
+      return trimmed.toUpperCase();
+    }
+
+    final String letters = trimmed
+        .toUpperCase()
+        .replaceAll(RegExp(r'[^A-Z]'), '');
+    if (letters.length >= 3) {
+      return letters.substring(0, 3);
+    }
+    return letters.padRight(3, 'X');
+  }
 
   void _resetSearch() {
+    _allQuotes = <_DemoFlightQuote>[];
     _quotes = <_DemoFlightQuote>[];
     _selectedQuote = null;
     _termsAccepted = false;
@@ -93,15 +188,39 @@ class _FlightTicketBookingPageState
     final int needed = _passengerCount;
 
     while (_passengerNameControllers.length < needed) {
-      _passengerNameControllers.add(
-        TextEditingController(),
+      _passengerNameControllers.add(TextEditingController());
+      _documentNumberControllers.add(TextEditingController());
+      _passengerDob.add(null);
+      _passportExpiry.add(null);
+      _passengerGender.add('Male');
+      _passengerNationality.add('Nepal');
+      _documentType.add(
+        _travelScope == 'international'
+            ? 'Passport'
+            : 'Citizenship / National ID',
       );
+      _seatPreference.add('Any');
+      _mealPreference.add('Standard');
+      _specialAssistance.add(false);
     }
 
     while (_passengerNameControllers.length > needed) {
-      final TextEditingController removed =
-          _passengerNameControllers.removeLast();
-      removed.dispose();
+      _passengerNameControllers.removeLast().dispose();
+      _documentNumberControllers.removeLast().dispose();
+      _passengerDob.removeLast();
+      _passportExpiry.removeLast();
+      _passengerGender.removeLast();
+      _passengerNationality.removeLast();
+      _documentType.removeLast();
+      _seatPreference.removeLast();
+      _mealPreference.removeLast();
+      _specialAssistance.removeLast();
+    }
+
+    if (_travelScope == 'international') {
+      for (int index = 0; index < _documentType.length; index++) {
+        _documentType[index] = 'Passport';
+      }
     }
   }
 
@@ -151,6 +270,71 @@ class _FlightTicketBookingPageState
     setState(() {
       _returnDate = selected;
       _resetSearch();
+    });
+  }
+
+  Future<void> _pickPassengerDob(int index) async {
+    final DateTime today = DateTime.now();
+    final String type = _passengerTypeAt(index);
+
+    DateTime initialDate;
+    DateTime firstDate;
+    DateTime lastDate;
+
+    if (type == 'Infant') {
+      initialDate = today.subtract(const Duration(days: 365));
+      firstDate = DateTime(today.year - 2, today.month, today.day);
+      lastDate = today;
+    } else if (type == 'Child') {
+      initialDate = DateTime(today.year - 7, today.month, today.day);
+      firstDate = DateTime(today.year - 12, today.month, today.day);
+      lastDate = DateTime(today.year - 2, today.month, today.day);
+    } else {
+      initialDate = DateTime(today.year - 25, today.month, today.day);
+      firstDate = DateTime(today.year - 100, 1, 1);
+      lastDate = DateTime(today.year - 12, today.month, today.day);
+    }
+
+    final DateTime? selected = await showDatePicker(
+      context: context,
+      initialDate: _passengerDob[index] ?? initialDate,
+      firstDate: firstDate,
+      lastDate: lastDate,
+    );
+
+    if (!mounted || selected == null) {
+      return;
+    }
+
+    setState(() {
+      _passengerDob[index] = selected;
+      _termsAccepted = false;
+    });
+  }
+
+  Future<void> _pickPassportExpiry(int index) async {
+    final DateTime today = DateTime.now();
+    final DateTime minimum = DateTime(
+      today.year,
+      today.month,
+      today.day,
+    );
+
+    final DateTime? selected = await showDatePicker(
+      context: context,
+      initialDate: _passportExpiry[index] ??
+          DateTime(today.year + 5, today.month, today.day),
+      firstDate: minimum,
+      lastDate: DateTime(today.year + 15, 12, 31),
+    );
+
+    if (!mounted || selected == null) {
+      return;
+    }
+
+    setState(() {
+      _passportExpiry[index] = selected;
+      _termsAccepted = false;
     });
   }
 
@@ -204,11 +388,14 @@ class _FlightTicketBookingPageState
 
     setState(() {
       _searching = true;
-      _resetSearch();
+      _allQuotes = <_DemoFlightQuote>[];
+      _quotes = <_DemoFlightQuote>[];
+      _selectedQuote = null;
+      _termsAccepted = false;
     });
 
     await Future<void>.delayed(
-      const Duration(milliseconds: 450),
+      const Duration(milliseconds: 350),
     );
 
     if (!mounted) {
@@ -218,12 +405,14 @@ class _FlightTicketBookingPageState
     final double classMultiplier = switch (_cabinClass) {
       'Premium Economy' => 1.30,
       'Business' => 1.90,
+      'First Class' => 2.70,
       _ => 1.0,
     };
 
     final double tripMultiplier =
         _tripType == 'round_trip' ? 1.90 : 1.0;
-
+    final double internationalMultiplier =
+        _travelScope == 'international' ? 4.5 : 1.0;
     final DateTime? returnDate = _returnDate;
 
     _DemoFlightQuote makeQuote({
@@ -238,7 +427,14 @@ class _FlightTicketBookingPageState
       required double serviceFee,
       required String baggage,
       required bool refundable,
+      required bool changeable,
       required int seatsLeft,
+      required int stops,
+      required String aircraft,
+      required String fareFamily,
+      required String departureTerminal,
+      required String arrivalTerminal,
+      required String cancellationPolicy,
     }) {
       final DateTime outboundDeparture = DateTime(
         _departureDate.year,
@@ -248,8 +444,7 @@ class _FlightTicketBookingPageState
         departureMinute,
       );
 
-      final DateTime outboundArrival =
-          outboundDeparture.add(
+      final DateTime outboundArrival = outboundDeparture.add(
         Duration(minutes: durationMinutes),
       );
 
@@ -273,77 +468,239 @@ class _FlightTicketBookingPageState
 
       return _DemoFlightQuote(
         quoteId:
-            '$id-${DateTime.now().millisecondsSinceEpoch}',
+            '$id-${DateTime.now().microsecondsSinceEpoch}',
         airlineName: airline,
         flightNumber: flightNumber,
         outboundDeparture: outboundDeparture,
         outboundArrival: outboundArrival,
         returnDeparture: returnDeparture,
         returnArrival: returnArrival,
-        baseFarePerTraveler:
-            baseFare * classMultiplier * tripMultiplier,
+        baseFarePerTraveler: baseFare *
+            classMultiplier *
+            tripMultiplier *
+            internationalMultiplier,
         taxPerTraveler:
-            tax * tripMultiplier,
+            tax * tripMultiplier * internationalMultiplier,
         serviceFee:
-            serviceFee * tripMultiplier,
+            serviceFee * tripMultiplier * internationalMultiplier,
         baggage: baggage,
         refundable: refundable,
+        changeable: changeable,
         seatsLeft: seatsLeft,
+        stops: stops,
+        aircraft: aircraft,
+        fareFamily: fareFamily,
+        departureTerminal: departureTerminal,
+        arrivalTerminal: arrivalTerminal,
+        cancellationPolicy: cancellationPolicy,
+        durationMinutes: durationMinutes,
         quoteExpiresAt:
             DateTime.now().add(const Duration(minutes: 15)),
       );
     }
 
-    final List<_DemoFlightQuote> results =
-        <_DemoFlightQuote>[
+    final List<_DemoFlightQuote> results = <_DemoFlightQuote>[
       makeQuote(
         id: 'RDQ101',
         airline: 'RD Demo Air',
-        flightNumber: 'RD 101',
+        flightNumber: 'U4 101',
         departureHour: 7,
         departureMinute: 30,
-        durationMinutes: 75,
+        durationMinutes:
+            _travelScope == 'international' ? 260 : 35,
         baseFare: 3900,
         tax: 550,
-        serviceFee: 250,
+        serviceFee: 0,
         baggage: '15 kg checked + 5 kg cabin',
         refundable: false,
+        changeable: true,
         seatsLeft: 7,
+        stops: 0,
+        aircraft: 'ATR 72',
+        fareFamily: 'Saver',
+        departureTerminal:
+            _travelScope == 'international' ? 'International' : 'Domestic',
+        arrivalTerminal:
+            _travelScope == 'international' ? 'T1' : 'Domestic',
+        cancellationPolicy:
+            'Cancellation charge applies as per airline fare rule.',
       ),
       makeQuote(
         id: 'RDQ205',
-        airline: 'RD Demo Air',
-        flightNumber: 'RD 205',
-        departureHour: 13,
+        airline: 'RD Demo Sky',
+        flightNumber: 'YT 205',
+        departureHour: 10,
         departureMinute: 15,
-        durationMinutes: 70,
-        baseFare: 4400,
+        durationMinutes:
+            _travelScope == 'international' ? 300 : 40,
+        baseFare: 4300,
         tax: 600,
-        serviceFee: 250,
+        serviceFee: 0,
         baggage: '20 kg checked + 7 kg cabin',
         refundable: true,
-        seatsLeft: 4,
+        changeable: true,
+        seatsLeft: 5,
+        stops: 0,
+        aircraft: 'ATR 72',
+        fareFamily: 'Flex',
+        departureTerminal:
+            _travelScope == 'international' ? 'International' : 'Domestic',
+        arrivalTerminal:
+            _travelScope == 'international' ? 'T2' : 'Domestic',
+        cancellationPolicy:
+            'Refund permitted after airline cancellation charge.',
       ),
       makeQuote(
         id: 'RDQ309',
-        airline: 'RD Demo Air',
-        flightNumber: 'RD 309',
-        departureHour: 18,
+        airline: 'RD Demo Connect',
+        flightNumber: 'SHA 309',
+        departureHour: 13,
         departureMinute: 45,
-        durationMinutes: 80,
-        baseFare: 5000,
+        durationMinutes:
+            _travelScope == 'international' ? 355 : 45,
+        baseFare: 4700,
         tax: 650,
-        serviceFee: 250,
+        serviceFee: 0,
         baggage: '20 kg checked + 7 kg cabin',
         refundable: true,
+        changeable: true,
         seatsLeft: 3,
+        stops: _travelScope == 'international' ? 1 : 0,
+        aircraft: 'Dash 8 / Partner connection',
+        fareFamily: 'Standard',
+        departureTerminal:
+            _travelScope == 'international' ? 'International' : 'Domestic',
+        arrivalTerminal:
+            _travelScope == 'international' ? 'T3' : 'Domestic',
+        cancellationPolicy:
+            'Fare difference and change/cancel fee may apply.',
+      ),
+      makeQuote(
+        id: 'RDQ411',
+        airline: 'RD Demo International',
+        flightNumber: 'H9 411',
+        departureHour: 18,
+        departureMinute: 20,
+        durationMinutes:
+            _travelScope == 'international' ? 275 : 50,
+        baseFare: 5200,
+        tax: 700,
+        serviceFee: 0,
+        baggage: '25 kg checked + 7 kg cabin',
+        refundable: true,
+        changeable: true,
+        seatsLeft: 8,
+        stops: 0,
+        aircraft: 'Airbus A320',
+        fareFamily: 'Flex Plus',
+        departureTerminal:
+            _travelScope == 'international' ? 'International' : 'Domestic',
+        arrivalTerminal:
+            _travelScope == 'international' ? 'T1' : 'Domestic',
+        cancellationPolicy:
+            'Refund/change permitted subject to provider fare conditions.',
       ),
     ];
 
     setState(() {
-      _quotes = results;
+      _allQuotes = results;
+      _applyQuoteFilters();
       _searching = false;
     });
+  }
+
+  void _applyQuoteFilters() {
+    Iterable<_DemoFlightQuote> filtered = _allQuotes;
+
+    if (_directOnly) {
+      filtered = filtered.where(
+        (_DemoFlightQuote quote) => quote.stops == 0,
+      );
+    }
+
+    if (_refundableOnly) {
+      filtered = filtered.where(
+        (_DemoFlightQuote quote) => quote.refundable,
+      );
+    }
+
+    if (_airlineFilter != 'All Airlines') {
+      filtered = filtered.where(
+        (_DemoFlightQuote quote) =>
+            quote.airlineName == _airlineFilter,
+      );
+    }
+
+    if (_maxStops == 'Direct only') {
+      filtered = filtered.where(
+        (_DemoFlightQuote quote) => quote.stops == 0,
+      );
+    } else if (_maxStops == 'Up to 1 stop') {
+      filtered = filtered.where(
+        (_DemoFlightQuote quote) => quote.stops <= 1,
+      );
+    }
+
+    if (_timeFilter != 'Any Time') {
+      filtered = filtered.where(
+        (_DemoFlightQuote quote) {
+          final int hour = quote.outboundDeparture.hour;
+          if (_timeFilter == 'Morning') {
+            return hour >= 5 && hour < 12;
+          }
+          if (_timeFilter == 'Afternoon') {
+            return hour >= 12 && hour < 17;
+          }
+          return hour >= 17 || hour < 5;
+        },
+      );
+    }
+
+    final List<_DemoFlightQuote> list = filtered.toList();
+
+    switch (_sortBy) {
+      case 'Cheapest':
+        list.sort(
+          (_DemoFlightQuote a, _DemoFlightQuote b) =>
+              a.totalFare(_passengerCount).compareTo(
+                    b.totalFare(_passengerCount),
+                  ),
+        );
+        break;
+      case 'Earliest':
+        list.sort(
+          (_DemoFlightQuote a, _DemoFlightQuote b) =>
+              a.outboundDeparture.compareTo(
+                    b.outboundDeparture,
+                  ),
+        );
+        break;
+      case 'Shortest':
+        list.sort(
+          (_DemoFlightQuote a, _DemoFlightQuote b) =>
+              a.durationMinutes.compareTo(
+                    b.durationMinutes,
+                  ),
+        );
+        break;
+      default:
+        list.sort(
+          (_DemoFlightQuote a, _DemoFlightQuote b) {
+            final int directCompare =
+                a.stops.compareTo(b.stops);
+            if (directCompare != 0) {
+              return directCompare;
+            }
+            return a.totalFare(_passengerCount).compareTo(
+                  b.totalFare(_passengerCount),
+                );
+          },
+        );
+    }
+
+    _quotes = list;
+    _selectedQuote = null;
+    _termsAccepted = false;
   }
 
   List<String> _passengerNames() =>
@@ -351,6 +708,19 @@ class _FlightTicketBookingPageState
           .map(
             (TextEditingController controller) =>
                 controller.text.trim(),
+          )
+          .toList();
+
+  List<String> _documentLast4() =>
+      _documentNumberControllers
+          .map(
+            (TextEditingController controller) {
+              final String raw = controller.text.trim();
+              if (raw.length <= 4) {
+                return raw;
+              }
+              return raw.substring(raw.length - 4);
+            },
           )
           .toList();
 
@@ -374,6 +744,54 @@ class _FlightTicketBookingPageState
         _message(
           'Please enter the full name for '
           '${_passengerTypeAt(index)} passenger ${index + 1}.',
+        );
+        return false;
+      }
+
+      if (_passengerDob[index] == null) {
+        _message(
+          'Please select date of birth for passenger ${index + 1}.',
+        );
+        return false;
+      }
+
+      final String document =
+          _documentNumberControllers[index].text.trim();
+
+      if (_travelScope == 'international' &&
+          document.length < 5) {
+        _message(
+          'Passport number is required for international passenger ${index + 1}.',
+        );
+        return false;
+      }
+
+      if (_travelScope == 'international') {
+        final DateTime? expiry = _passportExpiry[index];
+
+        if (expiry == null) {
+          _message(
+            'Passport expiry date is required for international passenger ${index + 1}.',
+          );
+          return false;
+        }
+
+        final DateTime requiredValidUntil =
+            _departureDate.add(const Duration(days: 180));
+
+        if (!expiry.isAfter(requiredValidUntil)) {
+          _message(
+            'Passport for passenger ${index + 1} should normally remain valid for at least 6 months after departure.',
+          );
+          return false;
+        }
+      }
+
+      if (_travelScope == 'domestic' &&
+          document.isNotEmpty &&
+          document.length < 4) {
+        _message(
+          'Please enter a valid ID number for passenger ${index + 1}.',
         );
         return false;
       }
@@ -453,6 +871,9 @@ class _FlightTicketBookingPageState
               .collection('ticket_bookings')
               .doc();
 
+      final String bookingCode =
+          'RDFL-${ref.id.substring(0, 8).toUpperCase()}';
+
       final List<String> passengerNames = _passengerNames();
       final List<String> passengerTypes =
           List<String>.generate(
@@ -470,18 +891,43 @@ class _FlightTicketBookingPageState
         _passengerCount,
       );
 
+      final List<Timestamp> passengerDob = _passengerDob
+          .map(
+            (DateTime? value) => Timestamp.fromDate(value!),
+          )
+          .toList();
+
+      final List<Object?> passengerPassportExpiry =
+          _passportExpiry
+              .map<Object?>(
+                (DateTime? value) => value == null
+                    ? null
+                    : Timestamp.fromDate(value),
+              )
+              .toList();
+
+      final String paymentStatus = _paymentOption == 'online'
+          ? 'online_pending'
+          : 'pay_at_office_pending';
+      final String paymentMethod = _paymentOption == 'online'
+          ? _paymentMethod
+          : 'RD Office / Authorized Agent';
+
       await ref.set(
         <String, dynamic>{
           'bookingId': ref.id,
-          'bookingVersion': 2,
+          'bookingCode': bookingCode,
+          'bookingVersion': 3,
           'serviceType': 'flight',
           'customerAuthUid': user.uid,
           'customerId': customerId,
+          'travelScope': _travelScope,
           'tripType': _tripType,
           'from': _fromController.text.trim(),
           'to': _toController.text.trim(),
-          'departureDate':
-              Timestamp.fromDate(_departureDate),
+          'fromCode': _airportCode(_fromController.text),
+          'toCode': _airportCode(_toController.text),
+          'departureDate': Timestamp.fromDate(_departureDate),
           'returnDate': _returnDate == null
               ? null
               : Timestamp.fromDate(_returnDate!),
@@ -491,6 +937,18 @@ class _FlightTicketBookingPageState
           'passengerCount': _passengerCount,
           'passengerNames': passengerNames,
           'passengerTypes': passengerTypes,
+          'passengerDob': passengerDob,
+          'passengerPassportExpiry': passengerPassportExpiry,
+          'passengerGenders': List<String>.from(_passengerGender),
+          'passengerNationalities':
+              List<String>.from(_passengerNationality),
+          'documentTypes': List<String>.from(_documentType),
+          'documentLast4': _documentLast4(),
+          'identityVerificationRequired':
+              _travelScope == 'international',
+          'seatPreferences': List<String>.from(_seatPreference),
+          'mealPreferences': List<String>.from(_mealPreference),
+          'specialAssistance': List<bool>.from(_specialAssistance),
           'contactPhone': _phoneController.text.trim(),
           'contactEmail': _emailController.text.trim(),
           'cabinClass': _cabinClass,
@@ -510,22 +968,33 @@ class _FlightTicketBookingPageState
               : Timestamp.fromDate(quote.returnArrival!),
           'baggage': quote.baggage,
           'refundable': quote.refundable,
+          'changeable': quote.changeable,
+          'stops': quote.stops,
+          'aircraft': quote.aircraft,
+          'fareFamily': quote.fareFamily,
+          'departureTerminal': quote.departureTerminal,
+          'arrivalTerminal': quote.arrivalTerminal,
+          'durationMinutes': quote.durationMinutes,
+          'cancellationPolicy': quote.cancellationPolicy,
           'baseFare': baseFare,
           'taxes': taxes,
           'serviceFee': quote.serviceFee,
           'totalFare': totalFare,
           'currency': 'Rs.',
+          'paymentOption': _paymentOption,
+          'paymentMethod': paymentMethod,
+          'paymentReference': '',
           'quoteId': quote.quoteId,
           'quoteSource': 'demo',
-          'quoteExpiresAt':
-              Timestamp.fromDate(quote.quoteExpiresAt),
+          'quoteExpiresAt': Timestamp.fromDate(quote.quoteExpiresAt),
           'providerVerified': false,
           'providerName': '',
           'providerBookingReference': '',
           'pnr': '',
           'eTicketNumber': '',
+          'qrVerificationToken': '',
           'bookingStatus': 'request_submitted',
-          'paymentStatus': 'not_started',
+          'paymentStatus': paymentStatus,
           'ticketStatus': 'not_issued',
           'fraudReviewStatus': 'unreviewed',
           'createdAt': FieldValue.serverTimestamp(),
@@ -548,7 +1017,7 @@ class _FlightTicketBookingPageState
               size: 44,
             ),
             title: const Text(
-              'Booking Request Submitted',
+              'Flight Booking Request Submitted',
               textAlign: TextAlign.center,
               style: TextStyle(
                 fontWeight: FontWeight.w900,
@@ -563,11 +1032,12 @@ class _FlightTicketBookingPageState
                 crossAxisAlignment:
                     CrossAxisAlignment.stretch,
                 children: <Widget>[
+                  _summaryLine('Booking Code', bookingCode),
                   _summaryLine('Booking ID', ref.id),
                   _summaryLine(
                     'Route',
-                    '${_fromController.text.trim()} → '
-                        '${_toController.text.trim()}',
+                    '${_airportCode(_fromController.text)} → '
+                        '${_airportCode(_toController.text)}',
                   ),
                   _summaryLine(
                     'Flight',
@@ -577,6 +1047,10 @@ class _FlightTicketBookingPageState
                   _summaryLine(
                     'Passengers',
                     _passengerCount.toString(),
+                  ),
+                  _summaryLine(
+                    'Payment',
+                    paymentMethod,
                   ),
                   _summaryLine(
                     'Requested Total',
@@ -679,6 +1153,15 @@ class _FlightTicketBookingPageState
     );
   }
 
+  void _openVerify() {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => const FlightTicketVerifyPage(),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -692,6 +1175,13 @@ class _FlightTicketBookingPageState
         ),
         centerTitle: true,
         actions: <Widget>[
+          IconButton(
+            tooltip: 'Verify Flight Ticket',
+            onPressed: _openVerify,
+            icon: const Icon(
+              Icons.qr_code_scanner_rounded,
+            ),
+          ),
           IconButton(
             tooltip: 'My Flight Tickets',
             onPressed: _openMyTickets,
@@ -719,15 +1209,33 @@ class _FlightTicketBookingPageState
                     child: CircularProgressIndicator(),
                   ),
                 ],
-                if (!_searching && _quotes.isNotEmpty) ...<Widget>[
-                  const SizedBox(height: 22),
+                if (!_searching && _allQuotes.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 18),
+                  _filterCard(),
+                  const SizedBox(height: 14),
                   _resultsHeader(),
                   const SizedBox(height: 10),
-                  ..._quotes.map(_quoteCard),
+                  if (_quotes.isEmpty)
+                    const Card(
+                      child: Padding(
+                        padding: EdgeInsets.all(20),
+                        child: Text(
+                          'No flight matches the selected filters.',
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    )
+                  else
+                    ..._quotes.map(_quoteCard),
                 ],
                 if (_selectedQuote != null) ...<Widget>[
                   const SizedBox(height: 18),
                   _passengerCard(),
+                  const SizedBox(height: 14),
+                  _paymentCard(),
                   const SizedBox(height: 14),
                   _reviewAndSafetyCard(),
                 ],
@@ -803,11 +1311,33 @@ class _FlightTicketBookingPageState
                 fontWeight: FontWeight.w900,
               ),
             ),
-            const SizedBox(height: 13),
+            const SizedBox(height: 12),
             Wrap(
               spacing: 8,
               runSpacing: 8,
               children: <Widget>[
+                ChoiceChip(
+                  label: const Text('Domestic'),
+                  selected: _travelScope == 'domestic',
+                  onSelected: (_) {
+                    setState(() {
+                      _travelScope = 'domestic';
+                      _syncPassengerControllers();
+                      _resetSearch();
+                    });
+                  },
+                ),
+                ChoiceChip(
+                  label: const Text('International'),
+                  selected: _travelScope == 'international',
+                  onSelected: (_) {
+                    setState(() {
+                      _travelScope = 'international';
+                      _syncPassengerControllers();
+                      _resetSearch();
+                    });
+                  },
+                ),
                 ChoiceChip(
                   label: const Text('One Way'),
                   selected: _tripType == 'one_way',
@@ -847,14 +1377,12 @@ class _FlightTicketBookingPageState
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
                     labelText: 'From',
-                    hintText: 'City or airport',
-                    prefixIcon: Icon(
-                      Icons.flight_takeoff_rounded,
-                    ),
+                    hintText: 'City, airport or IATA code',
+                    prefixIcon: Icon(Icons.flight_takeoff_rounded),
                     border: OutlineInputBorder(),
                   ),
                   onChanged: (_) {
-                    if (_quotes.isNotEmpty) {
+                    if (_allQuotes.isNotEmpty) {
                       setState(_resetSearch);
                     }
                   },
@@ -865,14 +1393,12 @@ class _FlightTicketBookingPageState
                   textInputAction: TextInputAction.next,
                   decoration: const InputDecoration(
                     labelText: 'To',
-                    hintText: 'City or airport',
-                    prefixIcon: Icon(
-                      Icons.flight_land_rounded,
-                    ),
+                    hintText: 'City, airport or IATA code',
+                    prefixIcon: Icon(Icons.flight_land_rounded),
                     border: OutlineInputBorder(),
                   ),
                   onChanged: (_) {
-                    if (_quotes.isNotEmpty) {
+                    if (_allQuotes.isNotEmpty) {
                       setState(_resetSearch);
                     }
                   },
@@ -881,9 +1407,7 @@ class _FlightTicketBookingPageState
                 final Widget swap = IconButton.filledTonal(
                   tooltip: 'Swap route',
                   onPressed: _swapRoute,
-                  icon: const Icon(
-                    Icons.swap_horiz_rounded,
-                  ),
+                  icon: const Icon(Icons.swap_horiz_rounded),
                 );
 
                 if (wide) {
@@ -902,10 +1426,7 @@ class _FlightTicketBookingPageState
                   children: <Widget>[
                     fromField,
                     const SizedBox(height: 8),
-                    Align(
-                      alignment: Alignment.center,
-                      child: swap,
-                    ),
+                    swap,
                     const SizedBox(height: 8),
                     toField,
                   ],
@@ -919,13 +1440,11 @@ class _FlightTicketBookingPageState
                 BoxConstraints constraints,
               ) {
                 final bool wide = constraints.maxWidth >= 650;
-
                 final Widget depart = _dateField(
                   label: 'Departure',
                   value: _dateText(_departureDate),
                   onTap: _pickDepartureDate,
                 );
-
                 final Widget returning = _dateField(
                   label: 'Return',
                   value: _returnDate == null
@@ -984,32 +1503,34 @@ class _FlightTicketBookingPageState
                   value: 'Business',
                   child: Text('Business'),
                 ),
+                DropdownMenuItem<String>(
+                  value: 'First Class',
+                  child: Text('First Class'),
+                ),
               ],
               onChanged: (String? value) {
                 if (value == null) {
                   return;
                 }
-
                 setState(() {
                   _cabinClass = value;
                   _resetSearch();
                 });
               },
             ),
-            const SizedBox(height: 8),
             SwitchListTile.adaptive(
               contentPadding: EdgeInsets.zero,
               value: _directOnly,
               title: const Text(
                 'Direct flights only',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
               onChanged: (bool value) {
                 setState(() {
                   _directOnly = value;
-                  _resetSearch();
+                  if (_allQuotes.isNotEmpty) {
+                    _applyQuoteFilters();
+                  }
                 });
               },
             ),
@@ -1018,9 +1539,7 @@ class _FlightTicketBookingPageState
               value: _flexibleDates,
               title: const Text(
                 'Flexible travel dates',
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
               subtitle: const Text(
                 'Provider may suggest nearby dates for a better fare.',
@@ -1036,16 +1555,153 @@ class _FlightTicketBookingPageState
             SizedBox(
               height: 50,
               child: FilledButton.icon(
-                onPressed:
-                    _searching ? null : _searchFlights,
+                onPressed: _searching ? null : _searchFlights,
                 icon: const Icon(Icons.search_rounded),
                 label: const Text(
                   'Search Flights',
-                  style: TextStyle(
-                    fontWeight: FontWeight.w900,
-                  ),
+                  style: TextStyle(fontWeight: FontWeight.w900),
                 ),
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _filterCard() {
+    final Set<String> airlines = <String>{
+      'All Airlines',
+      ..._allQuotes.map(
+        (_DemoFlightQuote quote) => quote.airlineName,
+      ),
+    };
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const Text(
+              'Filter & Sort',
+              style: TextStyle(
+                fontSize: 17,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: _sortBy,
+              decoration: const InputDecoration(
+                labelText: 'Sort By',
+                border: OutlineInputBorder(),
+              ),
+              items: const <String>[
+                'Recommended',
+                'Cheapest',
+                'Earliest',
+                'Shortest',
+              ].map(
+                (String value) => DropdownMenuItem<String>(
+                  value: value,
+                  child: Text(value),
+                ),
+              ).toList(),
+              onChanged: (String? value) {
+                if (value == null) return;
+                setState(() {
+                  _sortBy = value;
+                  _applyQuoteFilters();
+                });
+              },
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: _airlineFilter,
+              isExpanded: true,
+              decoration: const InputDecoration(
+                labelText: 'Airline',
+                border: OutlineInputBorder(),
+              ),
+              items: airlines.map(
+                (String value) => DropdownMenuItem<String>(
+                  value: value,
+                  child: Text(value),
+                ),
+              ).toList(),
+              onChanged: (String? value) {
+                if (value == null) return;
+                setState(() {
+                  _airlineFilter = value;
+                  _applyQuoteFilters();
+                });
+              },
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: _maxStops,
+              decoration: const InputDecoration(
+                labelText: 'Stops',
+                border: OutlineInputBorder(),
+              ),
+              items: const <String>[
+                'Any',
+                'Direct only',
+                'Up to 1 stop',
+              ].map(
+                (String value) => DropdownMenuItem<String>(
+                  value: value,
+                  child: Text(value),
+                ),
+              ).toList(),
+              onChanged: (String? value) {
+                if (value == null) return;
+                setState(() {
+                  _maxStops = value;
+                  _applyQuoteFilters();
+                });
+              },
+            ),
+            const SizedBox(height: 10),
+            DropdownButtonFormField<String>(
+              initialValue: _timeFilter,
+              decoration: const InputDecoration(
+                labelText: 'Departure Time',
+                border: OutlineInputBorder(),
+              ),
+              items: const <String>[
+                'Any Time',
+                'Morning',
+                'Afternoon',
+                'Evening',
+              ].map(
+                (String value) => DropdownMenuItem<String>(
+                  value: value,
+                  child: Text(value),
+                ),
+              ).toList(),
+              onChanged: (String? value) {
+                if (value == null) return;
+                setState(() {
+                  _timeFilter = value;
+                  _applyQuoteFilters();
+                });
+              },
+            ),
+            SwitchListTile.adaptive(
+              contentPadding: EdgeInsets.zero,
+              value: _refundableOnly,
+              title: const Text(
+                'Refundable fares only',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+              onChanged: (bool value) {
+                setState(() {
+                  _refundableOnly = value;
+                  _applyQuoteFilters();
+                });
+              },
             ),
           ],
         ),
@@ -1306,7 +1962,7 @@ class _FlightTicketBookingPageState
                           ),
                         ),
                         Text(
-                          '${quote.flightNumber} • $_cabinClass',
+                          '${quote.flightNumber} • $_cabinClass • ${quote.fareFamily}',
                           style: TextStyle(
                             color: Colors.grey.shade700,
                             fontWeight: FontWeight.w700,
@@ -1343,6 +1999,18 @@ class _FlightTicketBookingPageState
                 runSpacing: 7,
                 children: <Widget>[
                   _detailChip(
+                    Icons.schedule_rounded,
+                    _durationText(quote.durationMinutes),
+                  ),
+                  _detailChip(
+                    Icons.alt_route_rounded,
+                    quote.stops == 0 ? 'Direct' : '${quote.stops} stop',
+                  ),
+                  _detailChip(
+                    Icons.airplanemode_active_rounded,
+                    quote.aircraft,
+                  ),
+                  _detailChip(
                     Icons.luggage_rounded,
                     quote.baggage,
                   ),
@@ -1357,6 +2025,10 @@ class _FlightTicketBookingPageState
                     quote.refundable
                         ? 'Refundable fare'
                         : 'Non-refundable fare',
+                  ),
+                  _detailChip(
+                    Icons.sync_alt_rounded,
+                    quote.changeable ? 'Changeable' : 'No changes',
                   ),
                 ],
               ),
@@ -1496,8 +2168,9 @@ class _FlightTicketBookingPageState
             ),
             const SizedBox(height: 5),
             Text(
-              'Enter names exactly as they should appear '
-              'for airline verification.',
+              'Enter details exactly as on the official ID/passport. '
+              'For privacy, only the last 4 characters of the document '
+              'number are stored in this client booking record.',
               style: TextStyle(
                 color: Colors.grey.shade700,
               ),
@@ -1506,27 +2179,8 @@ class _FlightTicketBookingPageState
             for (int index = 0;
                 index < _passengerNameControllers.length;
                 index++) ...<Widget>[
-              TextField(
-                controller:
-                    _passengerNameControllers[index],
-                textCapitalization:
-                    TextCapitalization.words,
-                textInputAction:
-                    index ==
-                            _passengerNameControllers.length -
-                                1
-                        ? TextInputAction.next
-                        : TextInputAction.next,
-                decoration: InputDecoration(
-                  labelText:
-                      '${_passengerTypeAt(index)} '
-                      'Passenger ${index + 1} • Full Name',
-                  prefixIcon:
-                      const Icon(Icons.person_rounded),
-                  border: const OutlineInputBorder(),
-                ),
-              ),
-              const SizedBox(height: 10),
+              _passengerPanel(index),
+              const SizedBox(height: 12),
             ],
             const Divider(height: 24),
             const Text(
@@ -1550,31 +2204,311 @@ class _FlightTicketBookingPageState
             const SizedBox(height: 10),
             TextField(
               controller: _emailController,
-              keyboardType:
-                  TextInputType.emailAddress,
+              keyboardType: TextInputType.emailAddress,
               decoration: const InputDecoration(
                 labelText: 'Email (optional)',
                 prefixIcon: Icon(Icons.email_rounded),
                 border: OutlineInputBorder(),
               ),
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _passengerPanel(int index) {
+    final String passengerType = _passengerTypeAt(index);
+
+    return Container(
+      padding: const EdgeInsets.all(13),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey.shade300),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Text(
+            '$passengerType Passenger ${index + 1}',
+            style: const TextStyle(
+              fontSize: 16,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _passengerNameControllers[index],
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Full Name',
+              prefixIcon: Icon(Icons.person_rounded),
+              border: OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            initialValue: _passengerGender[index],
+            decoration: const InputDecoration(
+              labelText: 'Gender',
+              border: OutlineInputBorder(),
+            ),
+            items: const <String>['Male', 'Female', 'Other']
+                .map(
+                  (String value) => DropdownMenuItem<String>(
+                    value: value,
+                    child: Text(value),
+                  ),
+                )
+                .toList(),
+            onChanged: (String? value) {
+              if (value == null) return;
+              setState(() {
+                _passengerGender[index] = value;
+                _termsAccepted = false;
+              });
+            },
+          ),
+          const SizedBox(height: 10),
+          _dateField(
+            label: 'Date of Birth',
+            value: _passengerDob[index] == null
+                ? 'Select DOB'
+                : _dateText(_passengerDob[index]!),
+            onTap: () => _pickPassengerDob(index),
+          ),
+          const SizedBox(height: 10),
+          TextFormField(
+            initialValue: _passengerNationality[index],
+            textCapitalization: TextCapitalization.words,
+            decoration: const InputDecoration(
+              labelText: 'Nationality',
+              prefixIcon: Icon(Icons.public_rounded),
+              border: OutlineInputBorder(),
+            ),
+            onChanged: (String value) {
+              _passengerNationality[index] =
+                  value.trim().isEmpty ? 'Nepal' : value.trim();
+              _termsAccepted = false;
+            },
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            initialValue: _documentType[index],
+            decoration: const InputDecoration(
+              labelText: 'Travel Document',
+              border: OutlineInputBorder(),
+            ),
+            items: (_travelScope == 'international'
+                    ? <String>['Passport']
+                    : <String>[
+                        'Citizenship / National ID',
+                        'Passport',
+                        'Birth Certificate',
+                      ])
+                .map(
+                  (String value) => DropdownMenuItem<String>(
+                    value: value,
+                    child: Text(value),
+                  ),
+                )
+                .toList(),
+            onChanged: (String? value) {
+              if (value == null) return;
+              setState(() {
+                _documentType[index] = value;
+                _termsAccepted = false;
+              });
+            },
+          ),
+          const SizedBox(height: 10),
+          TextField(
+            controller: _documentNumberControllers[index],
+            obscureText: true,
+            enableSuggestions: false,
+            autocorrect: false,
+            decoration: InputDecoration(
+              labelText: _travelScope == 'international'
+                  ? 'Passport Number'
+                  : 'ID / Passport Number (optional for demo)',
+              helperText: 'Only last 4 characters are saved.',
+              prefixIcon: const Icon(Icons.badge_rounded),
+              border: const OutlineInputBorder(),
+            ),
+          ),
+          const SizedBox(height: 10),
+          if (_travelScope == 'international') ...<Widget>[
+            _dateField(
+              label: 'Passport Expiry',
+              value: _passportExpiry[index] == null
+                  ? 'Select expiry date'
+                  : _dateText(_passportExpiry[index]!),
+              onTap: () => _pickPassportExpiry(index),
+            ),
+            const SizedBox(height: 10),
+          ],
+          DropdownButtonFormField<String>(
+            initialValue: _seatPreference[index],
+            decoration: const InputDecoration(
+              labelText: 'Seat Preference',
+              border: OutlineInputBorder(),
+            ),
+            items: const <String>[
+              'Any',
+              'Window',
+              'Aisle',
+              'Middle',
+              'Front',
+              'Extra Legroom',
+            ]
+                .map(
+                  (String value) => DropdownMenuItem<String>(
+                    value: value,
+                    child: Text(value),
+                  ),
+                )
+                .toList(),
+            onChanged: (String? value) {
+              if (value == null) return;
+              setState(() {
+                _seatPreference[index] = value;
+                _termsAccepted = false;
+              });
+            },
+          ),
+          const SizedBox(height: 10),
+          DropdownButtonFormField<String>(
+            initialValue: _mealPreference[index],
+            decoration: const InputDecoration(
+              labelText: 'Meal Preference',
+              border: OutlineInputBorder(),
+            ),
+            items: const <String>[
+              'Standard',
+              'Vegetarian',
+              'Vegan',
+              'Halal',
+              'No Meal',
+            ]
+                .map(
+                  (String value) => DropdownMenuItem<String>(
+                    value: value,
+                    child: Text(value),
+                  ),
+                )
+                .toList(),
+            onChanged: (String? value) {
+              if (value == null) return;
+              setState(() {
+                _mealPreference[index] = value;
+                _termsAccepted = false;
+              });
+            },
+          ),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            value: _specialAssistance[index],
+            title: const Text(
+              'Special assistance / wheelchair',
+              style: TextStyle(fontWeight: FontWeight.w700),
+            ),
+            onChanged: (bool value) {
+              setState(() {
+                _specialAssistance[index] = value;
+                _termsAccepted = false;
+              });
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _paymentCard() {
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const Text(
+              'Payment Option',
+              style: TextStyle(
+                fontSize: 21,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 10),
+            SegmentedButton<String>(
+              segments: const <ButtonSegment<String>>[
+                ButtonSegment<String>(
+                  value: 'online',
+                  label: Text('Online'),
+                  icon: Icon(Icons.payments_rounded),
+                ),
+                ButtonSegment<String>(
+                  value: 'pay_at_office',
+                  label: Text('Pay at RD Office'),
+                  icon: Icon(Icons.storefront_rounded),
+                ),
+              ],
+              selected: <String>{_paymentOption},
+              onSelectionChanged: (Set<String> value) {
+                setState(() {
+                  _paymentOption = value.first;
+                  _termsAccepted = false;
+                });
+              },
+            ),
+            if (_paymentOption == 'online') ...<Widget>[
+              const SizedBox(height: 12),
+              DropdownButtonFormField<String>(
+                initialValue: _paymentMethod,
+                decoration: const InputDecoration(
+                  labelText: 'Online Payment Method',
+                  prefixIcon: Icon(
+                    Icons.account_balance_wallet_rounded,
+                  ),
+                  border: OutlineInputBorder(),
+                ),
+                items: const <String>[
+                  'eSewa',
+                  'Khalti',
+                  'connectIPS',
+                  'Bank',
+                  'Card',
+                ]
+                    .map(
+                      (String value) => DropdownMenuItem<String>(
+                        value: value,
+                        child: Text(value),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (String? value) {
+                  if (value == null) return;
+                  setState(() {
+                    _paymentMethod = value;
+                    _termsAccepted = false;
+                  });
+                },
+              ),
+            ],
             const SizedBox(height: 10),
             Container(
               padding: const EdgeInsets.all(11),
               decoration: BoxDecoration(
-                color: Colors.amber
-                    .withValues(alpha: 0.10),
+                color: Colors.blue.withValues(alpha: 0.07),
                 borderRadius: BorderRadius.circular(10),
               ),
-              child: const Text(
-                'Passport/ID numbers are intentionally NOT stored '
-                'in this demo client flow. Sensitive identity data '
-                'should be collected only through a secured provider/'
-                'server workflow when real airline booking is connected.',
-                style: TextStyle(
-                  fontSize: 12,
-                  height: 1.35,
+              child: Text(
+                _paymentOption == 'online'
+                    ? 'Payment remains Pending until official RD/provider verification.'
+                    : 'Office payment remains Pending until an authorized RD/Admin user confirms collection.',
+                style: const TextStyle(
                   fontWeight: FontWeight.w700,
+                  height: 1.35,
                 ),
               ),
             ),
@@ -1798,6 +2732,95 @@ class MyFlightTicketsPage extends StatelessWidget {
         .join(' ');
   }
 
+  Future<void> _requestCancellation(
+    BuildContext context,
+    String bookingId,
+    Map<String, dynamic> data,
+  ) async {
+    final User? user = FirebaseAuth.instance.currentUser;
+    if (user == null) return;
+
+    String reasonText = '';
+
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('Request Cancellation / Refund'),
+        content: TextFormField(
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Reason',
+            border: OutlineInputBorder(),
+          ),
+          onChanged: (String value) {
+            reasonText = value.trim();
+          },
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Back'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Submit Request'),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    if (reasonText.length < 3) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Please enter a cancellation reason.'),
+          ),
+        );
+      }
+      return;
+    }
+
+    final DocumentReference<Map<String, dynamic>> ref =
+        FirebaseFirestore.instance
+            .collection('flight_cancellation_requests')
+            .doc();
+
+    try {
+      await ref.set(<String, dynamic>{
+        'requestId': ref.id,
+        'bookingId': bookingId,
+        'customerAuthUid': user.uid,
+        'airlineName': data['airlineName']?.toString() ?? '',
+        'flightNumber': data['flightNumber']?.toString() ?? '',
+        'from': data['from']?.toString() ?? '',
+        'to': data['to']?.toString() ?? '',
+        'reason': reasonText,
+        'status': 'pending',
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Cancellation/refund request submitted.'),
+          ),
+        );
+      }
+    } on FirebaseException catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not submit request: ${error.message ?? error.code}',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final User? user = FirebaseAuth.instance.currentUser;
@@ -1812,6 +2835,18 @@ class MyFlightTicketsPage extends StatelessWidget {
           ),
         ),
         centerTitle: true,
+        actions: <Widget>[
+          IconButton(
+            tooltip: 'Verify Flight Ticket',
+            onPressed: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const FlightTicketVerifyPage(),
+              ),
+            ),
+            icon: const Icon(Icons.qr_code_scanner_rounded),
+          ),
+        ],
       ),
       body: user == null
           ? const Center(
@@ -1943,6 +2978,8 @@ class MyFlightTicketsPage extends StatelessWidget {
   ) {
     final String bookingId =
         data['bookingId']?.toString() ?? documentId;
+    final String bookingCode =
+        data['bookingCode']?.toString() ?? bookingId;
     final String from =
         data['from']?.toString() ?? '';
     final String to =
@@ -1967,14 +3004,29 @@ class MyFlightTicketsPage extends StatelessWidget {
         data['pnr']?.toString().trim() ?? '';
     final String eTicket =
         data['eTicketNumber']?.toString().trim() ?? '';
+    final String token =
+        data['qrVerificationToken']?.toString().trim() ?? '';
     final double total =
         _number(data['totalFare']);
-
-    final bool validIssuedTicket =
+    final bool isDemoTicket =
+        data['isDemoTicket'] == true ||
+        data['quoteSource']?.toString() == 'demo';
+    final bool demoIssuedTicket =
+        isDemoTicket &&
         providerVerified &&
+        paymentStatus == 'paid' &&
+        ticketStatus == 'demo_issued' &&
+        pnr.isNotEmpty &&
+        eTicket.isNotEmpty &&
+        token.isNotEmpty;
+    final bool validIssuedTicket =
+        !isDemoTicket &&
+        providerVerified &&
+        paymentStatus == 'paid' &&
         ticketStatus == 'issued' &&
         pnr.isNotEmpty &&
-        eTicket.isNotEmpty;
+        eTicket.isNotEmpty &&
+        token.isNotEmpty;
 
     return Card(
       clipBehavior: Clip.antiAlias,
@@ -2019,7 +3071,9 @@ class MyFlightTicketsPage extends StatelessWidget {
                   label: Text(
                     validIssuedTicket
                         ? 'ISSUED'
-                        : 'NOT ISSUED',
+                        : (demoIssuedTicket
+                            ? 'DEMO ISSUED'
+                            : 'NOT ISSUED'),
                     style: const TextStyle(
                       fontSize: 10.5,
                       fontWeight: FontWeight.w900,
@@ -2078,10 +3132,76 @@ class MyFlightTicketsPage extends StatelessWidget {
                         fontWeight: FontWeight.w900,
                       ),
                     ),
-                    const SizedBox(height: 5),
+                    const SizedBox(height: 8),
+                    QrImageView(
+                      data: 'RDFLIGHT|$token',
+                      size: 170,
+                    ),
+                    const SizedBox(height: 8),
                     SelectableText('PNR: $pnr'),
                     SelectableText(
                       'E-ticket: $eTicket',
+                    ),
+                    SelectableText(
+                      'Verify Token: $token',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  ],
+                ),
+              )
+            else if (demoIssuedTicket)
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.orange
+                      .withValues(alpha: 0.10),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: Colors.orange
+                        .withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children: <Widget>[
+                    const Text(
+                      'DEMO / TEST — NOT VALID FOR TRAVEL',
+                      style: TextStyle(
+                        color: Colors.deepOrange,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 8),
+                    QrImageView(
+                      data: 'RDFLIGHT|$token',
+                      size: 170,
+                    ),
+                    const SizedBox(height: 8),
+                    SelectableText('Test PNR: $pnr'),
+                    SelectableText(
+                      'Test E-ticket: $eTicket',
+                    ),
+                    SelectableText(
+                      'Verify Token: $token',
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        fontSize: 11,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(height: 6),
+                    const Text(
+                      'This QR is only for RD app testing. The verifier '
+                      'must show NOT VALID FOR TRAVEL.',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                        height: 1.3,
+                      ),
                     ),
                   ],
                 ),
@@ -2104,9 +3224,22 @@ class MyFlightTicketsPage extends StatelessWidget {
                   ),
                 ),
               ),
+            if (bookingStatus != 'cancelled' &&
+                bookingStatus != 'refunded') ...<Widget>[
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: () => _requestCancellation(
+                  context,
+                  bookingId,
+                  data,
+                ),
+                icon: const Icon(Icons.cancel_outlined),
+                label: const Text('Request Cancellation / Refund'),
+              ),
+            ],
             const SizedBox(height: 9),
             SelectableText(
-              'Booking ID: $bookingId',
+              'Booking Code: $bookingCode\nBooking ID: $bookingId',
               style: TextStyle(
                 color: Colors.grey.shade700,
                 fontSize: 12,
@@ -2114,6 +3247,1190 @@ class MyFlightTicketsPage extends StatelessWidget {
             ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class AdminFlightTicketManagementPage extends StatefulWidget {
+  const AdminFlightTicketManagementPage({super.key});
+
+  @override
+  State<AdminFlightTicketManagementPage> createState() =>
+      _AdminFlightTicketManagementPageState();
+}
+
+class _AdminFlightTicketManagementPageState
+    extends State<AdminFlightTicketManagementPage> {
+  String _filter = 'all';
+
+  String _token(String bookingId) {
+    final Random random = Random.secure();
+    final String raw =
+        '$bookingId|${DateTime.now().microsecondsSinceEpoch}|'
+        '${random.nextInt(1 << 32)}|${random.nextInt(1 << 32)}';
+    return sha256
+        .convert(utf8.encode(raw))
+        .toString()
+        .substring(0, 32)
+        .toUpperCase();
+  }
+
+  Future<void> _verifyProvider(
+    DocumentReference<Map<String, dynamic>> ref,
+    Map<String, dynamic> data,
+  ) async {
+    String providerText =
+        data['providerName']?.toString().trim() ?? '';
+    String referenceText =
+        data['providerBookingReference']?.toString().trim() ?? '';
+
+    final bool? save = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('Verify Official Provider'),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            TextFormField(
+              initialValue: providerText,
+              decoration: const InputDecoration(
+                labelText: 'Provider / Airline System',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (String value) {
+                providerText = value.trim();
+              },
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              initialValue: referenceText,
+              decoration: const InputDecoration(
+                labelText: 'Provider Booking Reference',
+                border: OutlineInputBorder(),
+              ),
+              onChanged: (String value) {
+                referenceText = value.trim();
+              },
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: const Text('Verify'),
+          ),
+        ],
+      ),
+    );
+
+    if (save != true) return;
+    if (providerText.isEmpty || referenceText.isEmpty) {
+      _message('Provider name and booking reference are required.');
+      return;
+    }
+
+    try {
+      await ref.update(<String, dynamic>{
+        'providerVerified': true,
+        'providerName': providerText,
+        'providerBookingReference': referenceText,
+        'bookingStatus': 'provider_confirmed',
+        'fraudReviewStatus': 'reviewed',
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      _message('Provider verification saved.');
+    } on FirebaseException catch (error) {
+      _message(
+        'Could not verify provider: ${error.message ?? error.code}',
+      );
+    }
+  }
+
+  Future<void> _markPaid(
+    DocumentReference<Map<String, dynamic>> ref,
+  ) async {
+    await ref.update(<String, dynamic>{
+      'paymentStatus': 'paid',
+      'paymentConfirmedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    _message('Payment marked Paid.');
+  }
+
+  Future<void> _issueTicket(
+    DocumentReference<Map<String, dynamic>> ref,
+    Map<String, dynamic> data,
+  ) async {
+    if (data['providerVerified'] != true) {
+      _message('Verify the official provider first.');
+      return;
+    }
+    if (data['paymentStatus'] != 'paid') {
+      _message('Confirm payment before issuing ticket.');
+      return;
+    }
+
+    final String quoteSource =
+        data['quoteSource']?.toString().trim().toLowerCase() ?? '';
+    final String airlineName =
+        data['airlineName']?.toString().trim() ?? '';
+    final bool isDemoBooking =
+        quoteSource == 'demo' ||
+        airlineName.toLowerCase().startsWith('rd demo');
+
+    String pnrText = data['pnr']?.toString().trim() ?? '';
+    String ticketText =
+        data['eTicketNumber']?.toString().trim() ?? '';
+
+    final bool? issue = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: Text(
+          isDemoBooking
+              ? 'Issue Demo / Test Flight Ticket'
+              : 'Issue Official Flight Ticket',
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            Text(
+              isDemoBooking
+                  ? 'This booking came from a DEMO quote. Enter test PNR '
+                      'and test e-ticket values only. The resulting QR will '
+                      'be marked DEMO / NOT VALID FOR TRAVEL.'
+                  : 'Enter only the real PNR and e-ticket received from '
+                      'the authorized airline/provider.',
+              style: const TextStyle(fontWeight: FontWeight.w700),
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              initialValue: pnrText,
+              decoration: InputDecoration(
+                labelText: isDemoBooking ? 'Test PNR' : 'Real PNR',
+                border: const OutlineInputBorder(),
+              ),
+              onChanged: (String value) {
+                pnrText = value.trim();
+              },
+            ),
+            const SizedBox(height: 10),
+            TextFormField(
+              initialValue: ticketText,
+              decoration: InputDecoration(
+                labelText: isDemoBooking
+                    ? 'Test E-ticket Number'
+                    : 'Real E-ticket Number',
+                border: const OutlineInputBorder(),
+              ),
+              onChanged: (String value) {
+                ticketText = value.trim();
+              },
+            ),
+          ],
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext, false),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () => Navigator.pop(dialogContext, true),
+            child: Text(isDemoBooking ? 'Issue Demo' : 'Issue'),
+          ),
+        ],
+      ),
+    );
+
+    if (issue != true) return;
+    if (pnrText.length < 4 || ticketText.length < 4) {
+      _message(
+        isDemoBooking
+            ? 'Enter a test PNR and test e-ticket number.'
+            : 'Valid PNR and e-ticket number are required.',
+      );
+      return;
+    }
+
+    final String token = _token(ref.id);
+    final String ticketStatus =
+        isDemoBooking ? 'demo_issued' : 'issued';
+    final String verifyStatus =
+        isDemoBooking ? 'demo_issued' : 'issued';
+
+    try {
+      final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+      batch.update(ref, <String, dynamic>{
+        'pnr': pnrText,
+        'eTicketNumber': ticketText,
+        'qrVerificationToken': token,
+        'bookingStatus': 'confirmed',
+        'ticketStatus': ticketStatus,
+        'isDemoTicket': isDemoBooking,
+        'issuedAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+
+      batch.set(
+        FirebaseFirestore.instance
+            .collection('flight_ticket_public_verify')
+            .doc(token),
+        <String, dynamic>{
+          'verifyToken': token,
+          'bookingId': ref.id,
+          'bookingCode':
+              data['bookingCode']?.toString() ?? ref.id,
+          'status': verifyStatus,
+          'isDemoTicket': isDemoBooking,
+          'quoteSource': quoteSource,
+          'providerVerified': true,
+          'paymentStatus': 'paid',
+          'pnr': pnrText,
+          'eTicketNumber': ticketText,
+          'airlineName': airlineName,
+          'flightNumber': data['flightNumber']?.toString() ?? '',
+          'from': data['from']?.toString() ?? '',
+          'to': data['to']?.toString() ?? '',
+          'fromCode': data['fromCode']?.toString() ?? '',
+          'toCode': data['toCode']?.toString() ?? '',
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      await batch.commit();
+
+      if (!mounted) return;
+
+      _message(
+        isDemoBooking
+            ? 'Demo flight ticket issued for testing. NOT VALID FOR TRAVEL.'
+            : 'Flight ticket issued with QR verification.',
+      );
+    } on FirebaseException catch (error) {
+      if (!mounted) return;
+      _message(
+        'Could not issue flight ticket: ${error.message ?? error.code}',
+      );
+    } catch (error) {
+      if (!mounted) return;
+      _message('Could not issue flight ticket: $error');
+    }
+  }
+
+  Future<void> _cancel(
+    DocumentReference<Map<String, dynamic>> ref,
+    Map<String, dynamic> data,
+  ) async {
+    final String token =
+        data['qrVerificationToken']?.toString().trim() ?? '';
+    final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+    batch.update(ref, <String, dynamic>{
+      'bookingStatus': 'cancelled',
+      'ticketStatus': 'cancelled',
+      'refundStatus': data['paymentStatus'] == 'paid'
+          ? 'pending'
+          : 'not_required',
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+
+    if (token.isNotEmpty) {
+      batch.set(
+        FirebaseFirestore.instance
+            .collection('flight_ticket_public_verify')
+            .doc(token),
+        <String, dynamic>{
+          'status': 'cancelled',
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    }
+
+    await batch.commit();
+    _message('Flight booking cancelled.');
+  }
+
+  Future<void> _markRefunded(
+    DocumentReference<Map<String, dynamic>> ref,
+  ) async {
+    await ref.update(<String, dynamic>{
+      'paymentStatus': 'refunded',
+      'bookingStatus': 'refunded',
+      'refundedAt': FieldValue.serverTimestamp(),
+      'updatedAt': FieldValue.serverTimestamp(),
+    });
+    _message('Refund marked complete.');
+  }
+
+  bool _show(Map<String, dynamic> data) {
+    if (data['serviceType'] != 'flight') return false;
+    final String booking = data['bookingStatus']?.toString() ?? '';
+    final String ticket = data['ticketStatus']?.toString() ?? '';
+    return _filter == 'all' ||
+        (_filter == 'requests' && booking == 'request_submitted') ||
+        (_filter == 'confirmed' && booking == 'confirmed') ||
+        (_filter == 'issued' &&
+            (ticket == 'issued' || ticket == 'demo_issued')) ||
+        (_filter == 'cancelled' &&
+            (booking == 'cancelled' || booking == 'refunded'));
+  }
+
+  void _message(String text) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(text)),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFFF7F8FA),
+      appBar: AppBar(
+        title: const Text(
+          'Flight Ticket Management',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+        centerTitle: true,
+        actions: <Widget>[
+          IconButton(
+            tooltip: 'Cancellation / Refund Requests',
+            onPressed: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    const AdminFlightCancellationRequestsPage(),
+              ),
+            ),
+            icon: const Icon(
+              Icons.assignment_return_outlined,
+            ),
+          ),
+        ],
+      ),
+      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance
+            .collection('ticket_bookings')
+            .snapshots(),
+        builder: (
+          BuildContext context,
+          AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot,
+        ) {
+          if (snapshot.connectionState == ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                'Could not load flight bookings.\n${snapshot.error}',
+                textAlign: TextAlign.center,
+              ),
+            );
+          }
+
+          final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
+              <QueryDocumentSnapshot<Map<String, dynamic>>>[
+            ...?snapshot.data?.docs,
+          ].where(
+            (QueryDocumentSnapshot<Map<String, dynamic>> doc) =>
+                _show(doc.data()),
+          ).toList();
+
+          return Column(
+            children: <Widget>[
+              SingleChildScrollView(
+                scrollDirection: Axis.horizontal,
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  children: <String>[
+                    'all',
+                    'requests',
+                    'confirmed',
+                    'issued',
+                    'cancelled',
+                  ].map(
+                    (String value) => Padding(
+                      padding: const EdgeInsets.only(right: 8),
+                      child: ChoiceChip(
+                        label: Text(value.toUpperCase()),
+                        selected: _filter == value,
+                        onSelected: (_) {
+                          setState(() {
+                            _filter = value;
+                          });
+                        },
+                      ),
+                    ),
+                  ).toList(),
+                ),
+              ),
+              Expanded(
+                child: docs.isEmpty
+                    ? const Center(
+                        child: Text('No flight bookings in this filter.'),
+                      )
+                    : ListView.separated(
+                        padding: const EdgeInsets.all(12),
+                        itemCount: docs.length,
+                        separatorBuilder: (_, __) =>
+                            const SizedBox(height: 10),
+                        itemBuilder: (
+                          BuildContext context,
+                          int index,
+                        ) {
+                          final QueryDocumentSnapshot<Map<String, dynamic>>
+                              doc = docs[index];
+                          final Map<String, dynamic> data = doc.data();
+                          final bool providerVerified =
+                              data['providerVerified'] == true;
+                          final bool paid = data['paymentStatus'] == 'paid';
+                          final String ticketStatus =
+                              data['ticketStatus']?.toString() ?? '';
+                          final bool issued =
+                              ticketStatus == 'issued' ||
+                              ticketStatus == 'demo_issued';
+                          final bool cancelled =
+                              data['bookingStatus'] == 'cancelled';
+                          final bool refunded =
+                              data['paymentStatus'] == 'refunded';
+
+                          return Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(14),
+                              child: Column(
+                                crossAxisAlignment:
+                                    CrossAxisAlignment.stretch,
+                                children: <Widget>[
+                                  SelectableText(
+                                    'Booking: ${data['bookingCode'] ?? doc.id}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 4),
+                                  Text(
+                                    '${data['airlineName'] ?? ''} '
+                                    '${data['flightNumber'] ?? ''}',
+                                    style: const TextStyle(
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.w900,
+                                    ),
+                                  ),
+                                  Text(
+                                    '${data['fromCode'] ?? data['from'] ?? ''} '
+                                    '→ ${data['toCode'] ?? data['to'] ?? ''}',
+                                    style: const TextStyle(
+                                      fontWeight: FontWeight.w800,
+                                    ),
+                                  ),
+                                  Text('Booking: ${data['bookingStatus'] ?? ''}'),
+                                  Text('Payment: ${data['paymentStatus'] ?? ''}'),
+                                  Text('Provider verified: $providerVerified'),
+                                  Text('Ticket: ${data['ticketStatus'] ?? ''}'),
+                                  Text('Total: Rs. ${data['totalFare'] ?? 0}'),
+                                  const SizedBox(height: 10),
+                                  Wrap(
+                                    spacing: 8,
+                                    runSpacing: 8,
+                                    children: <Widget>[
+                                      if (!providerVerified && !cancelled)
+                                        FilledButton.tonalIcon(
+                                          onPressed: () => _verifyProvider(
+                                            doc.reference,
+                                            data,
+                                          ),
+                                          icon: const Icon(
+                                            Icons.domain_verification_rounded,
+                                          ),
+                                          label: const Text('Verify Provider'),
+                                        ),
+                                      if (!paid && !cancelled && !refunded)
+                                        FilledButton.tonalIcon(
+                                          onPressed: () =>
+                                              _markPaid(doc.reference),
+                                          icon: const Icon(Icons.payments_rounded),
+                                          label: const Text('Confirm Payment'),
+                                        ),
+                                      if (providerVerified &&
+                                          paid &&
+                                          !issued &&
+                                          !cancelled)
+                                        FilledButton.icon(
+                                          onPressed: () => _issueTicket(
+                                            doc.reference,
+                                            data,
+                                          ),
+                                          icon: const Icon(
+                                            Icons.airplane_ticket_rounded,
+                                          ),
+                                          label: const Text('Issue Ticket'),
+                                        ),
+                                      if (!cancelled && !refunded)
+                                        OutlinedButton.icon(
+                                          onPressed: () => _cancel(
+                                            doc.reference,
+                                            data,
+                                          ),
+                                          icon: const Icon(Icons.cancel_outlined),
+                                          label: const Text('Cancel'),
+                                        ),
+                                      if (cancelled && paid && !refunded)
+                                        OutlinedButton.icon(
+                                          onPressed: () =>
+                                              _markRefunded(doc.reference),
+                                          icon: const Icon(
+                                            Icons.currency_exchange_rounded,
+                                          ),
+                                          label: const Text('Mark Refunded'),
+                                        ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+}
+
+
+class AdminFlightCancellationRequestsPage
+    extends StatelessWidget {
+  const AdminFlightCancellationRequestsPage({super.key});
+
+  Future<void> _setRequestStatus(
+    BuildContext context,
+    QueryDocumentSnapshot<Map<String, dynamic>> requestDoc,
+    String status,
+  ) async {
+    final Map<String, dynamic> request = requestDoc.data();
+    final String bookingId =
+        request['bookingId']?.toString() ?? '';
+
+    if (bookingId.isEmpty) {
+      return;
+    }
+
+    final DocumentReference<Map<String, dynamic>> bookingRef =
+        FirebaseFirestore.instance
+            .collection('ticket_bookings')
+            .doc(bookingId);
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> bookingDoc =
+          await bookingRef.get();
+      final Map<String, dynamic> booking =
+          bookingDoc.data() ?? <String, dynamic>{};
+      final String token =
+          booking['qrVerificationToken']?.toString().trim() ?? '';
+
+      final WriteBatch batch =
+          FirebaseFirestore.instance.batch();
+
+      batch.update(
+        requestDoc.reference,
+        <String, dynamic>{
+          'status': status,
+          'reviewedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      if (status == 'approved' && bookingDoc.exists) {
+        batch.update(
+          bookingRef,
+          <String, dynamic>{
+            'bookingStatus': 'cancelled',
+            'ticketStatus': 'cancelled',
+            'refundStatus':
+                booking['paymentStatus'] == 'paid'
+                    ? 'pending'
+                    : 'not_required',
+            'cancelledAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+
+        if (token.isNotEmpty) {
+          batch.set(
+            FirebaseFirestore.instance
+                .collection('flight_ticket_public_verify')
+                .doc(token),
+            <String, dynamic>{
+              'status': 'cancelled',
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+            SetOptions(merge: true),
+          );
+        }
+      }
+
+      await batch.commit();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              status == 'approved'
+                  ? 'Cancellation request approved.'
+                  : 'Cancellation request rejected.',
+            ),
+          ),
+        );
+      }
+    } on FirebaseException catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not update request: '
+              '${error.message ?? error.code}',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Flight Cancellation / Refund',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+      body: StreamBuilder<
+          QuerySnapshot<Map<String, dynamic>>>(
+        stream: FirebaseFirestore.instance
+            .collection('flight_cancellation_requests')
+            .snapshots(),
+        builder: (
+          BuildContext context,
+          AsyncSnapshot<
+                  QuerySnapshot<Map<String, dynamic>>>
+              snapshot,
+        ) {
+          if (snapshot.connectionState ==
+                  ConnectionState.waiting &&
+              !snapshot.hasData) {
+            return const Center(
+              child: CircularProgressIndicator(),
+            );
+          }
+
+          if (snapshot.hasError) {
+            return Center(
+              child: Text(
+                'Could not load cancellation requests.\n'
+                '${snapshot.error}',
+                textAlign: TextAlign.center,
+              ),
+            );
+          }
+
+          final List<
+                  QueryDocumentSnapshot<
+                      Map<String, dynamic>>>
+              docs = <QueryDocumentSnapshot<
+                  Map<String, dynamic>>>[
+            ...?snapshot.data?.docs,
+          ];
+
+          docs.sort(
+            (
+              QueryDocumentSnapshot<Map<String, dynamic>> a,
+              QueryDocumentSnapshot<Map<String, dynamic>> b,
+            ) {
+              final Timestamp? at =
+                  a.data()['createdAt'] as Timestamp?;
+              final Timestamp? bt =
+                  b.data()['createdAt'] as Timestamp?;
+              return (bt?.millisecondsSinceEpoch ?? 0)
+                  .compareTo(
+                at?.millisecondsSinceEpoch ?? 0,
+              );
+            },
+          );
+
+          if (docs.isEmpty) {
+            return const Center(
+              child: Text(
+                'No flight cancellation/refund requests.',
+                style: TextStyle(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+            );
+          }
+
+          return ListView.separated(
+            padding: const EdgeInsets.all(14),
+            itemCount: docs.length,
+            separatorBuilder: (_, __) =>
+                const SizedBox(height: 10),
+            itemBuilder: (
+              BuildContext context,
+              int index,
+            ) {
+              final QueryDocumentSnapshot<
+                      Map<String, dynamic>>
+                  doc = docs[index];
+              final Map<String, dynamic> data =
+                  doc.data();
+              final String status =
+                  data['status']?.toString() ?? 'pending';
+
+              return Card(
+                child: Padding(
+                  padding: const EdgeInsets.all(14),
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Text(
+                        '${data['airlineName'] ?? ''} '
+                        '${data['flightNumber'] ?? ''}',
+                        style: const TextStyle(
+                          fontSize: 17,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      Text(
+                        '${data['from'] ?? ''} → ${data['to'] ?? ''}',
+                      ),
+                      const SizedBox(height: 5),
+                      SelectableText(
+                        'Booking ID: ${data['bookingId'] ?? ''}',
+                      ),
+                      Text(
+                        'Reason: ${data['reason'] ?? ''}',
+                      ),
+                      Text(
+                        'Status: ${status.toUpperCase()}',
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
+                      if (status == 'pending') ...<Widget>[
+                        const SizedBox(height: 10),
+                        Wrap(
+                          spacing: 8,
+                          runSpacing: 8,
+                          children: <Widget>[
+                            FilledButton.icon(
+                              onPressed: () =>
+                                  _setRequestStatus(
+                                context,
+                                doc,
+                                'approved',
+                              ),
+                              icon: const Icon(
+                                Icons.check_circle_rounded,
+                              ),
+                              label: const Text('Approve'),
+                            ),
+                            OutlinedButton.icon(
+                              onPressed: () =>
+                                  _setRequestStatus(
+                                context,
+                                doc,
+                                'rejected',
+                              ),
+                              icon: const Icon(
+                                Icons.cancel_outlined,
+                              ),
+                              label: const Text('Reject'),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
+
+class FlightTicketVerifyPage extends StatefulWidget {
+  const FlightTicketVerifyPage({super.key});
+
+  @override
+  State<FlightTicketVerifyPage> createState() =>
+      _FlightTicketVerifyPageState();
+}
+
+class _FlightTicketVerifyPageState
+    extends State<FlightTicketVerifyPage> {
+  final TextEditingController _controller = TextEditingController();
+  bool _loading = false;
+  Map<String, dynamic>? _result;
+  String? _error;
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  bool get _cameraSupported {
+    if (kIsWeb) {
+      return true;
+    }
+
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS;
+  }
+
+  Future<void> _scanQr() async {
+    if (!_cameraSupported) {
+      setState(() {
+        _error =
+            'Camera QR scanning is not available on this platform. Enter the token manually.';
+        _result = null;
+      });
+      return;
+    }
+
+    final String? raw = await Navigator.push<String>(
+      context,
+      MaterialPageRoute<String>(
+        builder: (_) => const _FlightQrScannerPage(),
+      ),
+    );
+
+    if (!mounted || raw == null || raw.trim().isEmpty) {
+      return;
+    }
+
+    _controller.value = TextEditingValue(
+      text: raw.trim(),
+      selection: TextSelection.collapsed(
+        offset: raw.trim().length,
+      ),
+    );
+
+    await _verify();
+  }
+
+  String _token(String raw) {
+    final String value = raw.trim();
+    return value.startsWith('RDFLIGHT|')
+        ? value.substring(9).trim()
+        : value;
+  }
+
+  Future<void> _verify() async {
+    final String token = _token(_controller.text);
+    if (token.isEmpty) {
+      setState(() {
+        _error = 'Enter a flight verification token.';
+        _result = null;
+      });
+      return;
+    }
+
+    setState(() {
+      _loading = true;
+      _error = null;
+      _result = null;
+    });
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> doc =
+          await FirebaseFirestore.instance
+              .collection('flight_ticket_public_verify')
+              .doc(token)
+              .get();
+
+      if (!mounted) return;
+
+      if (!doc.exists) {
+        setState(() {
+          _error = 'Flight ticket verification record not found.';
+          _loading = false;
+        });
+        return;
+      }
+
+      setState(() {
+        _result = doc.data() ?? <String, dynamic>{};
+        _loading = false;
+      });
+    } on FirebaseException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.message ?? error.code;
+        _loading = false;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final Map<String, dynamic>? result = _result;
+    final bool isDemoTicket =
+        result?['isDemoTicket'] == true ||
+        result?['quoteSource']?.toString() == 'demo';
+    final bool valid = result != null &&
+        !isDemoTicket &&
+        result['status'] == 'issued' &&
+        result['providerVerified'] == true &&
+        result['paymentStatus'] == 'paid';
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Verify Flight Ticket',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+      ),
+      body: Center(
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 700),
+          child: ListView(
+            padding: const EdgeInsets.all(16),
+            children: <Widget>[
+              TextField(
+                controller: _controller,
+                decoration: const InputDecoration(
+                  labelText: 'QR / Verify Token',
+                  hintText: 'Paste RDFLIGHT token',
+                  prefixIcon: Icon(Icons.qr_code_scanner_rounded),
+                  border: OutlineInputBorder(),
+                ),
+                onSubmitted: (_) => _verify(),
+              ),
+              const SizedBox(height: 10),
+              Wrap(
+                spacing: 10,
+                runSpacing: 10,
+                children: <Widget>[
+                  FilledButton.icon(
+                    onPressed: _loading ? null : _verify,
+                    icon: _loading
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Icon(Icons.verified_rounded),
+                    label: const Text('Verify Ticket'),
+                  ),
+                  OutlinedButton.icon(
+                    onPressed:
+                        _loading || !_cameraSupported ? null : _scanQr,
+                    icon: const Icon(
+                      Icons.qr_code_scanner_rounded,
+                    ),
+                    label: Text(
+                      _cameraSupported
+                          ? 'Scan QR with Camera'
+                          : 'Camera Scanner Unavailable',
+                    ),
+                  ),
+                ],
+              ),
+              if (_error != null) ...<Widget>[
+                const SizedBox(height: 14),
+                Text(
+                  _error!,
+                  textAlign: TextAlign.center,
+                  style: const TextStyle(
+                    color: Colors.red,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+              ],
+              if (result != null) ...<Widget>[
+                const SizedBox(height: 16),
+                Card(
+                  child: Padding(
+                    padding: const EdgeInsets.all(16),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: <Widget>[
+                        Icon(
+                          valid
+                              ? Icons.verified_rounded
+                              : Icons.warning_amber_rounded,
+                          size: 54,
+                          color: valid ? Colors.green : Colors.orange,
+                        ),
+                        const SizedBox(height: 8),
+                        Text(
+                          valid
+                              ? 'VALID / ISSUED'
+                              : (isDemoTicket
+                                  ? 'DEMO / TEST — NOT VALID FOR TRAVEL'
+                                  : 'NOT VALID FOR TRAVEL'),
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            color: valid ? Colors.green : Colors.orange,
+                            fontSize: 20,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                        const Divider(height: 24),
+                        SelectableText(
+                          'Booking Code: ${result['bookingCode'] ?? ''}',
+                        ),
+                        SelectableText(
+                          'Booking ID: ${result['bookingId'] ?? ''}',
+                        ),
+                        SelectableText('PNR: ${result['pnr'] ?? ''}'),
+                        SelectableText(
+                          'E-ticket: ${result['eTicketNumber'] ?? ''}',
+                        ),
+                        Text(
+                          'Flight: ${result['airlineName'] ?? ''} '
+                          '${result['flightNumber'] ?? ''}',
+                        ),
+                        Text(
+                          'Route: ${result['fromCode'] ?? result['from'] ?? ''} '
+                          '→ ${result['toCode'] ?? result['to'] ?? ''}',
+                        ),
+                        Text(
+                          'Payment: ${result['paymentStatus'] ?? ''}',
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ],
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+
+class _FlightQrScannerPage extends StatefulWidget {
+  const _FlightQrScannerPage();
+
+  @override
+  State<_FlightQrScannerPage> createState() =>
+      _FlightQrScannerPageState();
+}
+
+class _FlightQrScannerPageState
+    extends State<_FlightQrScannerPage> {
+  final MobileScannerController _scannerController =
+      MobileScannerController(
+    formats: const <BarcodeFormat>[
+      BarcodeFormat.qrCode,
+    ],
+  );
+
+  bool _returned = false;
+
+  @override
+  void dispose() {
+    _scannerController.dispose();
+    super.dispose();
+  }
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_returned || capture.barcodes.isEmpty) {
+      return;
+    }
+
+    final String? raw =
+        capture.barcodes.first.rawValue;
+
+    if (raw == null || raw.trim().isEmpty) {
+      return;
+    }
+
+    _returned = true;
+    Navigator.pop<String>(
+      context,
+      raw.trim(),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Scan Flight Ticket QR',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+      ),
+      body: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          MobileScanner(
+            controller: _scannerController,
+            onDetect: _onDetect,
+          ),
+          Center(
+            child: IgnorePointer(
+              child: Container(
+                width: 250,
+                height: 250,
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: Colors.white,
+                    width: 3,
+                  ),
+                  borderRadius:
+                      BorderRadius.circular(18),
+                ),
+              ),
+            ),
+          ),
+          const Align(
+            alignment: Alignment.bottomCenter,
+            child: SafeArea(
+              child: Padding(
+                padding: EdgeInsets.all(20),
+                child: Card(
+                  child: Padding(
+                    padding: EdgeInsets.all(12),
+                    child: Text(
+                      'Place the RD Flight Ticket QR inside the frame.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w800,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -2133,7 +4450,15 @@ class _DemoFlightQuote {
     required this.serviceFee,
     required this.baggage,
     required this.refundable,
+    required this.changeable,
     required this.seatsLeft,
+    required this.stops,
+    required this.aircraft,
+    required this.fareFamily,
+    required this.departureTerminal,
+    required this.arrivalTerminal,
+    required this.cancellationPolicy,
+    required this.durationMinutes,
     required this.quoteExpiresAt,
   });
 
@@ -2149,7 +4474,15 @@ class _DemoFlightQuote {
   final double serviceFee;
   final String baggage;
   final bool refundable;
+  final bool changeable;
   final int seatsLeft;
+  final int stops;
+  final String aircraft;
+  final String fareFamily;
+  final String departureTerminal;
+  final String arrivalTerminal;
+  final String cancellationPolicy;
+  final int durationMinutes;
   final DateTime quoteExpiresAt;
 
   double baseFareTotal(int passengerCount) =>
