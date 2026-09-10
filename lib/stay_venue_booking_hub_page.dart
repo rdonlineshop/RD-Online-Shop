@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import 'hotel_booking_page.dart';
+
 class StayVenueBookingHubPage extends StatelessWidget {
   const StayVenueBookingHubPage({super.key});
 
@@ -87,6 +89,16 @@ class StayVenueBookingHubPage extends StatelessWidget {
     BuildContext context,
     StayVenueCategory category,
   ) {
+    if (category.title == 'Hotel') {
+      Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) => const HotelBookingPage(),
+        ),
+      );
+      return;
+    }
+
     Navigator.push<void>(
       context,
       MaterialPageRoute<void>(

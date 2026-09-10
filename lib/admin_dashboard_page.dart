@@ -6,6 +6,8 @@ import 'package:flutter/material.dart';
 
 import 'admin_bus_operator_management_page.dart';
 import 'admin_bus_ticket_management_page.dart';
+import 'admin_hotel_partner_management_page.dart';
+import 'admin_hotel_management_page.dart';
 import 'admin_earnings_page.dart';
 import 'admin_notification_center_page.dart';
 import 'admin_order_page.dart';
@@ -477,6 +479,28 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               context,
               MaterialPageRoute<void>(
                 builder: (_) => const AdminSellerPage(),
+              ),
+            ),
+          ),
+          _dashboardCard(
+            icon: Icons.hotel_class_rounded,
+            title: 'Hotel Partners',
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    const AdminHotelPartnerManagementPage(),
+              ),
+            ),
+          ),
+          _dashboardCard(
+            icon: Icons.apartment_rounded,
+            title: 'Hotels',
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    const AdminHotelManagementPage(),
               ),
             ),
           ),
