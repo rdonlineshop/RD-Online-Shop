@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'hotel_booking_page.dart';
+import 'hotel_partner_auth_page.dart';
 
 class StayVenueBookingHubPage extends StatelessWidget {
   const StayVenueBookingHubPage({super.key});
@@ -121,6 +122,20 @@ class StayVenueBookingHubPage extends StatelessWidget {
           ),
         ),
         centerTitle: true,
+        actions: <Widget>[
+          IconButton(
+            tooltip: 'Hotel Partner Login',
+            onPressed: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) => const HotelPartnerAuthPage(),
+              ),
+            ),
+            icon: const Icon(
+              Icons.business_center_rounded,
+            ),
+          ),
+        ],
       ),
       body: SafeArea(
         child: LayoutBuilder(

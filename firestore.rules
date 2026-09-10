@@ -86,6 +86,26 @@ service cloud.firestore {
         && busOperatorData().isActive == true;
     }
 
+
+    // ============================================================
+    // RD HOTEL PARTNER HELPERS
+    // ============================================================
+    function hotelPartnerData() {
+      return get(
+        /databases/$(database)/documents/hotel_partners/$(request.auth.uid)
+      ).data;
+    }
+
+    function isActiveHotelPartner() {
+      return signedIn()
+        && exists(
+          /databases/$(database)/documents/hotel_partners/$(request.auth.uid)
+        )
+        && hotelPartnerData().role == 'hotel_partner'
+        && hotelPartnerData().isApproved == true
+        && hotelPartnerData().isActive == true;
+    }
+
     match /admins/{adminId} {
       allow read: if signedIn() && request.auth.uid == adminId;
       allow read: if isAdmin();
@@ -2648,6 +2668,435 @@ service cloud.firestore {
               == 'refund_pending'
           )
         );
+
+      allow delete: if false;
+    }
+
+
+    // ============================================================
+    // RD HOTEL PARTNERS
+    // ============================================================
+    match /hotel_partners/{partnerId} {
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && request.auth.uid == partnerId
+        );
+
+      allow create: if signedIn()
+        && request.auth.uid == partnerId
+        && request.resource.data.partnerId == request.auth.uid
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.role == 'hotel_partner'
+        && request.resource.data.isApproved == false
+        && request.resource.data.isActive == false
+        && request.resource.data.status == 'pending'
+        && request.resource.data.ownerName is string
+        && request.resource.data.ownerName.size() > 0
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 7
+        && request.resource.data.phone.size() <= 30;
+
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && request.auth.uid == partnerId
+          && request.resource.data.partnerId == resource.data.partnerId
+          && request.resource.data.authUid == resource.data.authUid
+          && request.resource.data.role == resource.data.role
+          && request.resource.data.isApproved == resource.data.isApproved
+          && request.resource.data.isActive == resource.data.isActive
+          && request.resource.data.status == resource.data.status
+          && request.resource.data
+            .diff(resource.data)
+            .affectedKeys()
+            .hasOnly([
+              'businessName',
+              'ownerName',
+              'phone',
+              'email',
+              'address',
+              'registrationNumber',
+              'panVatNumber',
+              'photoUrl',
+              'documentUrls',
+              'bankName',
+              'bankAccountName',
+              'bankAccountNumber',
+              'latitude',
+              'longitude',
+              'locationUpdatedAt',
+              'lastLoginAt',
+              'updatedAt'
+            ])
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // ============================================================
+    // RD HOTELS
+    // ============================================================
+    match /hotels/{hotelId} {
+      function ownsHotel() {
+        return isActiveHotelPartner()
+          && resource.data.partnerId == request.auth.uid;
+      }
+
+      function ownsNewHotel() {
+        return isActiveHotelPartner()
+          && request.resource.data.partnerId == request.auth.uid;
+      }
+
+      allow read: if isAdmin()
+        || ownsHotel()
+        || (
+          signedIn()
+          && resource.data.isApproved == true
+          && resource.data.isActive == true
+        );
+
+      allow create: if ownsNewHotel()
+        && request.resource.data.hotelId == hotelId
+        && request.resource.data.isApproved == false
+        && request.resource.data.isActive == false
+        && request.resource.data.status == 'pending'
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.location is string
+        && request.resource.data.phone is string
+        && request.resource.data.phone.size() >= 7;
+
+      allow update: if isAdmin()
+        || (
+          ownsHotel()
+          && request.resource.data.hotelId == resource.data.hotelId
+          && request.resource.data.partnerId == resource.data.partnerId
+          && request.resource.data.isApproved == resource.data.isApproved
+          && request.resource.data.isActive == resource.data.isActive
+          && request.resource.data.status == resource.data.status
+          && request.resource.data
+            .diff(resource.data)
+            .affectedKeys()
+            .hasOnly([
+              'name',
+              'description',
+              'location',
+              'address',
+              'city',
+              'area',
+              'phone',
+              'email',
+              'coverUrl',
+              'profileUrl',
+              'photoUrls',
+              'facilities',
+              'latitude',
+              'longitude',
+              'checkInTime',
+              'checkOutTime',
+              'cancellationPolicy',
+              'houseRules',
+              'updatedAt'
+            ])
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // ============================================================
+    // RD HOTEL ROOMS
+    // ============================================================
+    match /hotel_rooms/{roomId} {
+      function roomHotelExists() {
+        return resource.data.hotelId is string
+          && exists(
+            /databases/$(database)/documents/hotels/$(resource.data.hotelId)
+          );
+      }
+
+      function roomHotelData() {
+        return get(
+          /databases/$(database)/documents/hotels/$(resource.data.hotelId)
+        ).data;
+      }
+
+      function newRoomHotelExists() {
+        return request.resource.data.hotelId is string
+          && exists(
+            /databases/$(database)/documents/hotels/$(request.resource.data.hotelId)
+          );
+      }
+
+      function newRoomHotelData() {
+        return get(
+          /databases/$(database)/documents/hotels/$(request.resource.data.hotelId)
+        ).data;
+      }
+
+      function ownsRoom() {
+        return isActiveHotelPartner()
+          && resource.data.partnerId == request.auth.uid;
+      }
+
+      allow read: if isAdmin()
+        || ownsRoom()
+        || (
+          signedIn()
+          && resource.data.isActive == true
+          && roomHotelExists()
+          && roomHotelData().isApproved == true
+          && roomHotelData().isActive == true
+        );
+
+      allow create: if isActiveHotelPartner()
+        && request.resource.data.roomId == roomId
+        && request.resource.data.partnerId == request.auth.uid
+        && newRoomHotelExists()
+        && newRoomHotelData().partnerId == request.auth.uid
+        && newRoomHotelData().isApproved == true
+        && newRoomHotelData().isActive == true
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.pricePerNight is number
+        && request.resource.data.pricePerNight >= 0
+        && request.resource.data.totalRooms is int
+        && request.resource.data.totalRooms >= 1
+        && request.resource.data.isActive == true;
+
+      allow update: if isAdmin()
+        || (
+          ownsRoom()
+          && request.resource.data.roomId == resource.data.roomId
+          && request.resource.data.hotelId == resource.data.hotelId
+          && request.resource.data.partnerId == resource.data.partnerId
+          && request.resource.data
+            .diff(resource.data)
+            .affectedKeys()
+            .hasOnly([
+              'name',
+              'description',
+              'roomClass',
+              'isAc',
+              'bed',
+              'maxGuests',
+              'pricePerNight',
+              'totalRooms',
+              'photoUrl',
+              'photoUrls',
+              'facilities',
+              'breakfastIncluded',
+              'freeCancellation',
+              'isActive',
+              'updatedAt'
+            ])
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // ============================================================
+    // RD HOTEL DATE-WISE ROOM INVENTORY
+    // ============================================================
+    match /hotel_room_inventory/{inventoryId} {
+      function validInventoryCounts() {
+        return request.resource.data.totalRooms is int
+          && request.resource.data.blockedRooms is int
+          && request.resource.data.bookedRooms is int
+          && request.resource.data.availableRooms is int
+          && request.resource.data.totalRooms >= 0
+          && request.resource.data.blockedRooms >= 0
+          && request.resource.data.bookedRooms >= 0
+          && request.resource.data.availableRooms >= 0
+          && request.resource.data.blockedRooms
+            + request.resource.data.bookedRooms
+            + request.resource.data.availableRooms
+            == request.resource.data.totalRooms;
+      }
+
+      function ownsNewInventory() {
+        return isActiveHotelPartner()
+          && request.resource.data.partnerId == request.auth.uid;
+      }
+
+      function ownsInventory() {
+        return isActiveHotelPartner()
+          && resource.data.partnerId == request.auth.uid;
+      }
+
+      allow read: if signedIn();
+
+      allow create: if isAdmin()
+        || (
+          ownsNewInventory()
+          && request.resource.data.inventoryId == inventoryId
+          && request.resource.data.hotelId is string
+          && request.resource.data.roomId is string
+          && request.resource.data.date is timestamp
+          && request.resource.data.isOpen is bool
+          && validInventoryCounts()
+        );
+
+      allow update: if isAdmin()
+        || (
+          ownsInventory()
+          && request.resource.data.inventoryId == resource.data.inventoryId
+          && request.resource.data.hotelId == resource.data.hotelId
+          && request.resource.data.roomId == resource.data.roomId
+          && request.resource.data.partnerId == resource.data.partnerId
+          && request.resource.data.date == resource.data.date
+          && request.resource.data.isOpen is bool
+          && validInventoryCounts()
+          && request.resource.data
+            .diff(resource.data)
+            .affectedKeys()
+            .hasOnly([
+              'totalRooms',
+              'blockedRooms',
+              'bookedRooms',
+              'availableRooms',
+              'isOpen',
+              'lastBookingId',
+              'updatedAt'
+            ])
+        );
+
+      allow delete: if isAdmin();
+    }
+
+    // ============================================================
+    // RD HOTEL BOOKINGS
+    // ============================================================
+    match /hotel_bookings/{bookingId} {
+      function hotelBookingOwner() {
+        return signedIn()
+          && resource.data.customerAuthUid == request.auth.uid;
+      }
+
+      function hotelPartnerOwnBooking() {
+        return isActiveHotelPartner()
+          && resource.data.partnerId == request.auth.uid;
+      }
+
+      function bookingHotelExists() {
+        return request.resource.data.hotelId is string
+          && exists(
+            /databases/$(database)/documents/hotels/$(request.resource.data.hotelId)
+          );
+      }
+
+      function bookingHotelData() {
+        return get(
+          /databases/$(database)/documents/hotels/$(request.resource.data.hotelId)
+        ).data;
+      }
+
+      function bookingRoomExists() {
+        return request.resource.data.roomId is string
+          && exists(
+            /databases/$(database)/documents/hotel_rooms/$(request.resource.data.roomId)
+          );
+      }
+
+      function bookingRoomData() {
+        return get(
+          /databases/$(database)/documents/hotel_rooms/$(request.resource.data.roomId)
+        ).data;
+      }
+
+      allow read: if isAdmin()
+        || hotelBookingOwner()
+        || hotelPartnerOwnBooking();
+
+      allow create: if signedIn()
+        && request.resource.data.bookingId == bookingId
+        && request.resource.data.serviceType == 'hotel'
+        && request.resource.data.customerAuthUid == request.auth.uid
+        && request.resource.data.customerId is string
+        && bookingHotelExists()
+        && bookingRoomExists()
+        && bookingHotelData().isApproved == true
+        && bookingHotelData().isActive == true
+        && bookingRoomData().isActive == true
+        && request.resource.data.partnerId == bookingHotelData().partnerId
+        && request.resource.data.partnerId == bookingRoomData().partnerId
+        && request.resource.data.hotelId == bookingRoomData().hotelId
+        && request.resource.data.checkIn is timestamp
+        && request.resource.data.checkOut is timestamp
+        && request.resource.data.checkOut > request.resource.data.checkIn
+        && request.resource.data.roomCount is int
+        && request.resource.data.roomCount >= 1
+        && request.resource.data.roomCount <= bookingRoomData().totalRooms
+        && request.resource.data.guestName is string
+        && request.resource.data.guestName.size() >= 2
+        && request.resource.data.guestPhone is string
+        && request.resource.data.guestPhone.size() >= 7
+        && request.resource.data.pricePerNight == bookingRoomData().pricePerNight
+        && request.resource.data.totalAmount is number
+        && request.resource.data.totalAmount >= 0
+        && request.resource.data.currency == 'Rs.'
+        && request.resource.data.paymentOption
+          in ['pay_at_hotel', 'online']
+        && (
+          (
+            request.resource.data.paymentOption == 'pay_at_hotel'
+            && request.resource.data.paymentStatus == 'pay_at_hotel_pending'
+          )
+          || (
+            request.resource.data.paymentOption == 'online'
+            && request.resource.data.paymentStatus == 'online_pending'
+          )
+        )
+        && request.resource.data.bookingStatus == 'request_submitted'
+        && request.resource.data.confirmationStatus == 'pending'
+        && request.resource.data.get('partnerConfirmed', false) == false
+        && request.resource.data.get('adminConfirmed', false) == false
+        && request.resource.data.get('refundStatus', 'none') == 'none'
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp;
+
+      allow update: if isAdmin();
+
+      allow update: if hotelPartnerOwnBooking()
+        && request.resource.data.bookingId == resource.data.bookingId
+        && request.resource.data.customerAuthUid == resource.data.customerAuthUid
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.hotelId == resource.data.hotelId
+        && request.resource.data.roomId == resource.data.roomId
+        && request.resource.data.partnerId == resource.data.partnerId
+        && request.resource.data.checkIn == resource.data.checkIn
+        && request.resource.data.checkOut == resource.data.checkOut
+        && request.resource.data.roomCount == resource.data.roomCount
+        && request.resource.data.pricePerNight == resource.data.pricePerNight
+        && request.resource.data.totalAmount == resource.data.totalAmount
+        && request.resource.data
+          .diff(resource.data)
+          .affectedKeys()
+          .hasOnly([
+            'bookingStatus',
+            'confirmationStatus',
+            'partnerConfirmed',
+            'confirmedAt',
+            'rejectionReason',
+            'rejectedAt',
+            'paymentStatus',
+            'paidAt',
+            'updatedAt'
+          ]);
+
+      allow update: if hotelBookingOwner()
+        && resource.data.bookingStatus
+          in ['request_submitted', 'confirmed']
+        && request.resource.data.bookingStatus == 'cancel_requested'
+        && request.resource.data
+          .diff(resource.data)
+          .affectedKeys()
+          .hasOnly([
+            'bookingStatus',
+            'cancellationReason',
+            'cancelRequestedAt',
+            'updatedAt'
+          ]);
 
       allow delete: if false;
     }
