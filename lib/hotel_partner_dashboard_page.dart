@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'hotel_partner_availability_page.dart';
 import 'hotel_partner_bookings_page.dart';
+import 'hotel_partner_fee_page.dart';
 import 'hotel_partner_profile_page.dart';
 import 'hotel_partner_rooms_page.dart';
 
@@ -221,7 +222,8 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                           const NeverScrollableScrollPhysics(),
                       crossAxisSpacing: 12,
                       mainAxisSpacing: 12,
-                      childAspectRatio: 1.18,
+                      childAspectRatio:
+                          columns == 2 ? 1.08 : 1.18,
                       children: <Widget>[
                         _card(
                           context,
@@ -280,6 +282,20 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                             ),
                           ),
                         ),
+                        _card(
+                          context,
+                          icon: Icons.account_balance_wallet_rounded,
+                          title: 'Fees & Payments',
+                          subtitle:
+                              'Invoices, outstanding balance and fee payment',
+                          onTap: () => Navigator.push<void>(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  const HotelPartnerFeePage(),
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -293,9 +309,8 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                       ),
                       child: const Text(
                         'Hotel management is connected to Firestore. '
-                        'Create the Hotel Profile first. After Admin approves '
-                        'the hotel, add room types, set date-wise availability '
-                        'and manage customer booking requests here.',
+                        'Manage profile, rooms, date-wise availability, '
+                        'customer bookings and RD Hotel fees from this dashboard.',
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           height: 1.4,

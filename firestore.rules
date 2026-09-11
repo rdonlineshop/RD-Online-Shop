@@ -3101,6 +3101,103 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+
+    // ============================================================
+    // RD HOTEL FEE SETTINGS
+    // Admin controls monthly fee, commission, due date and
+    // payment instructions. Approved Hotel Partners can read it.
+    // ============================================================
+    match /hotel_fee_settings/{settingId} {
+      allow read: if isAdmin()
+        || isActiveHotelPartner();
+
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ============================================================
+    // RD HOTEL FEE INVOICES
+    // Invoice calculation / status is Admin-controlled.
+    // A Hotel Partner can only read its own invoices.
+    // ============================================================
+    match /hotel_fee_invoices/{invoiceId} {
+      allow read: if isAdmin()
+        || (
+          isActiveHotelPartner()
+          && resource.data.partnerId == request.auth.uid
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
+
+    // ============================================================
+    // RD HOTEL FEE PAYMENTS
+    // Hotel Partner may submit payment proof only for an invoice
+    // that belongs to the same authenticated Hotel Partner.
+    // Verification / rejection is Admin-only.
+    // ============================================================
+    match /hotel_fee_payments/{paymentId} {
+      function feeInvoiceExists() {
+        return request.resource.data.invoiceId is string
+          && exists(
+            /databases/$(database)/documents/hotel_fee_invoices/$(request.resource.data.invoiceId)
+          );
+      }
+
+      function feeInvoiceData() {
+        return get(
+          /databases/$(database)/documents/hotel_fee_invoices/$(request.resource.data.invoiceId)
+        ).data;
+      }
+
+      allow read: if isAdmin()
+        || (
+          isActiveHotelPartner()
+          && resource.data.partnerId == request.auth.uid
+        );
+
+      allow create: if isAdmin()
+        || (
+          isActiveHotelPartner()
+          && request.resource.data.paymentId == paymentId
+          && request.resource.data.partnerId == request.auth.uid
+          && feeInvoiceExists()
+          && feeInvoiceData().partnerId == request.auth.uid
+          && request.resource.data.hotelId == feeInvoiceData().hotelId
+          && request.resource.data.billingMonth == feeInvoiceData().billingMonth
+          && request.resource.data.amount is number
+          && request.resource.data.amount > 0
+          && feeInvoiceData().status == 'unpaid'
+          && request.resource.data.amount
+            <= feeInvoiceData().totalDue - feeInvoiceData().paidAmount
+          && request.resource.data.method
+            in [
+              'bank_transfer',
+              'mobile_banking',
+              'ewallet',
+              'other'
+            ]
+          && request.resource.data.transactionRef is string
+          && request.resource.data.proofUrl is string
+          && request.resource.data.note is string
+          && request.resource.data.status == 'submitted'
+          && request.resource.data.submittedAt is timestamp
+          && request.resource.data.createdAt is timestamp
+          && request.resource.data.updatedAt is timestamp
+        );
+
+      allow update, delete: if isAdmin();
+    }
+
+    // ============================================================
+    // RD HOTEL FEE ADMIN AUDIT LOG
+    // Keeps a server-side Firestore history of fee settings,
+    // invoice, payment verification, cash and waive actions.
+    // ============================================================
+    match /hotel_fee_audit_logs/{logId} {
+      allow read, create: if isAdmin();
+      allow update, delete: if false;
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

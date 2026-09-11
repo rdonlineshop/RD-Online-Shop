@@ -8,6 +8,7 @@ import 'admin_bus_operator_management_page.dart';
 import 'admin_bus_ticket_management_page.dart';
 import 'admin_hotel_partner_management_page.dart';
 import 'admin_hotel_management_page.dart';
+import 'admin_hotel_fee_page.dart';
 import 'admin_earnings_page.dart';
 import 'admin_notification_center_page.dart';
 import 'admin_order_page.dart';
@@ -501,6 +502,17 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               MaterialPageRoute<void>(
                 builder: (_) =>
                     const AdminHotelManagementPage(),
+              ),
+            ),
+          ),
+          _dashboardCard(
+            icon: Icons.request_quote_rounded,
+            title: 'Hotel Fees',
+            onTap: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    const AdminHotelFeePage(),
               ),
             ),
           ),

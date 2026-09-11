@@ -32,7 +32,10 @@ class HotelCloudinaryService {
     );
 
     final http.MultipartRequest request =
-        http.MultipartRequest('POST', uri);
+        http.MultipartRequest(
+      'POST',
+      uri,
+    );
 
     request.fields['upload_preset'] =
         _uploadPreset;
@@ -42,7 +45,7 @@ class HotelCloudinaryService {
         'file',
         bytes,
         filename: image.name.isEmpty
-            ? 'rd_hotel_image.jpg'
+            ? 'rd_hotel_fee_proof.jpg'
             : image.name,
       ),
     );
