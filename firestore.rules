@@ -2978,6 +2978,94 @@ service cloud.firestore {
     }
 
     // ============================================================
+    // RD HOTEL DIRECT ONLINE PAYMENT ACCOUNTS
+    // These are customer-facing Hotel receiving details only.
+    // NEVER store merchant secret/API secret/PIN/OTP/password here.
+    // ============================================================
+    match /hotel_direct_payment_accounts/{partnerId} {
+      function directPaymentHotelExists() {
+        return exists(
+          /databases/$(database)/documents/hotels/$(partnerId)
+        );
+      }
+
+      function directPaymentHotelData() {
+        return get(
+          /databases/$(database)/documents/hotels/$(partnerId)
+        ).data;
+      }
+
+      function ownsDirectPaymentAccount() {
+        return isActiveHotelPartner()
+          && request.auth.uid == partnerId;
+      }
+
+      allow read: if isAdmin()
+        || ownsDirectPaymentAccount()
+        || (
+          signedIn()
+          && !isActiveHotelPartner()
+          && directPaymentHotelExists()
+          && directPaymentHotelData().isApproved == true
+          && directPaymentHotelData().isActive == true
+        );
+
+      allow create: if ownsDirectPaymentAccount()
+        && request.resource.data.partnerId == request.auth.uid
+        && request.resource.data.hotelId == request.auth.uid
+        && request.resource.data.enabled is bool
+        && request.resource.data
+          .keys()
+          .hasOnly([
+            'partnerId',
+            'hotelId',
+            'hotelName',
+            'enabled',
+            'esewaName',
+            'esewaNumber',
+            'khaltiName',
+            'khaltiNumber',
+            'bankName',
+            'bankAccountName',
+            'bankAccountNumber',
+            'connectIpsId',
+            'mobileBankingDetails',
+            'paymentQrUrl',
+            'instructions',
+            'createdAt',
+            'updatedAt'
+          ]);
+
+      allow update: if ownsDirectPaymentAccount()
+        && request.resource.data.partnerId == resource.data.partnerId
+        && request.resource.data.hotelId == resource.data.hotelId
+        && request.resource.data.enabled is bool
+        && request.resource.data
+          .diff(resource.data)
+          .affectedKeys()
+          .hasOnly([
+            'hotelName',
+            'enabled',
+            'esewaName',
+            'esewaNumber',
+            'khaltiName',
+            'khaltiNumber',
+            'bankName',
+            'bankAccountName',
+            'bankAccountNumber',
+            'connectIpsId',
+            'mobileBankingDetails',
+            'paymentQrUrl',
+            'instructions',
+            'createdAt',
+            'updatedAt'
+          ]);
+
+      allow delete: if isAdmin()
+        || ownsDirectPaymentAccount();
+    }
+
+    // ============================================================
     // RD HOTEL BOOKINGS
     // ============================================================
     match /hotel_bookings/{bookingId} {
@@ -3049,7 +3137,11 @@ service cloud.firestore {
         && request.resource.data.totalAmount >= 0
         && request.resource.data.currency == 'Rs.'
         && request.resource.data.paymentOption
-          in ['pay_at_hotel', 'online']
+          in [
+            'pay_at_hotel',
+            'online',
+            'direct_hotel_online'
+          ]
         && (
           (
             request.resource.data.paymentOption == 'pay_at_hotel'
@@ -3058,6 +3150,23 @@ service cloud.firestore {
           || (
             request.resource.data.paymentOption == 'online'
             && request.resource.data.paymentStatus == 'online_pending'
+          )
+          || (
+            request.resource.data.paymentOption == 'direct_hotel_online'
+            && request.resource.data.paymentStatus == 'submitted_to_hotel'
+            && request.resource.data.paymentMethod is string
+            && request.resource.data.paymentMethod.size() > 0
+            && request.resource.data.paymentReference is string
+            && request.resource.data.paymentReference.size() > 0
+            && request.resource.data.paymentProofUrl is string
+            && request.resource.data.paymentProofUrl.size() > 0
+            && request.resource.data.paymentSubmittedAt is timestamp
+            && request.resource.data.paymentReceiverPartnerId
+              == bookingHotelData().partnerId
+            && request.resource.data.paymentReceiverHotelId
+              == request.resource.data.hotelId
+            && request.resource.data.paymentReceiverType
+              == 'hotel_direct'
           )
         )
         && request.resource.data.bookingStatus == 'request_submitted'

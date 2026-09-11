@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 
 import 'hotel_partner_availability_page.dart';
 import 'hotel_partner_bookings_page.dart';
+import 'hotel_partner_direct_payment_page.dart';
 import 'hotel_partner_fee_page.dart';
 import 'hotel_partner_profile_page.dart';
 import 'hotel_partner_rooms_page.dart';
@@ -223,7 +224,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                       crossAxisSpacing: 12,
                       mainAxisSpacing: 12,
                       childAspectRatio:
-                          columns == 2 ? 1.08 : 1.18,
+                          columns == 2 ? 0.90 : 1.18,
                       children: <Widget>[
                         _card(
                           context,
@@ -296,6 +297,20 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                             ),
                           ),
                         ),
+                        _card(
+                          context,
+                          icon: Icons.payments_rounded,
+                          title: 'Direct Online Payment',
+                          subtitle:
+                              'Receive customer booking payment directly to your Hotel account',
+                          onTap: () => Navigator.push<void>(
+                            context,
+                            MaterialPageRoute<void>(
+                              builder: (_) =>
+                                  const HotelPartnerDirectPaymentPage(),
+                            ),
+                          ),
+                        ),
                       ],
                     ),
                     const SizedBox(height: 16),
@@ -309,8 +324,8 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                       ),
                       child: const Text(
                         'Hotel management is connected to Firestore. '
-                        'Manage profile, rooms, date-wise availability, '
-                        'customer bookings and RD Hotel fees from this dashboard.',
+                        'Manage profile, rooms, date-wise availability, customer bookings, '
+                        'direct Hotel receiving details and RD Hotel fees from this dashboard.',
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           height: 1.4,

@@ -6,6 +6,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import 'hotel_cloudinary_service.dart';
+
 Future<void> _openHotelDirections(
   BuildContext context, {
   required double? hotelLatitude,
@@ -3258,17 +3260,38 @@ class _HotelRoomBookingPageState
   final TextEditingController _phone =
       TextEditingController();
 
+  final TextEditingController
+      _paymentReference =
+      TextEditingController();
+
   int _roomCount = 1;
 
   String _paymentOption =
       'pay_at_hotel';
 
+  String _paymentMethod =
+      'bank_transfer';
+
   bool _submitting = false;
+  bool _loadingDirectPayment = true;
+  bool _uploadingPaymentProof = false;
+
+  String _paymentProofUrl = '';
+
+  Map<String, dynamic> _directPayment =
+      <String, dynamic>{};
+
+  @override
+  void initState() {
+    super.initState();
+    _loadDirectPayment();
+  }
 
   @override
   void dispose() {
     _guestName.dispose();
     _phone.dispose();
+    _paymentReference.dispose();
     super.dispose();
   }
 
@@ -3333,6 +3356,563 @@ class _HotelRoomBookingPageState
     return user;
   }
 
+  String get _partnerId =>
+      widget.hotel['partnerId']
+              ?.toString()
+              .trim() ??
+          '';
+
+  Future<void> _loadDirectPayment() async {
+    final String partnerId = _partnerId;
+
+    if (partnerId.isEmpty) {
+      if (mounted) {
+        setState(() {
+          _loadingDirectPayment = false;
+        });
+      }
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<
+              Map<String, dynamic>>
+          doc =
+          await FirebaseFirestore.instance
+              .collection(
+                'hotel_direct_payment_accounts',
+              )
+              .doc(partnerId)
+              .get();
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _directPayment =
+            doc.data() ??
+                <String, dynamic>{};
+
+        _loadingDirectPayment = false;
+
+        final List<String> methods =
+            _availablePaymentMethods();
+
+        if (methods.isNotEmpty &&
+            !methods.contains(
+              _paymentMethod,
+            )) {
+          _paymentMethod =
+              methods.first;
+        }
+      });
+    } catch (_) {
+      if (mounted) {
+        setState(() {
+          _loadingDirectPayment = false;
+          _directPayment =
+              <String, dynamic>{};
+        });
+      }
+    }
+  }
+
+  bool get _directPaymentEnabled =>
+      _directPayment['enabled'] == true &&
+      _availablePaymentMethods().isNotEmpty;
+
+  List<String> _availablePaymentMethods() {
+    final List<String> methods =
+        <String>[];
+
+    if ((_directPayment['esewaNumber']
+                ?.toString()
+                .trim() ??
+            '')
+        .isNotEmpty) {
+      methods.add('esewa');
+    }
+
+    if ((_directPayment['khaltiNumber']
+                ?.toString()
+                .trim() ??
+            '')
+        .isNotEmpty) {
+      methods.add('khalti');
+    }
+
+    if ((_directPayment['bankName']
+                ?.toString()
+                .trim() ??
+            '')
+            .isNotEmpty &&
+        (_directPayment['bankAccountNumber']
+                ?.toString()
+                .trim() ??
+            '')
+            .isNotEmpty) {
+      methods.add('bank_transfer');
+    }
+
+    if ((_directPayment['connectIpsId']
+                ?.toString()
+                .trim() ??
+            '')
+        .isNotEmpty) {
+      methods.add('connectips');
+    }
+
+    if ((_directPayment[
+                    'mobileBankingDetails']
+                ?.toString()
+                .trim() ??
+            '')
+        .isNotEmpty) {
+      methods.add('mobile_banking');
+    }
+
+    if ((_directPayment['paymentQrUrl']
+                ?.toString()
+                .trim() ??
+            '')
+        .isNotEmpty) {
+      methods.add('hotel_qr');
+    }
+
+    return methods;
+  }
+
+  String _paymentMethodLabel(
+    String method,
+  ) {
+    switch (method) {
+      case 'esewa':
+        return 'eSewa';
+      case 'khalti':
+        return 'Khalti';
+      case 'bank_transfer':
+        return 'Bank Transfer';
+      case 'connectips':
+        return 'connectIPS';
+      case 'mobile_banking':
+        return 'Mobile Banking';
+      case 'hotel_qr':
+        return 'Hotel Payment QR';
+      default:
+        return method;
+    }
+  }
+
+  Widget _detailLine(
+    String label,
+    String value,
+  ) {
+    if (value.trim().isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return Padding(
+      padding:
+          const EdgeInsets.symmetric(
+        vertical: 3,
+      ),
+      child: Row(
+        crossAxisAlignment:
+            CrossAxisAlignment.start,
+        children: <Widget>[
+          SizedBox(
+            width: 122,
+            child: Text(
+              label,
+              style: const TextStyle(
+                fontWeight:
+                    FontWeight.w800,
+              ),
+            ),
+          ),
+          Expanded(
+            child: SelectableText(
+              value,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _directPaymentSection() {
+    if (_loadingDirectPayment) {
+      return const Padding(
+        padding: EdgeInsets.all(18),
+        child: Center(
+          child:
+              CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    if (!_directPaymentEnabled) {
+      return Container(
+        padding:
+            const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.orange
+              .withValues(alpha: 0.10),
+          borderRadius:
+              BorderRadius.circular(12),
+        ),
+        child: const Text(
+          'This Hotel has not enabled Direct Online Payment yet. '
+          'Please choose Pay at Hotel.',
+          style: TextStyle(
+            color: Colors.orange,
+            fontWeight:
+                FontWeight.w800,
+          ),
+        ),
+      );
+    }
+
+    final List<String> methods =
+        _availablePaymentMethods();
+
+    final String qrUrl =
+        _directPayment['paymentQrUrl']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String instructions =
+        _directPayment['instructions']
+                ?.toString()
+                .trim() ??
+            '';
+
+    return Column(
+      crossAxisAlignment:
+          CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Container(
+          padding:
+              const EdgeInsets.all(12),
+          decoration: BoxDecoration(
+            color: _rdGreen
+                .withValues(alpha: 0.08),
+            borderRadius:
+                BorderRadius.circular(12),
+          ),
+          child: const Text(
+            'Payment goes DIRECTLY to this Hotel account. '
+            'RD Online Shop does not receive this booking payment. '
+            'After transfer, enter the transaction reference and upload proof. '
+            'The Hotel Partner must verify actual receipt before payment becomes PAID.',
+            style: TextStyle(
+              color: _rdGreen,
+              fontWeight:
+                  FontWeight.w800,
+              height: 1.35,
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        DropdownButtonFormField<String>(
+          initialValue:
+              methods.contains(
+                _paymentMethod,
+              )
+                  ? _paymentMethod
+                  : methods.first,
+          decoration:
+              const InputDecoration(
+            labelText:
+                'Direct Payment Method',
+            prefixIcon: Icon(
+              Icons.payments_rounded,
+            ),
+            border:
+                OutlineInputBorder(),
+          ),
+          items: methods
+              .map(
+                (String method) =>
+                    DropdownMenuItem<
+                        String>(
+                  value: method,
+                  child: Text(
+                    _paymentMethodLabel(
+                      method,
+                    ),
+                  ),
+                ),
+              )
+              .toList(),
+          onChanged: (String? value) {
+            if (value == null) {
+              return;
+            }
+
+            setState(() {
+              _paymentMethod = value;
+            });
+          },
+        ),
+        const SizedBox(height: 10),
+        Card(
+          margin: EdgeInsets.zero,
+          child: Padding(
+            padding:
+                const EdgeInsets.all(
+              12,
+            ),
+            child: Column(
+              crossAxisAlignment:
+                  CrossAxisAlignment
+                      .stretch,
+              children: <Widget>[
+                Text(
+                  '${widget.hotel['name'] ?? 'Hotel'} Receiving Details',
+                  style:
+                      const TextStyle(
+                    fontSize: 16,
+                    fontWeight:
+                        FontWeight
+                            .w900,
+                  ),
+                ),
+                const SizedBox(
+                  height: 8,
+                ),
+                if (_paymentMethod ==
+                    'esewa') ...<Widget>[
+                  _detailLine(
+                    'Account Name',
+                    _directPayment[
+                                'esewaName']
+                            ?.toString() ??
+                        '',
+                  ),
+                  _detailLine(
+                    'eSewa ID',
+                    _directPayment[
+                                'esewaNumber']
+                            ?.toString() ??
+                        '',
+                  ),
+                ],
+                if (_paymentMethod ==
+                    'khalti') ...<Widget>[
+                  _detailLine(
+                    'Account Name',
+                    _directPayment[
+                                'khaltiName']
+                            ?.toString() ??
+                        '',
+                  ),
+                  _detailLine(
+                    'Khalti ID',
+                    _directPayment[
+                                'khaltiNumber']
+                            ?.toString() ??
+                        '',
+                  ),
+                ],
+                if (_paymentMethod ==
+                    'bank_transfer') ...<
+                    Widget>[
+                  _detailLine(
+                    'Bank',
+                    _directPayment[
+                                'bankName']
+                            ?.toString() ??
+                        '',
+                  ),
+                  _detailLine(
+                    'Account Name',
+                    _directPayment[
+                                'bankAccountName']
+                            ?.toString() ??
+                        '',
+                  ),
+                  _detailLine(
+                    'Account No.',
+                    _directPayment[
+                                'bankAccountNumber']
+                            ?.toString() ??
+                        '',
+                  ),
+                ],
+                if (_paymentMethod ==
+                    'connectips')
+                  _detailLine(
+                    'connectIPS',
+                    _directPayment[
+                                'connectIpsId']
+                            ?.toString() ??
+                        '',
+                  ),
+                if (_paymentMethod ==
+                    'mobile_banking')
+                  _detailLine(
+                    'Details',
+                    _directPayment[
+                                'mobileBankingDetails']
+                            ?.toString() ??
+                        '',
+                  ),
+                if (_paymentMethod ==
+                        'hotel_qr' &&
+                    qrUrl.isNotEmpty)
+                  ClipRRect(
+                    borderRadius:
+                        BorderRadius.circular(
+                      12,
+                    ),
+                    child: Image.network(
+                      qrUrl,
+                      height: 240,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                if (instructions.isNotEmpty) ...<
+                    Widget>[
+                  const SizedBox(
+                    height: 8,
+                  ),
+                  Text(
+                    'Hotel instruction: '
+                    '$instructions',
+                    style:
+                        const TextStyle(
+                      fontWeight:
+                          FontWeight
+                              .w700,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        const SizedBox(height: 10),
+        TextField(
+          controller:
+              _paymentReference,
+          textCapitalization:
+              TextCapitalization
+                  .characters,
+          decoration:
+              const InputDecoration(
+            labelText:
+                'Transaction / Payment Reference',
+            hintText:
+                'Enter reference after payment',
+            prefixIcon: Icon(
+              Icons.numbers_rounded,
+            ),
+            border:
+                OutlineInputBorder(),
+          ),
+        ),
+        const SizedBox(height: 10),
+        OutlinedButton.icon(
+          onPressed:
+              _uploadingPaymentProof
+                  ? null
+                  : _uploadPaymentProof,
+          icon: _uploadingPaymentProof
+              ? const SizedBox.square(
+                  dimension: 18,
+                  child:
+                      CircularProgressIndicator(
+                    strokeWidth: 2,
+                  ),
+                )
+              : Icon(
+                  _paymentProofUrl
+                          .isEmpty
+                      ? Icons
+                          .upload_file_rounded
+                      : Icons
+                          .check_circle_rounded,
+                ),
+          label: Text(
+            _paymentProofUrl.isEmpty
+                ? 'Upload Payment Proof'
+                : 'Payment Proof Uploaded • Replace',
+          ),
+        ),
+        if (_paymentProofUrl
+            .isNotEmpty) ...<Widget>[
+          const SizedBox(height: 8),
+          ClipRRect(
+            borderRadius:
+                BorderRadius.circular(
+              10,
+            ),
+            child: Image.network(
+              _paymentProofUrl,
+              height: 160,
+              fit: BoxFit.contain,
+            ),
+          ),
+        ],
+        const SizedBox(height: 8),
+        const Text(
+          'Never enter OTP, PIN, bank password, eSewa/Khalti PIN or card PIN in RD Online Shop.',
+          style: TextStyle(
+            color: _rdBlue,
+            fontWeight:
+                FontWeight.w800,
+          ),
+        ),
+      ],
+    );
+  }
+
+  Future<void>
+      _uploadPaymentProof() async {
+    if (_uploadingPaymentProof) {
+      return;
+    }
+
+    setState(() {
+      _uploadingPaymentProof = true;
+    });
+
+    try {
+      final String? url =
+          await HotelCloudinaryService
+              .pickAndUploadImage(
+        imageQuality: 88,
+      );
+
+      if (!mounted || url == null) {
+        return;
+      }
+
+      setState(() {
+        _paymentProofUrl = url;
+      });
+
+      _message(
+        'Payment proof uploaded.',
+      );
+    } catch (error) {
+      _message(
+        'Could not upload payment proof.\n'
+        '$error',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploadingPaymentProof =
+              false;
+        });
+      }
+    }
+  }
+
   Future<void> _submit() async {
     if (_submitting) {
       return;
@@ -3367,6 +3947,44 @@ class _HotelRoomBookingPageState
       return;
     }
 
+    if (_paymentOption ==
+        'direct_hotel_online') {
+      if (!_directPaymentEnabled) {
+        _message(
+          'This Hotel has not enabled '
+          'Direct Online Payment. '
+          'Please choose Pay at Hotel.',
+        );
+        return;
+      }
+
+      if (!_availablePaymentMethods()
+          .contains(_paymentMethod)) {
+        _message(
+          'Please select a valid Hotel payment method.',
+        );
+        return;
+      }
+
+      if (_paymentReference.text
+          .trim()
+          .isEmpty) {
+        _message(
+          'Enter the transaction / payment reference after paying the Hotel.',
+        );
+        return;
+      }
+
+      if (_paymentProofUrl
+          .trim()
+          .isEmpty) {
+        _message(
+          'Upload payment proof before submitting the booking.',
+        );
+        return;
+      }
+    }
+
     setState(() {
       _submitting = true;
     });
@@ -3388,7 +4006,10 @@ class _HotelRoomBookingPageState
           _paymentOption ==
                   'pay_at_hotel'
               ? 'pay_at_hotel_pending'
-              : 'online_pending';
+              : _paymentOption ==
+                      'direct_hotel_online'
+                  ? 'submitted_to_hotel'
+                  : 'online_pending';
 
       await reference.set(
         <String, dynamic>{
@@ -3444,6 +4065,26 @@ class _HotelRoomBookingPageState
               _paymentOption,
           'paymentStatus':
               paymentStatus,
+          if (_paymentOption ==
+              'direct_hotel_online') ...<
+              String, dynamic>{
+            'paymentMethod':
+                _paymentMethod,
+            'paymentReference':
+                _paymentReference.text
+                    .trim(),
+            'paymentProofUrl':
+                _paymentProofUrl.trim(),
+            'paymentSubmittedAt':
+                FieldValue
+                    .serverTimestamp(),
+            'paymentReceiverPartnerId':
+                _partnerId,
+            'paymentReceiverHotelId':
+                widget.hotelId,
+            'paymentReceiverType':
+                'hotel_direct',
+          },
           'bookingStatus':
               'request_submitted',
           'confirmationStatus':
@@ -3464,6 +4105,19 @@ class _HotelRoomBookingPageState
       if (!mounted) {
         return;
       }
+
+      final String bookingSubmitMessage =
+          _paymentOption == 'direct_hotel_online'
+              ? 'Your payment proof was sent directly to the Hotel Partner. '
+                  'The payment becomes PAID only after the Hotel confirms '
+                  'that the money arrived in its own receiving account.\n\n'
+                  'The Hotel Partner will also confirm room availability. '
+                  'This request is not a confirmed reservation until '
+                  'the booking status becomes Confirmed.'
+              : 'The Hotel Partner will confirm '
+                  'availability. This request is not '
+                  'a confirmed reservation until '
+                  'the status becomes Confirmed.';
 
       await showDialog<void>(
         context: context,
@@ -3489,18 +4143,13 @@ class _HotelRoomBookingPageState
               ),
             ),
             content: Text(
-              'Booking ID: '
-              '${reference.id}\n'
+              'Booking ID: ${reference.id}\n'
               '${widget.hotel['name'] ?? 'Hotel'}\n'
               '${widget.room['name'] ?? 'Room'} × $_roomCount\n'
               '${_date(widget.checkIn)} → '
               '${_date(widget.checkOut)}\n'
-              'Total: '
-              '${_money(_total)}\n\n'
-              'The Hotel Partner will confirm '
-              'availability. This request is not '
-              'a confirmed reservation until '
-              'the status becomes Confirmed.',
+              'Total: ${_money(_total)}\n\n'
+              '$bookingSubmitMessage',
             ),
             actions: <Widget>[
               FilledButton(
@@ -3819,9 +4468,9 @@ class _HotelRoomBookingPageState
                             ButtonSegment<
                                 String>(
                               value:
-                                  'online',
+                                  'direct_hotel_online',
                               label: Text(
-                                'Online',
+                                'Direct Online to Hotel',
                               ),
                               icon: Icon(
                                 Icons
@@ -3844,22 +4493,12 @@ class _HotelRoomBookingPageState
                           },
                         ),
                         if (_paymentOption ==
-                            'online') ...<
+                            'direct_hotel_online') ...<
                             Widget>[
                           const SizedBox(
-                            height: 8,
+                            height: 10,
                           ),
-                          const Text(
-                            'Online payment gateway is not connected yet. '
-                            'The booking will be saved as Online Pending.',
-                            style: TextStyle(
-                              color:
-                                  Colors.orange,
-                              fontWeight:
-                                  FontWeight
-                                      .w700,
-                            ),
-                          ),
+                          _directPaymentSection(),
                         ],
                       ],
                     ),
@@ -4366,6 +5005,18 @@ class MyHotelBookingsPage
               'Payment: '
               '${data['paymentStatus'] ?? ''}',
             ),
+            if (data['paymentOption'] ==
+                'direct_hotel_online') ...<
+                Widget>[
+              Text(
+                'Direct to Hotel: '
+                '${data['paymentMethod'] ?? ''}',
+              ),
+              SelectableText(
+                'Transaction / Reference: '
+                '${data['paymentReference'] ?? ''}',
+              ),
+            ],
             const SizedBox(height: 8),
             Container(
               padding:
