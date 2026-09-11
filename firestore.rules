@@ -2933,12 +2933,11 @@ service cloud.firestore {
           && resource.data.partnerId == request.auth.uid;
       }
 
-      allow read: if isAdmin()
-        || ownsInventory()
-        || (
-          signedIn()
-          && !isActiveHotelPartner()
-        );
+      // Inventory contains only room/date availability counts.
+      // Signed-in sessions must be able to GET a date inventory document,
+      // including dates where that document does not exist yet, before
+      // create/update logic runs. Writes stay owner/Admin restricted below.
+      allow read: if signedIn();
 
       allow create: if isAdmin()
         || (
