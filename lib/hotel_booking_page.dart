@@ -1,7 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 Future<void> _openHotelDirections(
@@ -198,6 +200,12 @@ class _HotelBookingPageState
 
   bool _sessionReady = false;
   String _sessionError = '';
+  bool _hotelPartnerSessionActive = false;
+
+  Position? _customerPosition;
+  bool _locatingCustomer = false;
+  bool _nearestFirst = false;
+  String _locationStatus = '';
 
   @override
   void initState() {
@@ -219,6 +227,38 @@ class _HotelBookingPageState
             .signInAnonymously();
       }
 
+      final User? user =
+          FirebaseAuth.instance.currentUser;
+
+      bool partnerSession = false;
+
+      if (user != null && !user.isAnonymous) {
+        try {
+          final DocumentSnapshot<
+                  Map<String, dynamic>>
+              partnerDoc =
+              await FirebaseFirestore.instance
+                  .collection(
+                    'hotel_partners',
+                  )
+                  .doc(user.uid)
+                  .get();
+
+          final Map<String, dynamic> data =
+              partnerDoc.data() ??
+                  <String, dynamic>{};
+
+          partnerSession =
+              partnerDoc.exists &&
+                  data['isApproved'] == true &&
+                  data['isActive'] == true &&
+                  data['role'] ==
+                      'hotel_partner';
+        } catch (_) {
+          partnerSession = false;
+        }
+      }
+
       if (!mounted) {
         return;
       }
@@ -226,7 +266,13 @@ class _HotelBookingPageState
       setState(() {
         _sessionReady = true;
         _sessionError = '';
+        _hotelPartnerSessionActive =
+            partnerSession;
       });
+
+      if (!partnerSession) {
+        await _loadLocationIfAlreadyAllowed();
+      }
     } catch (error) {
       if (!mounted) {
         return;
@@ -352,28 +398,289 @@ class _HotelBookingPageState
     });
   }
 
+  String _normalized(String value) {
+    return value
+        .toLowerCase()
+        .replaceAll('काठमाडौं', 'kathmandu')
+        .replaceAll('काठमाडौँ', 'kathmandu')
+        .replaceAll('ललितपुर', 'lalitpur')
+        .replaceAll('भक्तपुर', 'bhaktapur')
+        .trim();
+  }
+
+  bool _isKathmanduValleySearch(String query) {
+    final String normalized = _normalized(query);
+
+    return normalized.contains('kathmandu') ||
+        normalized.contains('kathmandu valley') ||
+        normalized.contains('ktm valley');
+  }
+
   bool _matches(
     Map<String, dynamic> data,
   ) {
     final String query =
-        _search.text
-            .trim()
-            .toLowerCase();
+        _normalized(_search.text);
 
     if (query.isEmpty) {
       return true;
     }
 
-    return <String>[
-      data['name']?.toString() ?? '',
-      data['location']?.toString() ?? '',
-      data['city']?.toString() ?? '',
-      data['area']?.toString() ?? '',
-    ].any(
-      (String value) =>
-          value
-              .toLowerCase()
-              .contains(query),
+    final String searchable = _normalized(
+      <String>[
+        data['name']?.toString() ?? '',
+        data['location']?.toString() ?? '',
+        data['address']?.toString() ?? '',
+        data['city']?.toString() ?? '',
+        data['area']?.toString() ?? '',
+        data['description']?.toString() ?? '',
+      ].join(' '),
+    );
+
+    if (searchable.contains(query)) {
+      return true;
+    }
+
+    if (_isKathmanduValleySearch(query)) {
+      const List<String> valleyTerms = <String>[
+        'kathmandu',
+        'lalitpur',
+        'patan',
+        'bhaktapur',
+        'kirtipur',
+        'tokha',
+        'budhanilkantha',
+        'madhyapur',
+        'thimi',
+        'chandragiri',
+        'gokarneshwor',
+        'nagarjun',
+        'tarakeshwor',
+      ];
+
+      return valleyTerms.any(
+        (String term) =>
+            searchable.contains(term),
+      );
+    }
+
+    return false;
+  }
+
+  double? _hotelDistanceKm(
+    Map<String, dynamic> hotel,
+  ) {
+    final Position? customer =
+        _customerPosition;
+
+    final double? latitude =
+        (hotel['latitude'] as num?)
+            ?.toDouble();
+
+    final double? longitude =
+        (hotel['longitude'] as num?)
+            ?.toDouble();
+
+    if (customer == null ||
+        latitude == null ||
+        longitude == null) {
+      return null;
+    }
+
+    final double meters =
+        Geolocator.distanceBetween(
+      customer.latitude,
+      customer.longitude,
+      latitude,
+      longitude,
+    );
+
+    return meters / 1000;
+  }
+
+  int? _estimatedDriveMinutes(
+    Map<String, dynamic> hotel,
+  ) {
+    final double? distance =
+        _hotelDistanceKm(hotel);
+
+    if (distance == null) {
+      return null;
+    }
+
+    final double averageKph =
+        distance <= 10
+            ? 25
+            : distance <= 40
+                ? 35
+                : 50;
+
+    final int minutes =
+        ((distance / averageKph) * 60)
+            .round();
+
+    return minutes < 1 ? 1 : minutes;
+  }
+
+  Future<void> _loadLocationIfAlreadyAllowed() async {
+    try {
+      final bool serviceEnabled =
+          await Geolocator
+              .isLocationServiceEnabled();
+
+      if (!serviceEnabled) {
+        return;
+      }
+
+      final LocationPermission permission =
+          await Geolocator.checkPermission();
+
+      if (permission !=
+              LocationPermission.always &&
+          permission !=
+              LocationPermission.whileInUse) {
+        return;
+      }
+
+      final Position position =
+          await Geolocator.getCurrentPosition(
+        locationSettings:
+            const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _customerPosition = position;
+        _nearestFirst = true;
+        _locationStatus =
+            'Nearest approved Hotels are shown first.';
+      });
+    } catch (_) {
+      // Near Me remains optional until tapped.
+    }
+  }
+
+  Future<void> _useMyLocation() async {
+    if (_locatingCustomer) {
+      return;
+    }
+
+    setState(() {
+      _locatingCustomer = true;
+      _locationStatus =
+          'Getting your live location...';
+    });
+
+    try {
+      final bool serviceEnabled =
+          await Geolocator
+              .isLocationServiceEnabled();
+
+      if (!serviceEnabled) {
+        throw StateError(
+          'Please turn ON phone Location/GPS first.',
+        );
+      }
+
+      LocationPermission permission =
+          await Geolocator.checkPermission();
+
+      if (permission ==
+          LocationPermission.denied) {
+        permission =
+            await Geolocator
+                .requestPermission();
+      }
+
+      if (permission ==
+              LocationPermission.denied ||
+          permission ==
+              LocationPermission.deniedForever) {
+        throw StateError(
+          'Location permission is required to show nearest Hotels.',
+        );
+      }
+
+      final Position position =
+          await Geolocator.getCurrentPosition(
+        locationSettings:
+            const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _customerPosition = position;
+        _nearestFirst = true;
+        _locationStatus =
+            'Nearest approved Hotels are shown first.';
+      });
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _locationStatus = error.toString();
+      });
+
+      ScaffoldMessenger.of(context)
+        ..hideCurrentSnackBar()
+        ..showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not use Near Me.\n$error',
+            ),
+          ),
+        );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _locatingCustomer = false;
+        });
+      }
+    }
+  }
+
+  void _sortHotelsByDistance(
+    List<QueryDocumentSnapshot<
+            Map<String, dynamic>>>
+        docs,
+  ) {
+    if (!_nearestFirst ||
+        _customerPosition == null) {
+      return;
+    }
+
+    docs.sort(
+      (
+        QueryDocumentSnapshot<
+                Map<String, dynamic>>
+            first,
+        QueryDocumentSnapshot<
+                Map<String, dynamic>>
+            second,
+      ) {
+        final double firstDistance =
+            _hotelDistanceKm(first.data()) ??
+                double.infinity;
+
+        final double secondDistance =
+            _hotelDistanceKm(second.data()) ??
+                double.infinity;
+
+        return firstDistance
+            .compareTo(secondDistance);
+      },
     );
   }
 
@@ -574,9 +881,9 @@ class _HotelBookingPageState
           SizedBox(width: 12),
           Expanded(
             child: Text(
-              'Choose an approved hotel. '
-              'Check photos, facilities, room price '
-              'and real date-wise availability before booking.',
+              'Choose an approved hotel. Use Near Me to see closest Hotels first, '
+              'or search Hotel / city / area such as Kathmandu. '
+              'Check photos, facilities, price and real date-wise availability before booking.',
               style: TextStyle(
                 color: Colors.white,
                 fontWeight:
@@ -604,7 +911,7 @@ class _HotelBookingPageState
               decoration:
                   const InputDecoration(
                 labelText:
-                    'Search hotel or location',
+                    'Search Hotel / city / area (e.g. Kathmandu)',
                 prefixIcon: Icon(
                   Icons.search_rounded,
                 ),
@@ -614,6 +921,93 @@ class _HotelBookingPageState
               onChanged: (_) =>
                   setState(() {}),
             ),
+            const SizedBox(
+              height: 10,
+            ),
+            LayoutBuilder(
+              builder: (
+                BuildContext context,
+                BoxConstraints constraints,
+              ) {
+                final Widget nearMe =
+                    FilledButton.tonalIcon(
+                  onPressed: _locatingCustomer
+                      ? null
+                      : _useMyLocation,
+                  icon: _locatingCustomer
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.my_location_rounded,
+                        ),
+                  label: Text(
+                    _customerPosition == null
+                        ? 'Near Me'
+                        : 'Refresh Near Me',
+                  ),
+                );
+
+                final Widget orderButton =
+                    OutlinedButton.icon(
+                  onPressed:
+                      _customerPosition == null
+                          ? null
+                          : () {
+                              setState(() {
+                                _nearestFirst =
+                                    !_nearestFirst;
+                              });
+                            },
+                  icon: Icon(
+                    _nearestFirst
+                        ? Icons.near_me_rounded
+                        : Icons
+                            .format_list_numbered_rounded,
+                  ),
+                  label: Text(
+                    _nearestFirst
+                        ? 'Nearest First'
+                        : 'Original Order',
+                  ),
+                );
+
+                if (constraints.maxWidth >=
+                    560) {
+                  return Row(
+                    children: <Widget>[
+                      Expanded(child: nearMe),
+                      const SizedBox(width: 10),
+                      Expanded(child: orderButton),
+                    ],
+                  );
+                }
+
+                return Column(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    nearMe,
+                    const SizedBox(height: 8),
+                    orderButton,
+                  ],
+                );
+              },
+            ),
+            if (_locationStatus.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 8),
+              Text(
+                _locationStatus,
+                style: const TextStyle(
+                  color: _rdBlue,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+            ],
             const SizedBox(
               height: 10,
             ),
@@ -685,6 +1079,239 @@ class _HotelBookingPageState
     );
   }
 
+  Widget _nearbyHotelsMap(
+    List<QueryDocumentSnapshot<
+            Map<String, dynamic>>>
+        docs,
+  ) {
+    final List<
+            QueryDocumentSnapshot<
+                Map<String, dynamic>>>
+        mappedHotels = docs.where(
+      (
+        QueryDocumentSnapshot<
+                Map<String, dynamic>>
+            doc,
+      ) {
+        final Map<String, dynamic> hotel =
+            doc.data();
+
+        return hotel['latitude'] is num &&
+            hotel['longitude'] is num;
+      },
+    ).toList();
+
+    if (mappedHotels.isEmpty &&
+        _customerPosition == null) {
+      return Card(
+        child: Padding(
+          padding: const EdgeInsets.all(18),
+          child: Row(
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
+            children: <Widget>[
+              const Icon(
+                Icons.map_outlined,
+                color: _rdBlue,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  docs.isEmpty
+                      ? 'No Hotel is available on the map yet.'
+                      : 'Hotel map is waiting for saved GPS coordinates. '
+                          'Hotel Partners must save their Hotel location first.',
+                  style: const TextStyle(
+                    height: 1.4,
+                    fontWeight:
+                        FontWeight.w700,
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ),
+      );
+    }
+
+    LatLng center;
+
+    if (_customerPosition != null) {
+      center = LatLng(
+        _customerPosition!.latitude,
+        _customerPosition!.longitude,
+      );
+    } else {
+      final Map<String, dynamic> first =
+          mappedHotels.first.data();
+
+      center = LatLng(
+        (first['latitude'] as num)
+            .toDouble(),
+        (first['longitude'] as num)
+            .toDouble(),
+      );
+    }
+
+    final List<Marker> markers = <Marker>[
+      if (_customerPosition != null)
+        Marker(
+          point: LatLng(
+            _customerPosition!.latitude,
+            _customerPosition!.longitude,
+          ),
+          width: 52,
+          height: 52,
+          child: const Tooltip(
+            message: 'My Location',
+            child: Icon(
+              Icons.my_location_rounded,
+              size: 34,
+              color: _rdBlue,
+            ),
+          ),
+        ),
+      ...mappedHotels.map(
+        (
+          QueryDocumentSnapshot<
+                  Map<String, dynamic>>
+              doc,
+        ) {
+          final Map<String, dynamic> hotel =
+              doc.data();
+
+          final double latitude =
+              (hotel['latitude'] as num)
+                  .toDouble();
+
+          final double longitude =
+              (hotel['longitude'] as num)
+                  .toDouble();
+
+          final String hotelName =
+              hotel['name']?.toString() ??
+                  'Hotel';
+
+          return Marker(
+            point:
+                LatLng(latitude, longitude),
+            width: 60,
+            height: 60,
+            child: Tooltip(
+              message: hotelName,
+              child: GestureDetector(
+                onTap: () =>
+                    _openHotelPin(
+                  context,
+                  hotelLatitude: latitude,
+                  hotelLongitude:
+                      longitude,
+                  hotelName: hotelName,
+                ),
+                child: const Icon(
+                  Icons.hotel_rounded,
+                  size: 39,
+                  color: _rdGreen,
+                ),
+              ),
+            ),
+          );
+        },
+      ),
+    ];
+
+    return Card(
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Padding(
+            padding:
+                const EdgeInsets.fromLTRB(
+              14,
+              12,
+              14,
+              10,
+            ),
+            child: Row(
+              children: <Widget>[
+                const Icon(
+                  Icons.map_rounded,
+                  color: _rdBlue,
+                ),
+                const SizedBox(width: 8),
+                const Expanded(
+                  child: Text(
+                    'Nearby Hotels Map',
+                    style: TextStyle(
+                      fontSize: 18,
+                      fontWeight:
+                          FontWeight.w900,
+                    ),
+                  ),
+                ),
+                if (_customerPosition != null)
+                  Text(
+                    '${mappedHotels.length} Hotel(s)',
+                    style: const TextStyle(
+                      fontWeight:
+                          FontWeight.w700,
+                    ),
+                  ),
+              ],
+            ),
+          ),
+          SizedBox(
+            height: 285,
+            child: FlutterMap(
+              options: MapOptions(
+                initialCenter: center,
+                initialZoom:
+                    _customerPosition != null
+                        ? 13
+                        : 12,
+              ),
+              children: <Widget>[
+                TileLayer(
+                  urlTemplate:
+                      'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+                  userAgentPackageName:
+                      'rd_online_shop_new',
+                ),
+                MarkerLayer(
+                  markers: markers,
+                ),
+                RichAttributionWidget(
+                  attributions: const <
+                      SourceAttribution>[
+                    TextSourceAttribution(
+                      'OpenStreetMap contributors',
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+          const Padding(
+            padding: EdgeInsets.all(10),
+            child: Text(
+              'Blue marker = your location • Green Hotel marker = approved Hotel. '
+              'Tap a Hotel marker to open its map location.',
+              textAlign:
+                  TextAlign.center,
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight:
+                    FontWeight.w700,
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
   Widget _hotelCard(
     QueryDocumentSnapshot<
             Map<String, dynamic>>
@@ -704,6 +1331,20 @@ class _HotelBookingPageState
                 ?.toString()
                 .trim() ??
             '';
+
+    final double? distanceKm =
+        _hotelDistanceKm(hotel);
+
+    final int? driveMinutes =
+        _estimatedDriveMinutes(hotel);
+
+    final double? hotelLatitude =
+        (hotel['latitude'] as num?)
+            ?.toDouble();
+
+    final double? hotelLongitude =
+        (hotel['longitude'] as num?)
+            ?.toDouble();
 
     return FutureBuilder<_HotelSummary>(
       future:
@@ -966,6 +1607,85 @@ class _HotelBookingPageState
                                           .w900,
                                 ),
                               ),
+                            if (distanceKm != null) ...<Widget>[
+                              const SizedBox(
+                                height: 6,
+                              ),
+                              Text(
+                                'Distance: '
+                                '${distanceKm.toStringAsFixed(distanceKm < 10 ? 1 : 0)} km'
+                                '${driveMinutes == null ? '' : ' • approx. $driveMinutes min drive'}',
+                                style:
+                                    const TextStyle(
+                                  color:
+                                      _rdBlue,
+                                  fontWeight:
+                                      FontWeight.w900,
+                                ),
+                              ),
+                              const Text(
+                                'Approximate only. Use Navigate for live Maps route/time.',
+                                style:
+                                    TextStyle(
+                                  fontSize: 11,
+                                  color:
+                                      Colors.grey,
+                                ),
+                              ),
+                            ],
+                            if (hotelLatitude != null &&
+                                hotelLongitude != null) ...<Widget>[
+                              const SizedBox(
+                                height: 7,
+                              ),
+                              Wrap(
+                                spacing: 8,
+                                runSpacing: 6,
+                                children: <Widget>[
+                                  TextButton.icon(
+                                    onPressed: () =>
+                                        _openHotelPin(
+                                      context,
+                                      hotelLatitude:
+                                          hotelLatitude,
+                                      hotelLongitude:
+                                          hotelLongitude,
+                                      hotelName:
+                                          hotel['name']
+                                                  ?.toString() ??
+                                              'Hotel',
+                                    ),
+                                    icon: const Icon(
+                                      Icons.map_rounded,
+                                    ),
+                                    label: const Text(
+                                      'Map',
+                                    ),
+                                  ),
+                                  TextButton.icon(
+                                    onPressed: () =>
+                                        _openHotelDirections(
+                                      context,
+                                      hotelLatitude:
+                                          hotelLatitude,
+                                      hotelLongitude:
+                                          hotelLongitude,
+                                      hotelName:
+                                          hotel['name']
+                                                  ?.toString() ??
+                                              'Hotel',
+                                    ),
+                                    icon: const Icon(
+                                      Icons
+                                          .navigation_rounded,
+                                    ),
+                                    label: const Text(
+                                      'Navigate',
+                                    ),
+                                  ),
+                                ],
+                              ),
+                            ],
                             const SizedBox(
                               height: 5,
                             ),
@@ -1035,6 +1755,85 @@ class _HotelBookingPageState
                         ],
                       ),
                     ),
+        ),
+      );
+    }
+
+    if (_hotelPartnerSessionActive) {
+      return Scaffold(
+        backgroundColor:
+            const Color(0xFFF7F8FA),
+        appBar: AppBar(
+          title: const Text(
+            'Hotels',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          centerTitle: true,
+        ),
+        body: Center(
+          child: ConstrainedBox(
+            constraints:
+                const BoxConstraints(
+              maxWidth: 520,
+            ),
+            child: Card(
+              margin:
+                  const EdgeInsets.all(20),
+              child: Padding(
+                padding:
+                    const EdgeInsets.all(22),
+                child: Column(
+                  mainAxisSize:
+                      MainAxisSize.min,
+                  children: <Widget>[
+                    const Icon(
+                      Icons.lock_person_rounded,
+                      size: 54,
+                      color: _rdBlue,
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Hotel Partner session is active',
+                      textAlign:
+                          TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 21,
+                        fontWeight:
+                            FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'For privacy, a Hotel Partner account can manage only its own Hotel. '
+                      'Other Hotels are not available while this Partner ID is active.\n\n'
+                      'To book a Hotel as a customer, first use the Hotel Partner Logout button '
+                      'and then open the customer Hotel booking section.',
+                      textAlign:
+                          TextAlign.center,
+                      style: TextStyle(
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: () =>
+                          Navigator.pop(
+                        context,
+                      ),
+                      icon: const Icon(
+                        Icons.arrow_back_rounded,
+                      ),
+                      label: const Text(
+                        'Back',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
         ),
       );
     }
@@ -1133,6 +1932,8 @@ class _HotelBookingPageState
                     )
                     .toList();
 
+            _sortHotelsByDistance(docs);
+
             return Center(
               child: ConstrainedBox(
                 constraints:
@@ -1150,6 +1951,12 @@ class _HotelBookingPageState
                       height: 14,
                     ),
                     _searchCard(),
+                    const SizedBox(
+                      height: 16,
+                    ),
+                    _nearbyHotelsMap(
+                      docs,
+                    ),
                     const SizedBox(
                       height: 16,
                     ),

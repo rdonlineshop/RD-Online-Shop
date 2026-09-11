@@ -37,8 +37,83 @@ class _HotelPartnerAuthPageState
   bool _registering = false;
   bool _loading = false;
   bool _hidePassword = true;
+  bool _checkingExistingSession = true;
 
   static const Color _rdGreen = Color(0xFF2E7D32);
+
+  @override
+  void initState() {
+    super.initState();
+    _resumeExistingSession();
+  }
+
+  Future<void> _resumeExistingSession() async {
+    final User? user = FirebaseAuth.instance.currentUser;
+
+    if (user == null || user.isAnonymous) {
+      if (mounted) {
+        setState(() {
+          _checkingExistingSession = false;
+        });
+      }
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> doc =
+          await FirebaseFirestore.instance
+              .collection('hotel_partners')
+              .doc(user.uid)
+              .get();
+
+      final Map<String, dynamic> data =
+          doc.data() ?? <String, dynamic>{};
+
+      final bool approved =
+          doc.exists && data['isApproved'] == true;
+
+      final bool active =
+          doc.exists && data['isActive'] == true;
+
+      final String status =
+          data['status']?.toString().toLowerCase() ?? '';
+
+      if (approved &&
+          active &&
+          status != 'rejected') {
+        await FirebaseFirestore.instance
+            .collection('hotel_partners')
+            .doc(user.uid)
+            .update(
+          <String, dynamic>{
+            'lastLoginAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+
+        if (!mounted) {
+          return;
+        }
+
+        Navigator.pushReplacement<void, void>(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                const HotelPartnerDashboardPage(),
+          ),
+        );
+        return;
+      }
+    } catch (_) {
+      // Fall back to normal login screen if session check fails.
+    }
+
+    if (mounted) {
+      setState(() {
+        _checkingExistingSession = false;
+      });
+    }
+  }
 
   @override
   void dispose() {
@@ -382,6 +457,14 @@ class _HotelPartnerAuthPageState
 
   @override
   Widget build(BuildContext context) {
+    if (_checkingExistingSession) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
     return Scaffold(
       backgroundColor: const Color(0xFFF7F8FA),
       appBar: AppBar(

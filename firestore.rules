@@ -2673,6 +2673,13 @@ service cloud.firestore {
     }
 
 
+    // HOTEL PRIVACY:
+    // Admin: all Hotel data.
+    // Hotel Partner: own Hotel/rooms/inventory/bookings/fees only.
+    // Customer/non-Hotel-Partner session: approved active Hotel public
+    // data/rooms/availability only for booking discovery.
+    // Customer booking records: booking owner, own Hotel Partner, or Admin only.
+
     // ============================================================
     // RD HOTEL PARTNERS
     // ============================================================
@@ -2752,6 +2759,7 @@ service cloud.firestore {
         || ownsHotel()
         || (
           signedIn()
+          && !isActiveHotelPartner()
           && resource.data.isApproved == true
           && resource.data.isActive == true
         );
@@ -2843,6 +2851,7 @@ service cloud.firestore {
         || ownsRoom()
         || (
           signedIn()
+          && !isActiveHotelPartner()
           && resource.data.isActive == true
           && roomHotelExists()
           && roomHotelData().isApproved == true
@@ -2924,7 +2933,12 @@ service cloud.firestore {
           && resource.data.partnerId == request.auth.uid;
       }
 
-      allow read: if signedIn();
+      allow read: if isAdmin()
+        || ownsInventory()
+        || (
+          signedIn()
+          && !isActiveHotelPartner()
+        );
 
       allow create: if isAdmin()
         || (
