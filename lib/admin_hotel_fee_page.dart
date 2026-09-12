@@ -83,7 +83,51 @@ class _AdminHotelFeePageState
     final double amount =
         (value as num?)?.toDouble() ?? 0;
 
-    return 'Rs. ${amount.toStringAsFixed(0)}';
+    final bool negative = amount < 0;
+    final String digits =
+        amount.abs().round().toString();
+
+    String formatted;
+
+    if (digits.length <= 3) {
+      formatted = digits;
+    } else {
+      final String lastThree =
+          digits.substring(
+        digits.length - 3,
+      );
+
+      String leading = digits.substring(
+        0,
+        digits.length - 3,
+      );
+
+      final List<String> groups =
+          <String>[];
+
+      while (leading.length > 2) {
+        groups.insert(
+          0,
+          leading.substring(
+            leading.length - 2,
+          ),
+        );
+
+        leading = leading.substring(
+          0,
+          leading.length - 2,
+        );
+      }
+
+      if (leading.isNotEmpty) {
+        groups.insert(0, leading);
+      }
+
+      formatted =
+          '${groups.join(',')},$lastThree';
+    }
+
+    return 'Rs. ${negative ? '-' : ''}$formatted';
   }
 
   String _date(dynamic value) {
@@ -1571,16 +1615,17 @@ class _AdminHotelFeePageState
       return;
     }
 
-    setState(() {
-      _earningsFrom =
-          _startOfDay(picked);
+    final DateTime selected =
+        _startOfDay(picked);
 
-      if (_earningsTo != null &&
-          _earningsTo!.isBefore(
-            _earningsFrom!,
-          )) {
-        _earningsTo =
-            _earningsFrom;
+    setState(() {
+      _earningsFrom = selected;
+
+      // Make a single selected date work immediately.
+      // If To Date is empty (or older than From), use the same date.
+      if (_earningsTo == null ||
+          _earningsTo!.isBefore(selected)) {
+        _earningsTo = selected;
       }
     });
   }
@@ -1618,9 +1663,15 @@ class _AdminHotelFeePageState
       return;
     }
 
+    final DateTime selected =
+        _startOfDay(picked);
+
     setState(() {
-      _earningsTo =
-          _startOfDay(picked);
+      _earningsTo = selected;
+
+      // If the user starts from To Date, make the same day a valid
+      // range automatically instead of leaving the filter incomplete.
+      _earningsFrom ??= selected;
     });
   }
 
@@ -1758,6 +1809,8 @@ class _AdminHotelFeePageState
             double billed = 0;
             double paid = 0;
             double outstanding = 0;
+            double totalHotelFee = 0;
+            double totalCommission = 0;
             int overdue = 0;
 
             for (final QueryDocumentSnapshot<
@@ -1776,6 +1829,17 @@ class _AdminHotelFeePageState
 
               paid +=
                   (data['paidAmount'] as num?)
+                          ?.toDouble() ??
+                      0;
+
+              totalHotelFee +=
+                  (data['monthlyFee'] as num?)
+                          ?.toDouble() ??
+                      0;
+
+              totalCommission +=
+                  (data['commissionAmount']
+                              as num?)
                           ?.toDouble() ??
                       0;
 
@@ -1974,6 +2038,44 @@ class _AdminHotelFeePageState
                               '$overdue overdue',
                           Icons
                               .notification_important_rounded,
+                          _rdOrange,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(
+                      height: 12,
+                    ),
+                    GridView.count(
+                      crossAxisCount:
+                          MediaQuery.sizeOf(
+                                        context,
+                                      )
+                                      .width >=
+                                  900
+                              ? 2
+                              : 2,
+                      shrinkWrap: true,
+                      physics:
+                          const NeverScrollableScrollPhysics(),
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 10,
+                      childAspectRatio: 1.55,
+                      children: <Widget>[
+                        _statCard(
+                          'Total Hotel Fee',
+                          _money(
+                            totalHotelFee,
+                          ),
+                          Icons
+                              .request_quote_rounded,
+                          _rdBlue,
+                        ),
+                        _statCard(
+                          'Total Commission',
+                          _money(
+                            totalCommission,
+                          ),
+                          Icons.percent_rounded,
                           _rdOrange,
                         ),
                       ],
@@ -2860,6 +2962,826 @@ class _AdminHotelFeePageState
     );
   }
 
+  String _hotelReportKey(
+    Map<String, dynamic> data,
+  ) {
+    final String hotelId =
+        data['hotelId']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (hotelId.isNotEmpty) {
+      return 'hotel:$hotelId';
+    }
+
+    final String partnerId =
+        data['partnerId']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (partnerId.isNotEmpty) {
+      return 'partner:$partnerId';
+    }
+
+    final String hotelName =
+        data['hotelName']
+                ?.toString()
+                .trim() ??
+            'Hotel';
+
+    return 'name:${hotelName.toLowerCase()}';
+  }
+
+  String _dateFromDateTime(
+    DateTime? value,
+  ) {
+    if (value == null) {
+      return '-';
+    }
+
+    return '${value.day.toString().padLeft(2, '0')}/'
+        '${value.month.toString().padLeft(2, '0')}/'
+        '${value.year}';
+  }
+
+  bool _dateInside(
+    DateTime? value,
+    DateTime start,
+    DateTime endExclusive,
+  ) {
+    if (value == null) {
+      return false;
+    }
+
+    return !value.isBefore(start) &&
+        value.isBefore(endExclusive);
+  }
+
+  Widget _hotelReportCard(
+    _HotelFeeReportData report, {
+    required bool hasCustomRange,
+  }) {
+    return Card(
+      margin:
+          const EdgeInsets.only(
+        bottom: 12,
+      ),
+      child: Padding(
+        padding:
+            const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              crossAxisAlignment:
+                  CrossAxisAlignment.start,
+              children: <Widget>[
+                const CircleAvatar(
+                  child: Icon(
+                    Icons
+                        .hotel_rounded,
+                  ),
+                ),
+                const SizedBox(
+                  width: 10,
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        report.hotelName,
+                        style:
+                            const TextStyle(
+                          fontSize: 18,
+                          fontWeight:
+                              FontWeight
+                                  .w900,
+                        ),
+                      ),
+                      const SizedBox(
+                        height: 3,
+                      ),
+                      Text(
+                        '${report.invoiceCount} invoice(s) • '
+                        '${report.verifiedPaymentCount} verified payment(s)',
+                        style: TextStyle(
+                          color: Colors
+                              .grey
+                              .shade700,
+                          fontWeight:
+                              FontWeight
+                                  .w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const Divider(
+              height: 22,
+            ),
+            _row(
+              'Total Hotel Fee',
+              _money(
+                report.totalHotelFee,
+              ),
+              strong: true,
+              color: _rdBlue,
+            ),
+            _row(
+              'Total Commission',
+              _money(
+                report.totalCommission,
+              ),
+              strong: true,
+              color: _rdOrange,
+            ),
+            _row(
+              'Total Billed',
+              _money(
+                report.totalBilled,
+              ),
+              strong: true,
+            ),
+            _row(
+              'Total Paid',
+              _money(
+                report.totalPaid,
+              ),
+              strong: true,
+              color: _rdGreen,
+            ),
+            _row(
+              'Outstanding',
+              _money(
+                report.outstanding,
+              ),
+              strong: true,
+              color:
+                  report.outstanding > 0
+                      ? _rdRed
+                      : _rdGreen,
+            ),
+            const Divider(
+              height: 22,
+            ),
+            _row(
+              'Today Received',
+              _money(
+                report.todayReceived,
+              ),
+            ),
+            _row(
+              'This Week',
+              _money(
+                report.weekReceived,
+              ),
+            ),
+            _row(
+              'This Month',
+              _money(
+                report.monthReceived,
+              ),
+            ),
+            _row(
+              'This Year',
+              _money(
+                report.yearReceived,
+              ),
+            ),
+            if (hasCustomRange)
+              _row(
+                'Selected Dates',
+                _money(
+                  report.customReceived,
+                ),
+                strong: true,
+                color: _rdGreen,
+              ),
+            _row(
+              'Last Paid',
+              _dateFromDateTime(
+                report.lastPaidAt,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _hotelReportsTab() {
+    return StreamBuilder<
+        QuerySnapshot<
+            Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection(
+            'hotel_fee_invoices',
+          )
+          .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<
+                QuerySnapshot<
+                    Map<String, dynamic>>>
+            invoiceSnapshot,
+      ) {
+        return StreamBuilder<
+            QuerySnapshot<
+                Map<String, dynamic>>>(
+          stream: FirebaseFirestore.instance
+              .collection(
+                'hotel_fee_payments',
+              )
+              .snapshots(),
+          builder: (
+            BuildContext context,
+            AsyncSnapshot<
+                    QuerySnapshot<
+                        Map<String, dynamic>>>
+                paymentSnapshot,
+          ) {
+            if (invoiceSnapshot.connectionState ==
+                        ConnectionState.waiting &&
+                    !invoiceSnapshot.hasData ||
+                paymentSnapshot.connectionState ==
+                        ConnectionState.waiting &&
+                    !paymentSnapshot.hasData) {
+              return const Center(
+                child:
+                    CircularProgressIndicator(),
+              );
+            }
+
+            if (invoiceSnapshot.hasError) {
+              return Center(
+                child: Text(
+                  'Could not load Hotel fee invoices.\n'
+                  '${invoiceSnapshot.error}',
+                  textAlign:
+                      TextAlign.center,
+                ),
+              );
+            }
+
+            if (paymentSnapshot.hasError) {
+              return Center(
+                child: Text(
+                  'Could not load Hotel fee payments.\n'
+                  '${paymentSnapshot.error}',
+                  textAlign:
+                      TextAlign.center,
+                ),
+              );
+            }
+
+            final List<
+                    QueryDocumentSnapshot<
+                        Map<String, dynamic>>>
+                invoices =
+                invoiceSnapshot.data?.docs ??
+                    <QueryDocumentSnapshot<
+                        Map<String, dynamic>>>[];
+
+            final List<
+                    QueryDocumentSnapshot<
+                        Map<String, dynamic>>>
+                payments =
+                paymentSnapshot.data?.docs ??
+                    <QueryDocumentSnapshot<
+                        Map<String, dynamic>>>[];
+
+            final DateTime now =
+                DateTime.now();
+
+            final DateTime todayStart =
+                _startOfDay(now);
+
+            final DateTime tomorrowStart =
+                todayStart.add(
+              const Duration(days: 1),
+            );
+
+            final DateTime weekStart =
+                _startOfWeek(now);
+
+            final DateTime monthStart =
+                DateTime(
+              now.year,
+              now.month,
+              1,
+            );
+
+            final DateTime yearStart =
+                DateTime(
+              now.year,
+              1,
+              1,
+            );
+
+            final bool hasCustomRange =
+                _earningsFrom != null &&
+                    _earningsTo != null;
+
+            final DateTime? customStart =
+                _earningsFrom == null
+                    ? null
+                    : _startOfDay(
+                        _earningsFrom!,
+                      );
+
+            final DateTime? customEndExclusive =
+                _earningsTo == null
+                    ? null
+                    : _startOfDay(
+                        _earningsTo!,
+                      ).add(
+                        const Duration(
+                          days: 1,
+                        ),
+                      );
+
+            final Map<
+                    String,
+                    _HotelFeeReportData>
+                reports =
+                <String,
+                    _HotelFeeReportData>{};
+
+            for (final QueryDocumentSnapshot<
+                    Map<String, dynamic>>
+                doc in invoices) {
+              final Map<String, dynamic>
+                  data =
+                  doc.data();
+
+              final String key =
+                  _hotelReportKey(data);
+
+              final _HotelFeeReportData
+                  report =
+                  reports.putIfAbsent(
+                key,
+                () =>
+                    _HotelFeeReportData(
+                  key: key,
+                  hotelName:
+                      data['hotelName']
+                              ?.toString()
+                              .trim()
+                              .isNotEmpty ==
+                          true
+                      ? data['hotelName']
+                          .toString()
+                          .trim()
+                      : 'Hotel',
+                ),
+              );
+
+              report.invoiceCount++;
+
+              report.totalHotelFee +=
+                  (data['monthlyFee'] as num?)
+                          ?.toDouble() ??
+                      0;
+
+              report.totalCommission +=
+                  (data['commissionAmount']
+                              as num?)
+                          ?.toDouble() ??
+                      0;
+
+              report.totalBilled +=
+                  (data['totalDue'] as num?)
+                          ?.toDouble() ??
+                      0;
+
+              report.totalPaid +=
+                  (data['paidAmount'] as num?)
+                          ?.toDouble() ??
+                      0;
+
+              if (_effectiveInvoiceStatus(
+                    data,
+                  ) !=
+                  'waived') {
+                report.outstanding +=
+                    _outstanding(data);
+              }
+            }
+
+            for (final QueryDocumentSnapshot<
+                    Map<String, dynamic>>
+                doc in payments) {
+              final Map<String, dynamic>
+                  data =
+                  doc.data();
+
+              if (data['status'] !=
+                  'verified') {
+                continue;
+              }
+
+              final String key =
+                  _hotelReportKey(data);
+
+              final _HotelFeeReportData
+                  report =
+                  reports.putIfAbsent(
+                key,
+                () =>
+                    _HotelFeeReportData(
+                  key: key,
+                  hotelName:
+                      data['hotelName']
+                              ?.toString()
+                              .trim()
+                              .isNotEmpty ==
+                          true
+                      ? data['hotelName']
+                          .toString()
+                          .trim()
+                      : 'Hotel',
+                ),
+              );
+
+              final double amount =
+                  (data['amount'] as num?)
+                          ?.toDouble() ??
+                      0;
+
+              final DateTime? paidDate =
+                  _verifiedPaymentDate(
+                data,
+              );
+
+              report
+                  .verifiedPaymentCount++;
+
+              if (paidDate != null &&
+                  (report.lastPaidAt ==
+                          null ||
+                      paidDate.isAfter(
+                        report
+                            .lastPaidAt!,
+                      ))) {
+                report.lastPaidAt =
+                    paidDate;
+              }
+
+              if (_dateInside(
+                paidDate,
+                todayStart,
+                tomorrowStart,
+              )) {
+                report.todayReceived +=
+                    amount;
+              }
+
+              if (_dateInside(
+                paidDate,
+                weekStart,
+                tomorrowStart,
+              )) {
+                report.weekReceived +=
+                    amount;
+              }
+
+              if (_dateInside(
+                paidDate,
+                monthStart,
+                tomorrowStart,
+              )) {
+                report.monthReceived +=
+                    amount;
+              }
+
+              if (_dateInside(
+                paidDate,
+                yearStart,
+                tomorrowStart,
+              )) {
+                report.yearReceived +=
+                    amount;
+              }
+
+              if (hasCustomRange &&
+                  _dateInside(
+                    paidDate,
+                    customStart!,
+                    customEndExclusive!,
+                  )) {
+                report.customReceived +=
+                    amount;
+              }
+            }
+
+            final List<
+                    _HotelFeeReportData>
+                hotelReports =
+                reports.values.toList()
+                  ..sort(
+                    (
+                      _HotelFeeReportData
+                          first,
+                      _HotelFeeReportData
+                          second,
+                    ) =>
+                        first.hotelName
+                            .toLowerCase()
+                            .compareTo(
+                              second
+                                  .hotelName
+                                  .toLowerCase(),
+                            ),
+                  );
+
+            return Center(
+              child: ConstrainedBox(
+                constraints:
+                    const BoxConstraints(
+                  maxWidth: 1050,
+                ),
+                child: CustomScrollView(
+                  slivers: <Widget>[
+                    SliverPadding(
+                      padding:
+                          const EdgeInsets
+                              .fromLTRB(
+                        16,
+                        16,
+                        16,
+                        8,
+                      ),
+                      sliver:
+                          SliverToBoxAdapter(
+                        child: Column(
+                          crossAxisAlignment:
+                              CrossAxisAlignment
+                                  .stretch,
+                          children: <Widget>[
+                            Text(
+                              'Hotel-wise Finance Report (${hotelReports.length})',
+                              style:
+                                  const TextStyle(
+                                fontSize: 21,
+                                fontWeight:
+                                    FontWeight
+                                        .w900,
+                              ),
+                            ),
+                            const SizedBox(
+                              height: 5,
+                            ),
+                            Text(
+                              'No fixed Hotel count limit. Amounts are shown fully in lakh/crore format.',
+                              style: TextStyle(
+                                color: Colors
+                                    .grey
+                                    .shade700,
+                                fontWeight:
+                                    FontWeight
+                                        .w700,
+                              ),
+                            ),
+                            const SizedBox(
+                              height: 12,
+                            ),
+                            Card(
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets
+                                        .all(
+                                  12,
+                                ),
+                                child:
+                                    LayoutBuilder(
+                                  builder: (
+                                    BuildContext
+                                        context,
+                                    BoxConstraints
+                                        constraints,
+                                  ) {
+                                    final Widget
+                                        fromButton =
+                                        OutlinedButton
+                                            .icon(
+                                      onPressed:
+                                          _pickEarningsFrom,
+                                      icon:
+                                          const Icon(
+                                        Icons
+                                            .event_rounded,
+                                      ),
+                                      label: Text(
+                                        _earningsFrom ==
+                                                null
+                                            ? 'From Date'
+                                            : 'From ${_dateFromDateTime(_earningsFrom)}',
+                                      ),
+                                    );
+
+                                    final Widget
+                                        toButton =
+                                        OutlinedButton
+                                            .icon(
+                                      onPressed:
+                                          _pickEarningsTo,
+                                      icon:
+                                          const Icon(
+                                        Icons
+                                            .event_available_rounded,
+                                      ),
+                                      label: Text(
+                                        _earningsTo ==
+                                                null
+                                            ? 'To Date'
+                                            : 'To ${_dateFromDateTime(_earningsTo)}',
+                                      ),
+                                    );
+
+                                    if (constraints
+                                            .maxWidth >=
+                                        650) {
+                                      return Row(
+                                        children: <
+                                            Widget>[
+                                          Expanded(
+                                            child:
+                                                fromButton,
+                                          ),
+                                          const SizedBox(
+                                            width:
+                                                8,
+                                          ),
+                                          Expanded(
+                                            child:
+                                                toButton,
+                                          ),
+                                          const SizedBox(
+                                            width:
+                                                8,
+                                          ),
+                                          TextButton
+                                              .icon(
+                                            onPressed:
+                                                _earningsFrom ==
+                                                            null &&
+                                                        _earningsTo ==
+                                                            null
+                                                    ? null
+                                                    : () {
+                                                        setState(
+                                                          () {
+                                                            _earningsFrom =
+                                                                null;
+                                                            _earningsTo =
+                                                                null;
+                                                          },
+                                                        );
+                                                      },
+                                            icon:
+                                                const Icon(
+                                              Icons
+                                                  .clear_rounded,
+                                            ),
+                                            label:
+                                                const Text(
+                                              'Clear',
+                                            ),
+                                          ),
+                                        ],
+                                      );
+                                    }
+
+                                    return Column(
+                                      crossAxisAlignment:
+                                          CrossAxisAlignment
+                                              .stretch,
+                                      children: <
+                                          Widget>[
+                                        fromButton,
+                                        const SizedBox(
+                                          height:
+                                              8,
+                                        ),
+                                        toButton,
+                                        Align(
+                                          alignment:
+                                              Alignment
+                                                  .centerRight,
+                                          child:
+                                              TextButton
+                                                  .icon(
+                                            onPressed:
+                                                _earningsFrom ==
+                                                            null &&
+                                                        _earningsTo ==
+                                                            null
+                                                    ? null
+                                                    : () {
+                                                        setState(
+                                                          () {
+                                                            _earningsFrom =
+                                                                null;
+                                                            _earningsTo =
+                                                                null;
+                                                          },
+                                                        );
+                                                      },
+                                            icon:
+                                                const Icon(
+                                              Icons
+                                                  .clear_rounded,
+                                            ),
+                                            label:
+                                                const Text(
+                                              'Clear',
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    );
+                                  },
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (hotelReports.isEmpty)
+                      const SliverPadding(
+                        padding:
+                            EdgeInsets.all(
+                          16,
+                        ),
+                        sliver:
+                            SliverToBoxAdapter(
+                          child: Card(
+                            child: Padding(
+                              padding:
+                                  EdgeInsets
+                                      .all(
+                                24,
+                              ),
+                              child: Text(
+                                'No Hotel fee invoice or verified payment found.',
+                                textAlign:
+                                    TextAlign
+                                        .center,
+                              ),
+                            ),
+                          ),
+                        ),
+                      )
+                    else
+                      SliverPadding(
+                        padding:
+                            const EdgeInsets
+                                .fromLTRB(
+                          16,
+                          0,
+                          16,
+                          20,
+                        ),
+                        sliver: SliverList(
+                          delegate:
+                              SliverChildBuilderDelegate(
+                            (
+                              BuildContext
+                                  context,
+                              int index,
+                            ) {
+                              return _hotelReportCard(
+                                hotelReports[
+                                    index],
+                                hasCustomRange:
+                                    hasCustomRange,
+                              );
+                            },
+                            childCount:
+                                hotelReports
+                                    .length,
+                          ),
+                        ),
+                      ),
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+
   Widget _paymentsTab() {
     return StreamBuilder<
         QuerySnapshot<
@@ -3625,7 +4547,7 @@ class _AdminHotelFeePageState
   @override
   Widget build(BuildContext context) {
     return DefaultTabController(
-      length: 5,
+      length: 6,
       child: Scaffold(
         backgroundColor:
             const Color(0xFFF7F8FA),
@@ -3665,6 +4587,13 @@ class _AdminHotelFeePageState
               Tab(
                 icon: Icon(
                   Icons
+                      .analytics_rounded,
+                ),
+                text: 'Hotel Report',
+              ),
+              Tab(
+                icon: Icon(
+                  Icons
                       .history_rounded,
                 ),
                 text: 'Audit',
@@ -3684,6 +4613,7 @@ class _AdminHotelFeePageState
             _overviewTab(),
             _invoicesTab(),
             _paymentsTab(),
+            _hotelReportsTab(),
             _auditTab(),
             _settingsTab(),
           ],
@@ -3691,6 +4621,33 @@ class _AdminHotelFeePageState
       ),
     );
   }
+}
+
+class _HotelFeeReportData {
+  _HotelFeeReportData({
+    required this.key,
+    required this.hotelName,
+  });
+
+  final String key;
+  final String hotelName;
+
+  int invoiceCount = 0;
+  int verifiedPaymentCount = 0;
+
+  double totalHotelFee = 0;
+  double totalCommission = 0;
+  double totalBilled = 0;
+  double totalPaid = 0;
+  double outstanding = 0;
+
+  double todayReceived = 0;
+  double weekReceived = 0;
+  double monthReceived = 0;
+  double yearReceived = 0;
+  double customReceived = 0;
+
+  DateTime? lastPaidAt;
 }
 
 class _GenerateHotelFeeInvoiceDialog
