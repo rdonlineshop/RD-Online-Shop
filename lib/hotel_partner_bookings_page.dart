@@ -685,6 +685,514 @@ class _HotelPartnerBookingsPageState
     }
   }
 
+  Future<void> _completeBooking(
+    QueryDocumentSnapshot<
+            Map<String, dynamic>>
+        doc,
+  ) async {
+    final User? user = _user;
+
+    if (user == null ||
+        user.isAnonymous) {
+      return;
+    }
+
+    try {
+      await FirebaseFirestore.instance
+          .runTransaction<void>(
+        (Transaction transaction) async {
+          final DocumentSnapshot<
+                  Map<String, dynamic>>
+              fresh =
+              await transaction.get(
+            doc.reference,
+          );
+
+          if (!fresh.exists) {
+            throw StateError(
+              'Booking no longer exists.',
+            );
+          }
+
+          final Map<String, dynamic>
+              booking =
+              fresh.data() ??
+                  <String, dynamic>{};
+
+          if (booking['bookingStatus'] !=
+              'checked_in') {
+            throw StateError(
+              'Only a checked-in booking can be completed.',
+            );
+          }
+
+          if (booking['partnerId'] !=
+              user.uid) {
+            throw StateError(
+              'This booking does not belong '
+              'to this Hotel Partner.',
+            );
+          }
+
+          final String roomId =
+              booking['roomId']
+                      ?.toString() ??
+                  '';
+
+          final int roomCount =
+              (booking['roomCount'] as num?)
+                      ?.toInt() ??
+                  0;
+
+          final Timestamp? checkInStamp =
+              booking['checkIn']
+                  as Timestamp?;
+
+          final Timestamp? checkOutStamp =
+              booking['checkOut']
+                  as Timestamp?;
+
+          if (roomId.isEmpty ||
+              roomCount < 1 ||
+              checkInStamp == null ||
+              checkOutStamp == null) {
+            throw StateError(
+              'Booking data is incomplete.',
+            );
+          }
+
+          final List<DateTime> dates =
+              _stayDates(
+            checkInStamp.toDate(),
+            checkOutStamp.toDate(),
+          );
+
+          if (dates.isEmpty) {
+            throw StateError(
+              'Stay dates are invalid.',
+            );
+          }
+
+          final List<_InventoryEntry>
+              entries =
+              <_InventoryEntry>[];
+
+          for (final DateTime date
+              in dates) {
+            final DocumentReference<
+                    Map<String, dynamic>>
+                reference =
+                FirebaseFirestore.instance
+                    .collection(
+                      'hotel_room_inventory',
+                    )
+                    .doc(
+                      '${roomId}_${_dateKey(date)}',
+                    );
+
+            final DocumentSnapshot<
+                    Map<String, dynamic>>
+                inventory =
+                await transaction.get(
+              reference,
+            );
+
+            entries.add(
+              _InventoryEntry(
+                reference: reference,
+                snapshot: inventory,
+                date: date,
+              ),
+            );
+          }
+
+          for (final _InventoryEntry entry
+              in entries) {
+            if (!entry.snapshot.exists) {
+              continue;
+            }
+
+            final Map<String, dynamic> data =
+                entry.snapshot.data() ??
+                    <String, dynamic>{};
+
+            final int total =
+                (data['totalRooms'] as num?)
+                        ?.toInt() ??
+                    0;
+
+            final int blocked =
+                (data['blockedRooms'] as num?)
+                        ?.toInt() ??
+                    0;
+
+            final int booked =
+                (data['bookedRooms'] as num?)
+                        ?.toInt() ??
+                    0;
+
+            final int nextBooked =
+                booked - roomCount < 0
+                    ? 0
+                    : booked -
+                        roomCount;
+
+            final bool open =
+                data['isOpen'] != false;
+
+            final int nextAvailable =
+                open
+                    ? total -
+                        blocked -
+                        nextBooked
+                    : 0;
+
+            transaction.update(
+              entry.reference,
+              <String, dynamic>{
+                'bookedRooms':
+                    nextBooked,
+                'availableRooms':
+                    nextAvailable,
+                'updatedAt':
+                    FieldValue
+                        .serverTimestamp(),
+              },
+            );
+          }
+
+          transaction.update(
+            doc.reference,
+            <String, dynamic>{
+              'bookingStatus':
+                  'completed',
+              'updatedAt':
+                  FieldValue
+                      .serverTimestamp(),
+            },
+          );
+        },
+      );
+
+      if (mounted) {
+        _message(
+          'Booking completed. Room availability restored automatically.',
+        );
+      }
+    } catch (error) {
+      _message(
+        'Could not complete booking.\n'
+        '$error',
+      );
+    }
+  }
+
+  Future<void> _restoreCompletedAvailability(
+    QueryDocumentSnapshot<
+            Map<String, dynamic>>
+        doc,
+  ) async {
+    final User? user = _user;
+
+    if (user == null ||
+        user.isAnonymous) {
+      return;
+    }
+
+    final bool? confirm =
+        await showDialog<bool>(
+      context: context,
+      builder:
+          (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text(
+            'Restore Room Availability',
+            style: TextStyle(
+              fontWeight:
+                  FontWeight.w900,
+            ),
+          ),
+          content: const Text(
+            'Use this only for an older COMPLETED booking '
+            'that still shows as "Booked by RD".\n\n'
+            'This repair will release only this booking\'s '
+            'room count when it is safe to do so. '
+            'It will not change payment, customer, dates '
+            'or any other booking information.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () =>
+                  Navigator.pop(
+                dialogContext,
+                false,
+              ),
+              child:
+                  const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: () =>
+                  Navigator.pop(
+                dialogContext,
+                true,
+              ),
+              icon: const Icon(
+                Icons
+                    .restore_rounded,
+              ),
+              label: const Text(
+                'Restore',
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirm != true) {
+      return;
+    }
+
+    try {
+      final bool restored =
+          await FirebaseFirestore.instance
+              .runTransaction<bool>(
+        (Transaction transaction) async {
+          final DocumentSnapshot<
+                  Map<String, dynamic>>
+              fresh =
+              await transaction.get(
+            doc.reference,
+          );
+
+          if (!fresh.exists) {
+            throw StateError(
+              'Booking no longer exists.',
+            );
+          }
+
+          final Map<String, dynamic>
+              booking =
+              fresh.data() ??
+                  <String, dynamic>{};
+
+          if (booking['bookingStatus'] !=
+              'completed') {
+            throw StateError(
+              'Only a COMPLETED booking can use this repair.',
+            );
+          }
+
+          if (booking['partnerId'] !=
+              user.uid) {
+            throw StateError(
+              'This booking does not belong '
+              'to this Hotel Partner.',
+            );
+          }
+
+          final String roomId =
+              booking['roomId']
+                      ?.toString() ??
+                  '';
+
+          final int roomCount =
+              (booking['roomCount'] as num?)
+                      ?.toInt() ??
+                  0;
+
+          final Timestamp? checkInStamp =
+              booking['checkIn']
+                  as Timestamp?;
+
+          final Timestamp? checkOutStamp =
+              booking['checkOut']
+                  as Timestamp?;
+
+          if (roomId.isEmpty ||
+              roomCount < 1 ||
+              checkInStamp == null ||
+              checkOutStamp == null) {
+            throw StateError(
+              'Booking data is incomplete.',
+            );
+          }
+
+          final List<DateTime> dates =
+              _stayDates(
+            checkInStamp.toDate(),
+            checkOutStamp.toDate(),
+          );
+
+          if (dates.isEmpty) {
+            throw StateError(
+              'Stay dates are invalid.',
+            );
+          }
+
+          final List<_InventoryEntry>
+              entries =
+              <_InventoryEntry>[];
+
+          for (final DateTime date
+              in dates) {
+            final DocumentReference<
+                    Map<String, dynamic>>
+                reference =
+                FirebaseFirestore.instance
+                    .collection(
+                      'hotel_room_inventory',
+                    )
+                    .doc(
+                      '${roomId}_${_dateKey(date)}',
+                    );
+
+            final DocumentSnapshot<
+                    Map<String, dynamic>>
+                inventory =
+                await transaction.get(
+              reference,
+            );
+
+            entries.add(
+              _InventoryEntry(
+                reference: reference,
+                snapshot: inventory,
+                date: date,
+              ),
+            );
+          }
+
+          bool changed = false;
+
+          for (final _InventoryEntry entry
+              in entries) {
+            if (!entry.snapshot.exists) {
+              continue;
+            }
+
+            final Map<String, dynamic> data =
+                entry.snapshot.data() ??
+                    <String, dynamic>{};
+
+            if (data['partnerId'] !=
+                    user.uid ||
+                data['roomId'] !=
+                    roomId) {
+              throw StateError(
+                'Inventory ownership mismatch on '
+                '${entry.date.day}/'
+                '${entry.date.month}/'
+                '${entry.date.year}.',
+              );
+            }
+
+            final int total =
+                (data['totalRooms'] as num?)
+                        ?.toInt() ??
+                    0;
+
+            final int blocked =
+                (data['blockedRooms'] as num?)
+                        ?.toInt() ??
+                    0;
+
+            final int booked =
+                (data['bookedRooms'] as num?)
+                        ?.toInt() ??
+                    0;
+
+            if (booked <= 0) {
+              continue;
+            }
+
+            final String lastBookingId =
+                data['lastBookingId']
+                        ?.toString()
+                        .trim() ??
+                    '';
+
+            if (lastBookingId.isNotEmpty &&
+                lastBookingId != doc.id) {
+              throw StateError(
+                'Another booking is currently recorded '
+                'for ${entry.date.day}/'
+                '${entry.date.month}/'
+                '${entry.date.year}. '
+                'Nothing was changed to protect that booking.',
+              );
+            }
+
+            if (booked < roomCount) {
+              throw StateError(
+                'Inventory count is smaller than this '
+                'booking room count on '
+                '${entry.date.day}/'
+                '${entry.date.month}/'
+                '${entry.date.year}. '
+                'Nothing was changed.',
+              );
+            }
+
+            final int nextBooked =
+                booked - roomCount;
+
+            final bool open =
+                data['isOpen'] != false;
+
+            final int nextAvailable =
+                open
+                    ? total -
+                        blocked -
+                        nextBooked
+                    : 0;
+
+            if (nextAvailable < 0) {
+              throw StateError(
+                'Inventory values are invalid on '
+                '${entry.date.day}/'
+                '${entry.date.month}/'
+                '${entry.date.year}.',
+              );
+            }
+
+            transaction.update(
+              entry.reference,
+              <String, dynamic>{
+                'bookedRooms':
+                    nextBooked,
+                'availableRooms':
+                    nextAvailable,
+                'updatedAt':
+                    FieldValue
+                        .serverTimestamp(),
+              },
+            );
+
+            changed = true;
+          }
+
+          return changed;
+        },
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      _message(
+        restored
+            ? 'Old completed booking inventory repaired. Room availability restored.'
+            : 'No stale booked room was found. Availability is already released.',
+      );
+    } catch (error) {
+      _message(
+        'Could not restore availability.\n'
+        '$error',
+      );
+    }
+  }
+
   Future<void> _setStatus(
     QueryDocumentSnapshot<
             Map<String, dynamic>>
@@ -1222,9 +1730,8 @@ class _HotelPartnerBookingsPageState
                     'checked_in')
                   FilledButton.tonalIcon(
                     onPressed: () =>
-                        _setStatus(
+                        _completeBooking(
                       doc,
-                      'completed',
                     ),
                     icon: const Icon(
                       Icons
@@ -1232,6 +1739,21 @@ class _HotelPartnerBookingsPageState
                     ),
                     label: const Text(
                       'Complete',
+                    ),
+                  ),
+                if (status ==
+                    'completed')
+                  OutlinedButton.icon(
+                    onPressed: () =>
+                        _restoreCompletedAvailability(
+                      doc,
+                    ),
+                    icon: const Icon(
+                      Icons
+                          .restore_rounded,
+                    ),
+                    label: const Text(
+                      'Restore Availability',
                     ),
                   ),
                 if (paymentStatus !=

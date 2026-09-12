@@ -41,21 +41,21 @@ class HotelPartnerDashboardPage extends StatelessWidget {
       },
     );
 
-    if (confirm != true) {
+    if (confirm != true ||
+        !context.mounted) {
       return;
     }
 
-    await FirebaseAuth.instance.signOut();
-    await FirebaseAuth.instance.signInAnonymously();
-
-    if (!context.mounted) {
-      return;
-    }
-
+    // Leave the Hotel Partner page first so its auth/Firestore
+    // StreamBuilders cannot briefly show a progress/login-required
+    // screen while the account is being signed out.
     Navigator.popUntil(
       context,
       (Route<dynamic> route) => route.isFirst,
     );
+
+    await FirebaseAuth.instance.signOut();
+    await FirebaseAuth.instance.signInAnonymously();
   }
 
   @override

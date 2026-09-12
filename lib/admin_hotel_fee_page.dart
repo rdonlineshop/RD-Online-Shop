@@ -48,6 +48,9 @@ class _AdminHotelFeePageState
   String _invoiceFilter = 'all';
   String _paymentFilter = 'submitted';
 
+  DateTime? _earningsFrom;
+  DateTime? _earningsTo;
+
   @override
   void initState() {
     super.initState();
@@ -1386,6 +1389,291 @@ class _AdminHotelFeePageState
     return status == _paymentFilter;
   }
 
+  DateTime _startOfDay(DateTime value) =>
+      DateTime(
+        value.year,
+        value.month,
+        value.day,
+      );
+
+  DateTime _startOfWeek(DateTime value) {
+    final DateTime day = _startOfDay(value);
+
+    return day.subtract(
+      Duration(
+        days: day.weekday - DateTime.monday,
+      ),
+    );
+  }
+
+  DateTime? _verifiedPaymentDate(
+    Map<String, dynamic> data,
+  ) {
+    final dynamic verifiedAt =
+        data['verifiedAt'];
+
+    if (verifiedAt is Timestamp) {
+      return verifiedAt.toDate();
+    }
+
+    // Backward-compatible fallback for an older verified payment
+    // that may not have verifiedAt saved.
+    final dynamic updatedAt =
+        data['updatedAt'];
+
+    if (updatedAt is Timestamp) {
+      return updatedAt.toDate();
+    }
+
+    final dynamic submittedAt =
+        data['submittedAt'];
+
+    if (submittedAt is Timestamp) {
+      return submittedAt.toDate();
+    }
+
+    return null;
+  }
+
+  List<
+          QueryDocumentSnapshot<
+              Map<String, dynamic>>>
+      _verifiedPayments(
+    List<
+            QueryDocumentSnapshot<
+                Map<String, dynamic>>>
+        payments,
+  ) {
+    final List<
+            QueryDocumentSnapshot<
+                Map<String, dynamic>>>
+        verified =
+        payments
+            .where(
+              (
+                QueryDocumentSnapshot<
+                        Map<String, dynamic>>
+                    doc,
+              ) =>
+                  doc.data()['status'] ==
+                  'verified',
+            )
+            .toList();
+
+    verified.sort(
+      (
+        QueryDocumentSnapshot<
+                Map<String, dynamic>>
+            first,
+        QueryDocumentSnapshot<
+                Map<String, dynamic>>
+            second,
+      ) {
+        final DateTime? firstDate =
+            _verifiedPaymentDate(
+          first.data(),
+        );
+
+        final DateTime? secondDate =
+            _verifiedPaymentDate(
+          second.data(),
+        );
+
+        return (secondDate
+                    ?.millisecondsSinceEpoch ??
+                0)
+            .compareTo(
+          firstDate
+                  ?.millisecondsSinceEpoch ??
+              0,
+        );
+      },
+    );
+
+    return verified;
+  }
+
+  List<
+          QueryDocumentSnapshot<
+              Map<String, dynamic>>>
+      _paymentsBetween(
+    List<
+            QueryDocumentSnapshot<
+                Map<String, dynamic>>>
+        payments,
+    DateTime start,
+    DateTime endExclusive,
+  ) {
+    return _verifiedPayments(payments)
+        .where(
+          (
+            QueryDocumentSnapshot<
+                    Map<String, dynamic>>
+                doc,
+          ) {
+            final DateTime? paidDate =
+                _verifiedPaymentDate(
+              doc.data(),
+            );
+
+            if (paidDate == null) {
+              return false;
+            }
+
+            return !paidDate.isBefore(start) &&
+                paidDate.isBefore(
+                  endExclusive,
+                );
+          },
+        )
+        .toList();
+  }
+
+  double _paymentTotal(
+    List<
+            QueryDocumentSnapshot<
+                Map<String, dynamic>>>
+        payments,
+  ) {
+    double total = 0;
+
+    for (final QueryDocumentSnapshot<
+            Map<String, dynamic>>
+        doc in payments) {
+      total +=
+          (doc.data()['amount'] as num?)
+                  ?.toDouble() ??
+              0;
+    }
+
+    return total;
+  }
+
+  Future<void> _pickEarningsFrom() async {
+    final DateTime today =
+        _startOfDay(DateTime.now());
+
+    final DateTime initial =
+        _earningsFrom ?? today;
+
+    final DateTime? picked =
+        await showDatePicker(
+      context: context,
+      initialDate: initial.isAfter(today)
+          ? today
+          : initial,
+      firstDate:
+          DateTime(today.year - 10, 1, 1),
+      lastDate: today,
+    );
+
+    if (!mounted || picked == null) {
+      return;
+    }
+
+    setState(() {
+      _earningsFrom =
+          _startOfDay(picked);
+
+      if (_earningsTo != null &&
+          _earningsTo!.isBefore(
+            _earningsFrom!,
+          )) {
+        _earningsTo =
+            _earningsFrom;
+      }
+    });
+  }
+
+  Future<void> _pickEarningsTo() async {
+    final DateTime today =
+        _startOfDay(DateTime.now());
+
+    final DateTime first =
+        _earningsFrom ??
+            DateTime(
+              today.year - 10,
+              1,
+              1,
+            );
+
+    final DateTime initial =
+        _earningsTo ??
+            (_earningsFrom ?? today);
+
+    final DateTime? picked =
+        await showDatePicker(
+      context: context,
+      initialDate:
+          initial.isAfter(today)
+              ? today
+              : initial.isBefore(first)
+                  ? first
+                  : initial,
+      firstDate: first,
+      lastDate: today,
+    );
+
+    if (!mounted || picked == null) {
+      return;
+    }
+
+    setState(() {
+      _earningsTo =
+          _startOfDay(picked);
+    });
+  }
+
+  Widget _earningsPaymentCard(
+    QueryDocumentSnapshot<
+            Map<String, dynamic>>
+        doc,
+  ) {
+    final Map<String, dynamic> data =
+        doc.data();
+
+    final DateTime? paidDate =
+        _verifiedPaymentDate(data);
+
+    return Card(
+      margin:
+          const EdgeInsets.only(
+        bottom: 8,
+      ),
+      child: ListTile(
+        leading: const CircleAvatar(
+          child: Icon(
+            Icons
+                .payments_rounded,
+          ),
+        ),
+        title: Text(
+          data['hotelName']
+                  ?.toString() ??
+              'Hotel',
+          style: const TextStyle(
+            fontWeight:
+                FontWeight.w900,
+          ),
+        ),
+        subtitle: Text(
+          'Paid: ${paidDate == null ? '-' : '${paidDate.day.toString().padLeft(2, '0')}/${paidDate.month.toString().padLeft(2, '0')}/${paidDate.year}'}\n'
+          'Method: ${data['method'] ?? '-'} • Billing: ${data['billingMonth'] ?? '-'}',
+        ),
+        trailing: Text(
+          _money(
+            data['amount'],
+          ),
+          style: const TextStyle(
+            color: _rdGreen,
+            fontWeight:
+                FontWeight.w900,
+          ),
+        ),
+      ),
+    );
+  }
+
   Widget _overviewTab() {
     return StreamBuilder<
         QuerySnapshot<
@@ -1417,6 +1705,40 @@ class _AdminHotelFeePageState
                         Map<String, dynamic>>>
                 paymentSnapshot,
           ) {
+            if (invoiceSnapshot.connectionState ==
+                        ConnectionState.waiting &&
+                    !invoiceSnapshot.hasData ||
+                paymentSnapshot.connectionState ==
+                        ConnectionState.waiting &&
+                    !paymentSnapshot.hasData) {
+              return const Center(
+                child:
+                    CircularProgressIndicator(),
+              );
+            }
+
+            if (invoiceSnapshot.hasError) {
+              return Center(
+                child: Text(
+                  'Could not load Hotel fee invoices.\n'
+                  '${invoiceSnapshot.error}',
+                  textAlign:
+                      TextAlign.center,
+                ),
+              );
+            }
+
+            if (paymentSnapshot.hasError) {
+              return Center(
+                child: Text(
+                  'Could not load Hotel fee payments.\n'
+                  '${paymentSnapshot.error}',
+                  textAlign:
+                      TextAlign.center,
+                ),
+              );
+            }
+
             final List<
                     QueryDocumentSnapshot<
                         Map<String, dynamic>>>
@@ -1482,6 +1804,121 @@ class _AdminHotelFeePageState
                     )
                     .length;
 
+            final DateTime now =
+                DateTime.now();
+
+            final DateTime todayStart =
+                _startOfDay(now);
+
+            final DateTime tomorrowStart =
+                todayStart.add(
+              const Duration(days: 1),
+            );
+
+            final DateTime weekStart =
+                _startOfWeek(now);
+
+            final DateTime monthStart =
+                DateTime(
+              now.year,
+              now.month,
+              1,
+            );
+
+            final DateTime yearStart =
+                DateTime(
+              now.year,
+              1,
+              1,
+            );
+
+            final double todayEarnings =
+                _paymentTotal(
+              _paymentsBetween(
+                payments,
+                todayStart,
+                tomorrowStart,
+              ),
+            );
+
+            final double weekEarnings =
+                _paymentTotal(
+              _paymentsBetween(
+                payments,
+                weekStart,
+                tomorrowStart,
+              ),
+            );
+
+            final double monthEarnings =
+                _paymentTotal(
+              _paymentsBetween(
+                payments,
+                monthStart,
+                tomorrowStart,
+              ),
+            );
+
+            final double yearEarnings =
+                _paymentTotal(
+              _paymentsBetween(
+                payments,
+                yearStart,
+                tomorrowStart,
+              ),
+            );
+
+            final bool hasCustomRange =
+                _earningsFrom != null &&
+                    _earningsTo != null;
+
+            final DateTime? customStart =
+                _earningsFrom == null
+                    ? null
+                    : _startOfDay(
+                        _earningsFrom!,
+                      );
+
+            final DateTime? customEndExclusive =
+                _earningsTo == null
+                    ? null
+                    : _startOfDay(
+                        _earningsTo!,
+                      ).add(
+                        const Duration(
+                          days: 1,
+                        ),
+                      );
+
+            final List<
+                    QueryDocumentSnapshot<
+                        Map<String, dynamic>>>
+                verifiedPayments =
+                _verifiedPayments(
+              payments,
+            );
+
+            final List<
+                    QueryDocumentSnapshot<
+                        Map<String, dynamic>>>
+                shownPaidHotels =
+                hasCustomRange
+                    ? _paymentsBetween(
+                        payments,
+                        customStart!,
+                        customEndExclusive!,
+                      )
+                    : verifiedPayments
+                        .take(10)
+                        .toList();
+
+            final double customTotal =
+                hasCustomRange
+                    ? _paymentTotal(
+                        shownPaidHotels,
+                      )
+                    : 0;
+
             return Center(
               child: ConstrainedBox(
                 constraints:
@@ -1541,6 +1978,344 @@ class _AdminHotelFeePageState
                         ),
                       ],
                     ),
+                    const SizedBox(
+                      height: 20,
+                    ),
+                    const Text(
+                      'RD Hotel Fee Earnings',
+                      style: TextStyle(
+                        fontSize: 21,
+                        fontWeight:
+                            FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 4,
+                    ),
+                    Text(
+                      'Verified Hotel fee payments received by RD.',
+                      style: TextStyle(
+                        color:
+                            Colors.grey.shade700,
+                        fontWeight:
+                            FontWeight.w700,
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 10,
+                    ),
+                    GridView.count(
+                      crossAxisCount:
+                          MediaQuery.sizeOf(
+                                        context,
+                                      )
+                                      .width >=
+                                  900
+                              ? 4
+                              : 2,
+                      shrinkWrap: true,
+                      physics:
+                          const NeverScrollableScrollPhysics(),
+                      crossAxisSpacing: 10,
+                      mainAxisSpacing: 10,
+                      childAspectRatio: 1.35,
+                      children: <Widget>[
+                        _statCard(
+                          'Today Earnings',
+                          _money(
+                            todayEarnings,
+                          ),
+                          Icons.today_rounded,
+                          _rdGreen,
+                        ),
+                        _statCard(
+                          'This Week',
+                          _money(
+                            weekEarnings,
+                          ),
+                          Icons
+                              .date_range_rounded,
+                          _rdBlue,
+                        ),
+                        _statCard(
+                          'This Month',
+                          _money(
+                            monthEarnings,
+                          ),
+                          Icons
+                              .calendar_month_rounded,
+                          _rdOrange,
+                        ),
+                        _statCard(
+                          'This Year',
+                          _money(
+                            yearEarnings,
+                          ),
+                          Icons
+                              .calendar_today_rounded,
+                          _rdGreen,
+                        ),
+                      ],
+                    ),
+                    const SizedBox(
+                      height: 16,
+                    ),
+                    Card(
+                      child: Padding(
+                        padding:
+                            const EdgeInsets
+                                .all(14),
+                        child: Column(
+                          crossAxisAlignment:
+                              CrossAxisAlignment
+                                  .stretch,
+                          children: <Widget>[
+                            const Text(
+                              'Earnings by Date',
+                              style: TextStyle(
+                                fontSize: 18,
+                                fontWeight:
+                                    FontWeight
+                                        .w900,
+                              ),
+                            ),
+                            const SizedBox(
+                              height: 10,
+                            ),
+                            LayoutBuilder(
+                              builder: (
+                                BuildContext
+                                    context,
+                                BoxConstraints
+                                    constraints,
+                              ) {
+                                final Widget
+                                    fromButton =
+                                    OutlinedButton
+                                        .icon(
+                                  onPressed:
+                                      _pickEarningsFrom,
+                                  icon: const Icon(
+                                    Icons
+                                        .event_rounded,
+                                  ),
+                                  label: Text(
+                                    _earningsFrom ==
+                                            null
+                                        ? 'From Date'
+                                        : 'From ${_earningsFrom!.day.toString().padLeft(2, '0')}/${_earningsFrom!.month.toString().padLeft(2, '0')}/${_earningsFrom!.year}',
+                                  ),
+                                );
+
+                                final Widget
+                                    toButton =
+                                    OutlinedButton
+                                        .icon(
+                                  onPressed:
+                                      _pickEarningsTo,
+                                  icon: const Icon(
+                                    Icons
+                                        .event_available_rounded,
+                                  ),
+                                  label: Text(
+                                    _earningsTo ==
+                                            null
+                                        ? 'To Date'
+                                        : 'To ${_earningsTo!.day.toString().padLeft(2, '0')}/${_earningsTo!.month.toString().padLeft(2, '0')}/${_earningsTo!.year}',
+                                  ),
+                                );
+
+                                if (constraints
+                                        .maxWidth >=
+                                    650) {
+                                  return Row(
+                                    children: <
+                                        Widget>[
+                                      Expanded(
+                                        child:
+                                            fromButton,
+                                      ),
+                                      const SizedBox(
+                                        width: 8,
+                                      ),
+                                      Expanded(
+                                        child:
+                                            toButton,
+                                      ),
+                                      const SizedBox(
+                                        width: 8,
+                                      ),
+                                      TextButton
+                                          .icon(
+                                        onPressed:
+                                            _earningsFrom ==
+                                                        null &&
+                                                    _earningsTo ==
+                                                        null
+                                                ? null
+                                                : () {
+                                                    setState(
+                                                      () {
+                                                        _earningsFrom =
+                                                            null;
+                                                        _earningsTo =
+                                                            null;
+                                                      },
+                                                    );
+                                                  },
+                                        icon:
+                                            const Icon(
+                                          Icons
+                                              .clear_rounded,
+                                        ),
+                                        label:
+                                            const Text(
+                                          'Clear',
+                                        ),
+                                      ),
+                                    ],
+                                  );
+                                }
+
+                                return Column(
+                                  crossAxisAlignment:
+                                      CrossAxisAlignment
+                                          .stretch,
+                                  children: <
+                                      Widget>[
+                                    fromButton,
+                                    const SizedBox(
+                                      height: 8,
+                                    ),
+                                    toButton,
+                                    Align(
+                                      alignment:
+                                          Alignment
+                                              .centerRight,
+                                      child:
+                                          TextButton
+                                              .icon(
+                                        onPressed:
+                                            _earningsFrom ==
+                                                        null &&
+                                                    _earningsTo ==
+                                                        null
+                                                ? null
+                                                : () {
+                                                    setState(
+                                                      () {
+                                                        _earningsFrom =
+                                                            null;
+                                                        _earningsTo =
+                                                            null;
+                                                      },
+                                                    );
+                                                  },
+                                        icon:
+                                            const Icon(
+                                          Icons
+                                              .clear_rounded,
+                                        ),
+                                        label:
+                                            const Text(
+                                          'Clear',
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                );
+                              },
+                            ),
+                            if (hasCustomRange) ...<
+                                Widget>[
+                              const Divider(),
+                              _row(
+                                'Selected Date Earnings',
+                                _money(
+                                  customTotal,
+                                ),
+                                strong: true,
+                                color:
+                                    _rdGreen,
+                              ),
+                              _row(
+                                'Verified Payments',
+                                '${shownPaidHotels.length}',
+                                strong: true,
+                              ),
+                            ] else ...<
+                                Widget>[
+                              const SizedBox(
+                                height: 4,
+                              ),
+                              Text(
+                                'Select From and To dates to see the exact total and paid Hotels for that period.',
+                                style: TextStyle(
+                                  color: Colors
+                                      .grey
+                                      .shade700,
+                                  fontWeight:
+                                      FontWeight
+                                          .w700,
+                                ),
+                              ),
+                            ],
+                          ],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(
+                      height: 16,
+                    ),
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Text(
+                            hasCustomRange
+                                ? 'Paid Hotels in Selected Dates'
+                                : 'Recent Verified Payments',
+                            style:
+                                const TextStyle(
+                              fontSize: 19,
+                              fontWeight:
+                                  FontWeight
+                                      .w900,
+                            ),
+                          ),
+                        ),
+                        Text(
+                          '${shownPaidHotels.length}',
+                          style:
+                              const TextStyle(
+                            color: _rdBlue,
+                            fontWeight:
+                                FontWeight
+                                    .w900,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(
+                      height: 8,
+                    ),
+                    if (shownPaidHotels.isEmpty)
+                      const Card(
+                        child: Padding(
+                          padding:
+                              EdgeInsets
+                                  .all(20),
+                          child: Text(
+                            'No verified Hotel fee payment found for this period.',
+                            textAlign:
+                                TextAlign
+                                    .center,
+                          ),
+                        ),
+                      )
+                    else
+                      ...shownPaidHotels.map(
+                        _earningsPaymentCard,
+                      ),
                     const SizedBox(
                       height: 16,
                     ),
@@ -2359,6 +3134,16 @@ class _AdminHotelFeePageState
                 data['submittedAt'],
               ),
             ),
+            if (status == 'verified')
+              _row(
+                'Verified / Paid Date',
+                _date(
+                  data['verifiedAt'] ??
+                      data['updatedAt'],
+                ),
+                strong: true,
+                color: _rdGreen,
+              ),
             if ((data['note']
                         ?.toString()
                         .trim() ??

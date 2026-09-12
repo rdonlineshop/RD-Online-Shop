@@ -700,7 +700,8 @@ class _HotelBookingPageState
       checkOut,
     );
 
-    if (dates.isEmpty) {
+    if (dates.isEmpty ||
+        totalRooms < 1) {
       return 0;
     }
 
@@ -717,6 +718,9 @@ class _HotelBookingPageState
               )
               .get();
 
+      // No inventory document means the Hotel has not blocked/closed
+      // this future date and no RD booking has reserved it yet.
+      // In that case all rooms are available by default.
       if (!inventory.exists) {
         continue;
       }
@@ -725,14 +729,32 @@ class _HotelBookingPageState
           inventory.data() ??
               <String, dynamic>{};
 
+      // Hotel Partner can explicitly close a date.
       if (data['isOpen'] == false) {
         return 0;
       }
 
-      final int available =
-          (data['availableRooms'] as num?)
+      final int blocked =
+          (data['blockedRooms'] as num?)
                   ?.toInt() ??
               0;
+
+      final int booked =
+          (data['bookedRooms'] as num?)
+                  ?.toInt() ??
+              0;
+
+      // Recalculate from the current room total instead of trusting a
+      // stale availableRooms value left by an older test/update.
+      final int calculated =
+          totalRooms - blocked - booked;
+
+      final int available =
+          calculated < 0
+              ? 0
+              : calculated > totalRooms
+                  ? totalRooms
+                  : calculated;
 
       if (available < minimum) {
         minimum = available;
@@ -2807,10 +2829,16 @@ class CustomerRoomCard
     final Map<String, dynamic> room =
         roomDoc.data();
 
-    int minimum =
+    final int totalRooms =
         (room['totalRooms'] as num?)
                 ?.toInt() ??
             0;
+
+    int minimum = totalRooms;
+
+    if (totalRooms < 1) {
+      return 0;
+    }
 
     for (final DateTime date
         in _stayDates()) {
@@ -2826,6 +2854,8 @@ class CustomerRoomCard
               )
               .get();
 
+      // Missing date inventory = open by default with all rooms
+      // available, unless a booking/block/closed record exists.
       if (!inventory.exists) {
         continue;
       }
@@ -2838,10 +2868,25 @@ class CustomerRoomCard
         return 0;
       }
 
-      final int available =
-          (data['availableRooms'] as num?)
+      final int blocked =
+          (data['blockedRooms'] as num?)
                   ?.toInt() ??
               0;
+
+      final int booked =
+          (data['bookedRooms'] as num?)
+                  ?.toInt() ??
+              0;
+
+      final int calculated =
+          totalRooms - blocked - booked;
+
+      final int available =
+          calculated < 0
+              ? 0
+              : calculated > totalRooms
+                  ? totalRooms
+                  : calculated;
 
       if (available < minimum) {
         minimum = available;

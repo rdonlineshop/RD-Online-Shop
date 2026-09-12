@@ -404,7 +404,9 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
               IconButton(
                 tooltip: 'Bus Admin Notices',
                 onPressed: _openBusAttentionSheet,
-                icon: const Icon(Icons.notifications_active_rounded),
+                icon: const Icon(
+                  Icons.notifications_active_rounded,
+                ),
               ),
               if (_busAttentionCount > 0)
                 Positioned(
@@ -422,7 +424,8 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                       ),
                       decoration: BoxDecoration(
                         color: Colors.red,
-                        borderRadius: BorderRadius.circular(12),
+                        borderRadius:
+                            BorderRadius.circular(12),
                       ),
                       alignment: Alignment.center,
                       child: Text(
@@ -447,187 +450,411 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
           ),
         ],
       ),
-      body: GridView.count(
-        padding: const EdgeInsets.all(16),
-        crossAxisCount: 2,
-        crossAxisSpacing: 12,
-        mainAxisSpacing: 12,
-        children: <Widget>[
-          _dashboardCard(
-            icon: Icons.shopping_bag,
-            title: 'Orders',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminOrderPage(),
+      body: LayoutBuilder(
+        builder: (
+          BuildContext context,
+          BoxConstraints constraints,
+        ) {
+          final int columns =
+              constraints.maxWidth >= 900
+                  ? 3
+                  : 2;
+
+          return GridView.count(
+            padding: const EdgeInsets.all(16),
+            crossAxisCount: columns,
+            crossAxisSpacing: 12,
+            mainAxisSpacing: 12,
+            children: <Widget>[
+              _dashboardCard(
+                icon: Icons.storefront_rounded,
+                title: 'Online Shop',
+                onTap: () =>
+                    _openOnlineShopDashboard(
+                  context,
+                ),
               ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.inventory_2,
-            title: 'Products',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminProductPage(),
+              _dashboardCard(
+                icon: Icons.hotel_rounded,
+                title: 'Hotel Dashboard',
+                onTap: () =>
+                    _openHotelDashboard(
+                  context,
+                ),
               ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.store,
-            title: 'Sellers',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminSellerPage(),
+              _dashboardCard(
+                icon:
+                    Icons.directions_bus_filled_rounded,
+                title: 'Bus Dashboard',
+                badgeCount:
+                    _busAttentionCount,
+                onTap: () =>
+                    _openBusDashboard(
+                  context,
+                ),
               ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.hotel_class_rounded,
-            title: 'Hotel Partners',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) =>
-                    const AdminHotelPartnerManagementPage(),
+              _dashboardCard(
+                icon:
+                    Icons.flight_takeoff_rounded,
+                title: 'Flight Dashboard',
+                onTap: () =>
+                    _openFlightDashboard(
+                  context,
+                ),
               ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.apartment_rounded,
-            title: 'Hotels',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) =>
-                    const AdminHotelManagementPage(),
+              _dashboardCard(
+                icon: Icons.local_taxi_rounded,
+                title: 'Ride Dashboard',
+                onTap: () =>
+                    _openRideDashboard(
+                  context,
+                ),
               ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.request_quote_rounded,
-            title: 'Hotel Fees',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) =>
-                    const AdminHotelFeePage(),
+              _dashboardCard(
+                icon:
+                    Icons.admin_panel_settings_rounded,
+                title: 'System',
+                onTap: () =>
+                    _openSystemDashboard(
+                  context,
+                ),
               ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.people,
-            title: 'Customers',
-            onTap: () => _comingSoon(context, 'Customer Management'),
-          ),
-          _dashboardCard(
-            icon: Icons.account_balance_wallet,
-            title: 'Earnings',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminEarningsPage(),
-              ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.notifications_active,
-            title: 'Notifications',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminNotificationCenterPage(),
-              ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.directions_bus_filled_rounded,
-            title: 'Bus Operators',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) =>
-                    const AdminBusOperatorManagementPage(),
-              ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.confirmation_number_rounded,
-            title: 'Bus Tickets',
-            badgeCount: _busAttentionCount,
-            onTap: _openBusTicketManagement,
-          ),
-          _dashboardCard(
-            icon: Icons.flight_takeoff_rounded,
-            title: 'Flight Tickets',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) =>
-                    const AdminFlightTicketManagementPage(),
-              ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.drive_eta_rounded,
-            title: 'Ride Drivers',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminRideDriverManagementPage(),
-              ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.payments_rounded,
-            title: 'Ride Fares',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminRideFareSettingsPage(),
-              ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.account_balance_wallet_rounded,
-            title: 'Ride Commission',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminRideEarningsPage(),
-              ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.route_rounded,
-            title: 'Ride History',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminRideHistoryPage(),
-              ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.sos_rounded,
-            title: 'Ride SOS',
-            onTap: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const AdminRideSosPage(),
-              ),
-            ),
-          ),
-          _dashboardCard(
-            icon: Icons.settings,
-            title: 'Settings',
-            onTap: () => _comingSoon(context, 'Admin Settings'),
-          ),
-        ],
+            ],
+          );
+        },
       ),
     );
   }
+
+  void _openGroupDashboard(
+    BuildContext context, {
+    required String title,
+    required List<Widget> cards,
+  }) {
+    Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (
+          BuildContext pageContext,
+        ) {
+          return Scaffold(
+            appBar: AppBar(
+              title: Text(
+                title,
+                style: const TextStyle(
+                  fontWeight:
+                      FontWeight.w900,
+                ),
+              ),
+              centerTitle: true,
+            ),
+            body: LayoutBuilder(
+              builder: (
+                BuildContext context,
+                BoxConstraints constraints,
+              ) {
+                final int columns =
+                    constraints.maxWidth >=
+                            900
+                        ? 3
+                        : 2;
+
+                return GridView.count(
+                  padding:
+                      const EdgeInsets.all(
+                    16,
+                  ),
+                  crossAxisCount: columns,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                  children: cards,
+                );
+              },
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  void _openOnlineShopDashboard(
+    BuildContext context,
+  ) {
+    _openGroupDashboard(
+      context,
+      title: 'Online Shop Dashboard',
+      cards: <Widget>[
+        _dashboardCard(
+          icon: Icons.shopping_bag,
+          title: 'Orders',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminOrderPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon: Icons.inventory_2,
+          title: 'Products',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminProductPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon: Icons.store,
+          title: 'Sellers',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminSellerPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon: Icons.people,
+          title: 'Customers',
+          onTap: () => _comingSoon(
+            context,
+            'Customer Management',
+          ),
+        ),
+        _dashboardCard(
+          icon:
+              Icons.account_balance_wallet,
+          title: 'Earnings',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminEarningsPage(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openHotelDashboard(
+    BuildContext context,
+  ) {
+    _openGroupDashboard(
+      context,
+      title: 'Hotel Dashboard',
+      cards: <Widget>[
+        _dashboardCard(
+          icon: Icons.apartment_rounded,
+          title: 'Hotels',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminHotelManagementPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon:
+              Icons.hotel_class_rounded,
+          title: 'Hotel Partners',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminHotelPartnerManagementPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon:
+              Icons.request_quote_rounded,
+          title: 'Hotel Fees',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminHotelFeePage(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openBusDashboard(
+    BuildContext context,
+  ) {
+    _openGroupDashboard(
+      context,
+      title: 'Bus Dashboard',
+      cards: <Widget>[
+        _dashboardCard(
+          icon:
+              Icons.confirmation_number_rounded,
+          title: 'Bus Tickets',
+          badgeCount:
+              _busAttentionCount,
+          onTap:
+              _openBusTicketManagement,
+        ),
+        _dashboardCard(
+          icon:
+              Icons.directions_bus_filled_rounded,
+          title: 'Bus Operators',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminBusOperatorManagementPage(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openFlightDashboard(
+    BuildContext context,
+  ) {
+    _openGroupDashboard(
+      context,
+      title: 'Flight Dashboard',
+      cards: <Widget>[
+        _dashboardCard(
+          icon:
+              Icons.flight_takeoff_rounded,
+          title: 'Flight Tickets',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminFlightTicketManagementPage(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openRideDashboard(
+    BuildContext context,
+  ) {
+    _openGroupDashboard(
+      context,
+      title: 'Ride Dashboard',
+      cards: <Widget>[
+        _dashboardCard(
+          icon: Icons.drive_eta_rounded,
+          title: 'Ride Drivers',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminRideDriverManagementPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon: Icons.payments_rounded,
+          title: 'Ride Fares',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminRideFareSettingsPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon:
+              Icons.account_balance_wallet_rounded,
+          title: 'Ride Commission',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminRideEarningsPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon: Icons.route_rounded,
+          title: 'Ride History',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminRideHistoryPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon: Icons.sos_rounded,
+          title: 'Ride SOS',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminRideSosPage(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+
+  void _openSystemDashboard(
+    BuildContext context,
+  ) {
+    _openGroupDashboard(
+      context,
+      title: 'System',
+      cards: <Widget>[
+        _dashboardCard(
+          icon:
+              Icons.notifications_active,
+          title: 'Notifications',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminNotificationCenterPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon: Icons.settings,
+          title: 'Settings',
+          onTap: () => _comingSoon(
+            context,
+            'Admin Settings',
+          ),
+        ),
+      ],
+    );
+  }
+
 
   Widget _accessDenied(BuildContext context, String message) {
     return Scaffold(
