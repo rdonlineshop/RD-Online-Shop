@@ -21,9 +21,57 @@ class _HotelPartnerFeePageState
 
   User? get _user => FirebaseAuth.instance.currentUser;
 
+  DateTime? _financeFrom;
+  DateTime? _financeTo;
+
   String _money(dynamic value) {
-    final double amount = (value as num?)?.toDouble() ?? 0;
-    return 'Rs. ${amount.toStringAsFixed(0)}';
+    final double amount =
+        (value as num?)?.toDouble() ?? 0;
+
+    final bool negative = amount < 0;
+    final String digits =
+        amount.abs().round().toString();
+
+    String formatted;
+
+    if (digits.length <= 3) {
+      formatted = digits;
+    } else {
+      final String lastThree =
+          digits.substring(
+        digits.length - 3,
+      );
+
+      String leading = digits.substring(
+        0,
+        digits.length - 3,
+      );
+
+      final List<String> groups =
+          <String>[];
+
+      while (leading.length > 2) {
+        groups.insert(
+          0,
+          leading.substring(
+            leading.length - 2,
+          ),
+        );
+        leading = leading.substring(
+          0,
+          leading.length - 2,
+        );
+      }
+
+      if (leading.isNotEmpty) {
+        groups.insert(0, leading);
+      }
+
+      formatted =
+          '${groups.join(',')},$lastThree';
+    }
+
+    return 'Rs. ${negative ? '-' : ''}$formatted';
   }
 
   String _date(dynamic value) {
@@ -205,6 +253,726 @@ class _HotelPartnerFeePageState
           ),
         ],
       ),
+    );
+  }
+
+
+  DateTime _startOfDay(DateTime value) {
+    return DateTime(
+      value.year,
+      value.month,
+      value.day,
+    );
+  }
+
+  DateTime _startOfWeek(DateTime value) {
+    final DateTime day =
+        _startOfDay(value);
+
+    return day.subtract(
+      Duration(days: day.weekday - 1),
+    );
+  }
+
+  String _dateFromDateTime(
+    DateTime? value,
+  ) {
+    if (value == null) {
+      return '-';
+    }
+
+    return '${value.day.toString().padLeft(2, '0')}/'
+        '${value.month.toString().padLeft(2, '0')}/'
+        '${value.year}';
+  }
+
+  DateTime? _timestampDate(dynamic value) {
+    if (value is Timestamp) {
+      return value.toDate();
+    }
+    return null;
+  }
+
+  DateTime? _paidBookingDate(
+    Map<String, dynamic> booking,
+  ) {
+    return _timestampDate(
+          booking['paidAt'],
+        ) ??
+        _timestampDate(
+          booking['updatedAt'],
+        ) ??
+        _timestampDate(
+          booking['createdAt'],
+        );
+  }
+
+  bool _insideDateRange(
+    DateTime? value,
+    DateTime start,
+    DateTime endExclusive,
+  ) {
+    if (value == null) {
+      return false;
+    }
+
+    return !value.isBefore(start) &&
+        value.isBefore(endExclusive);
+  }
+
+  bool _countsAsBookingRevenue(
+    Map<String, dynamic> booking,
+  ) {
+    final String status =
+        booking['bookingStatus']
+                ?.toString()
+                .toLowerCase()
+                .trim() ??
+            '';
+
+    return <String>{
+      'confirmed',
+      'checked_in',
+      'completed',
+    }.contains(status);
+  }
+
+  Future<void> _pickFinanceFrom() async {
+    final DateTime today =
+        _startOfDay(DateTime.now());
+
+    final DateTime? picked =
+        await showDatePicker(
+      context: context,
+      initialDate:
+          _financeFrom ?? today,
+      firstDate:
+          DateTime(today.year - 10),
+      lastDate: today,
+    );
+
+    if (!mounted || picked == null) {
+      return;
+    }
+
+    final DateTime selected =
+        _startOfDay(picked);
+
+    setState(() {
+      _financeFrom = selected;
+
+      if (_financeTo == null ||
+          _financeTo!.isBefore(selected)) {
+        _financeTo = selected;
+      }
+    });
+  }
+
+  Future<void> _pickFinanceTo() async {
+    final DateTime today =
+        _startOfDay(DateTime.now());
+
+    final DateTime first =
+        _financeFrom ??
+            DateTime(today.year - 10);
+
+    final DateTime initial =
+        _financeTo ??
+            (_financeFrom ?? today);
+
+    final DateTime? picked =
+        await showDatePicker(
+      context: context,
+      initialDate:
+          initial.isBefore(first)
+              ? first
+              : initial,
+      firstDate: first,
+      lastDate: today,
+    );
+
+    if (!mounted || picked == null) {
+      return;
+    }
+
+    final DateTime selected =
+        _startOfDay(picked);
+
+    setState(() {
+      _financeTo = selected;
+      _financeFrom ??= selected;
+    });
+  }
+
+  Widget _financeReport({
+    required String partnerId,
+    required List<
+            QueryDocumentSnapshot<
+                Map<String, dynamic>>>
+        invoices,
+    required List<
+            QueryDocumentSnapshot<
+                Map<String, dynamic>>>
+        payments,
+  }) {
+    return StreamBuilder<
+        QuerySnapshot<
+            Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection(
+            'hotel_bookings',
+          )
+          .where(
+            'partnerId',
+            isEqualTo: partnerId,
+          )
+          .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<
+                QuerySnapshot<
+                    Map<String, dynamic>>>
+            bookingSnapshot,
+      ) {
+        if (bookingSnapshot.connectionState ==
+                    ConnectionState.waiting &&
+                !bookingSnapshot.hasData) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(
+                child:
+                    CircularProgressIndicator(),
+              ),
+            ),
+          );
+        }
+
+        if (bookingSnapshot.hasError) {
+          return Card(
+            child: Padding(
+              padding:
+                  const EdgeInsets.all(16),
+              child: Text(
+                'Could not load Hotel finance report.\n'
+                '${bookingSnapshot.error}',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          );
+        }
+
+        final List<
+                QueryDocumentSnapshot<
+                    Map<String, dynamic>>>
+            bookings =
+            bookingSnapshot.data?.docs ??
+                <QueryDocumentSnapshot<
+                    Map<String, dynamic>>>[];
+
+        double totalBookingAmount = 0;
+        double paidBookingAmount = 0;
+        int bookingCount = 0;
+        int paidBookingCount = 0;
+        int unpaidBookingCount = 0;
+
+        double todayEarnings = 0;
+        double weekEarnings = 0;
+        double monthEarnings = 0;
+        double yearEarnings = 0;
+        double selectedEarnings = 0;
+
+        final DateTime now = DateTime.now();
+        final DateTime todayStart =
+            _startOfDay(now);
+        final DateTime tomorrowStart =
+            todayStart.add(
+          const Duration(days: 1),
+        );
+        final DateTime weekStart =
+            _startOfWeek(now);
+        final DateTime monthStart =
+            DateTime(now.year, now.month);
+        final DateTime yearStart =
+            DateTime(now.year);
+
+        final bool hasSelectedRange =
+            _financeFrom != null &&
+                _financeTo != null;
+
+        final DateTime? selectedStart =
+            _financeFrom == null
+                ? null
+                : _startOfDay(
+                    _financeFrom!,
+                  );
+
+        final DateTime? selectedEnd =
+            _financeTo == null
+                ? null
+                : _startOfDay(
+                    _financeTo!,
+                  ).add(
+                    const Duration(days: 1),
+                  );
+
+        for (final QueryDocumentSnapshot<
+                Map<String, dynamic>>
+            doc in bookings) {
+          final Map<String, dynamic>
+              booking = doc.data();
+
+          if (!_countsAsBookingRevenue(
+            booking,
+          )) {
+            continue;
+          }
+
+          final double amount =
+              (booking['totalAmount']
+                          as num?)
+                      ?.toDouble() ??
+                  0;
+
+          final bool isPaid =
+              booking['paymentStatus']
+                      ?.toString()
+                      .toLowerCase()
+                      .trim() ==
+                  'paid';
+
+          bookingCount++;
+          totalBookingAmount += amount;
+
+          if (isPaid) {
+            paidBookingCount++;
+            paidBookingAmount += amount;
+
+            final DateTime? paidDate =
+                _paidBookingDate(
+              booking,
+            );
+
+            if (_insideDateRange(
+              paidDate,
+              todayStart,
+              tomorrowStart,
+            )) {
+              todayEarnings += amount;
+            }
+
+            if (_insideDateRange(
+              paidDate,
+              weekStart,
+              tomorrowStart,
+            )) {
+              weekEarnings += amount;
+            }
+
+            if (_insideDateRange(
+              paidDate,
+              monthStart,
+              tomorrowStart,
+            )) {
+              monthEarnings += amount;
+            }
+
+            if (_insideDateRange(
+              paidDate,
+              yearStart,
+              tomorrowStart,
+            )) {
+              yearEarnings += amount;
+            }
+
+            if (hasSelectedRange &&
+                _insideDateRange(
+                  paidDate,
+                  selectedStart!,
+                  selectedEnd!,
+                )) {
+              selectedEarnings += amount;
+            }
+          } else {
+            unpaidBookingCount++;
+          }
+        }
+
+        double totalHotelFee = 0;
+        double totalCommission = 0;
+        double totalRdDue = 0;
+        double totalRdPaid = 0;
+        double rdOutstanding = 0;
+
+        for (final QueryDocumentSnapshot<
+                Map<String, dynamic>>
+            doc in invoices) {
+          final Map<String, dynamic>
+              invoice = doc.data();
+
+          totalHotelFee +=
+              (invoice['monthlyFee']
+                          as num?)
+                      ?.toDouble() ??
+                  0;
+
+          totalCommission +=
+              (invoice['commissionAmount']
+                          as num?)
+                      ?.toDouble() ??
+                  0;
+
+          totalRdDue +=
+              (invoice['totalDue'] as num?)
+                      ?.toDouble() ??
+                  0;
+
+          totalRdPaid +=
+              (invoice['paidAmount']
+                          as num?)
+                      ?.toDouble() ??
+                  0;
+
+          if (_effectiveStatus(invoice) !=
+              'waived') {
+            rdOutstanding +=
+                _outstanding(invoice);
+          }
+        }
+
+        final int verifiedPayments =
+            payments
+                .where(
+                  (
+                    QueryDocumentSnapshot<
+                            Map<String, dynamic>>
+                        payment,
+                  ) =>
+                      payment
+                          .data()['status'] ==
+                      'verified',
+                )
+                .length;
+
+        return Card(
+          child: Padding(
+            padding:
+                const EdgeInsets.all(14),
+            child: Column(
+              crossAxisAlignment:
+                  CrossAxisAlignment.stretch,
+              children: <Widget>[
+                const Text(
+                  'Hotel Finance & Earnings',
+                  style: TextStyle(
+                    fontSize: 20,
+                    fontWeight:
+                        FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  'Only your Hotel Partner account data is included.',
+                  style: TextStyle(
+                    color:
+                        Colors.grey.shade700,
+                    fontWeight:
+                        FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                GridView.count(
+                  crossAxisCount:
+                      MediaQuery.sizeOf(context)
+                                  .width >=
+                              760
+                          ? 4
+                          : 2,
+                  shrinkWrap: true,
+                  physics:
+                      const NeverScrollableScrollPhysics(),
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                  childAspectRatio: 1.30,
+                  children: <Widget>[
+                    _summaryCard(
+                      label:
+                          'Total Booking Amount',
+                      value: _money(
+                        totalBookingAmount,
+                      ),
+                      icon: Icons
+                          .hotel_class_rounded,
+                      color: _rdBlue,
+                    ),
+                    _summaryCard(
+                      label:
+                          'Paid Booking Amount',
+                      value: _money(
+                        paidBookingAmount,
+                      ),
+                      icon:
+                          Icons.payments_rounded,
+                      color: _rdGreen,
+                    ),
+                    _summaryCard(
+                      label: 'Paid Bookings',
+                      value:
+                          '$paidBookingCount / $bookingCount',
+                      icon:
+                          Icons.verified_rounded,
+                      color: _rdGreen,
+                    ),
+                    _summaryCard(
+                      label: 'Unpaid Bookings',
+                      value:
+                          '$unpaidBookingCount',
+                      icon: Icons
+                          .pending_actions_rounded,
+                      color: _rdOrange,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 14),
+                const Text(
+                  'Paid Booking Earnings',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight:
+                        FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                GridView.count(
+                  crossAxisCount:
+                      MediaQuery.sizeOf(context)
+                                  .width >=
+                              760
+                          ? 4
+                          : 2,
+                  shrinkWrap: true,
+                  physics:
+                      const NeverScrollableScrollPhysics(),
+                  crossAxisSpacing: 10,
+                  mainAxisSpacing: 10,
+                  childAspectRatio: 1.35,
+                  children: <Widget>[
+                    _summaryCard(
+                      label: 'Today Earnings',
+                      value:
+                          _money(todayEarnings),
+                      icon:
+                          Icons.today_rounded,
+                      color: _rdGreen,
+                    ),
+                    _summaryCard(
+                      label: 'This Week',
+                      value:
+                          _money(weekEarnings),
+                      icon: Icons
+                          .view_week_rounded,
+                      color: _rdBlue,
+                    ),
+                    _summaryCard(
+                      label: 'This Month',
+                      value:
+                          _money(monthEarnings),
+                      icon: Icons
+                          .calendar_month_rounded,
+                      color: _rdOrange,
+                    ),
+                    _summaryCard(
+                      label: 'This Year',
+                      value:
+                          _money(yearEarnings),
+                      icon: Icons
+                          .date_range_rounded,
+                      color: Colors.purple,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                LayoutBuilder(
+                  builder: (
+                    BuildContext context,
+                    BoxConstraints constraints,
+                  ) {
+                    final Widget fromButton =
+                        OutlinedButton.icon(
+                      onPressed:
+                          _pickFinanceFrom,
+                      icon: const Icon(
+                        Icons.event_rounded,
+                      ),
+                      label: Text(
+                        _financeFrom == null
+                            ? 'From Date'
+                            : 'From ${_dateFromDateTime(_financeFrom)}',
+                      ),
+                    );
+
+                    final Widget toButton =
+                        OutlinedButton.icon(
+                      onPressed:
+                          _pickFinanceTo,
+                      icon: const Icon(
+                        Icons
+                            .event_available_rounded,
+                      ),
+                      label: Text(
+                        _financeTo == null
+                            ? 'To Date'
+                            : 'To ${_dateFromDateTime(_financeTo)}',
+                      ),
+                    );
+
+                    if (constraints.maxWidth >=
+                        650) {
+                      return Row(
+                        children: <Widget>[
+                          Expanded(
+                            child: fromButton,
+                          ),
+                          const SizedBox(
+                              width: 8),
+                          Expanded(
+                            child: toButton,
+                          ),
+                          const SizedBox(
+                              width: 8),
+                          TextButton.icon(
+                            onPressed:
+                                _financeFrom ==
+                                            null &&
+                                        _financeTo ==
+                                            null
+                                    ? null
+                                    : () {
+                                        setState(
+                                          () {
+                                            _financeFrom =
+                                                null;
+                                            _financeTo =
+                                                null;
+                                          },
+                                        );
+                                      },
+                            icon: const Icon(
+                              Icons
+                                  .clear_rounded,
+                            ),
+                            label: const Text(
+                              'Clear',
+                            ),
+                          ),
+                        ],
+                      );
+                    }
+
+                    return Column(
+                      crossAxisAlignment:
+                          CrossAxisAlignment
+                              .stretch,
+                      children: <Widget>[
+                        fromButton,
+                        const SizedBox(
+                            height: 8),
+                        toButton,
+                        Align(
+                          alignment:
+                              Alignment
+                                  .centerRight,
+                          child:
+                              TextButton.icon(
+                            onPressed:
+                                _financeFrom ==
+                                            null &&
+                                        _financeTo ==
+                                            null
+                                    ? null
+                                    : () {
+                                        setState(
+                                          () {
+                                            _financeFrom =
+                                                null;
+                                            _financeTo =
+                                                null;
+                                          },
+                                        );
+                                      },
+                            icon: const Icon(
+                              Icons
+                                  .clear_rounded,
+                            ),
+                            label: const Text(
+                              'Clear',
+                            ),
+                          ),
+                        ),
+                      ],
+                    );
+                  },
+                ),
+                if (hasSelectedRange)
+                  _row(
+                    'Selected Date Earnings',
+                    _money(
+                      selectedEarnings,
+                    ),
+                    strong: true,
+                    color: _rdGreen,
+                  ),
+                const Divider(height: 28),
+                const Text(
+                  'RD Fees & Commission',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight:
+                        FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 7),
+                _row(
+                  'Total Hotel Fee',
+                  _money(totalHotelFee),
+                  strong: true,
+                  color: _rdBlue,
+                ),
+                _row(
+                  'Total RD Commission',
+                  _money(totalCommission),
+                  strong: true,
+                  color: _rdOrange,
+                ),
+                _row(
+                  'Total RD Due / Billed',
+                  _money(totalRdDue),
+                  strong: true,
+                ),
+                _row(
+                  'Total RD Paid',
+                  _money(totalRdPaid),
+                  strong: true,
+                  color: _rdGreen,
+                ),
+                _row(
+                  'RD Outstanding',
+                  _money(rdOutstanding),
+                  strong: true,
+                  color:
+                      rdOutstanding > 0
+                          ? _rdRed
+                          : _rdGreen,
+                ),
+                _row(
+                  'Verified RD Payments',
+                  '$verifiedPayments',
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 
@@ -712,6 +1480,12 @@ class _HotelPartnerFeePageState
                         child: ListView(
                           padding: const EdgeInsets.all(16),
                           children: <Widget>[
+                            _financeReport(
+                              partnerId: user.uid,
+                              invoices: invoices,
+                              payments: payments,
+                            ),
+                            const SizedBox(height: 14),
                             _settingsCard(settings),
                             const SizedBox(height: 14),
                             GridView.count(
