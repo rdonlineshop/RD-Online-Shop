@@ -9,6 +9,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:mobile_scanner/mobile_scanner.dart';
 
+import 'flight_partner_auth_page.dart';
+
 class FlightTicketBookingPage extends StatefulWidget {
   const FlightTicketBookingPage({super.key});
 
@@ -1175,6 +1177,19 @@ class _FlightTicketBookingPageState
         ),
         centerTitle: true,
         actions: <Widget>[
+          IconButton(
+            tooltip: 'Flight Partner Login',
+            onPressed: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    const FlightPartnerAuthPage(),
+              ),
+            ),
+            icon: const Icon(
+              Icons.person_outline,
+            ),
+          ),
           IconButton(
             tooltip: 'Verify Flight Ticket',
             onPressed: _openVerify,

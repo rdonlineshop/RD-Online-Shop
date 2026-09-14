@@ -2,16 +2,16 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-class AdminHotelFeePage extends StatefulWidget {
-  const AdminHotelFeePage({super.key});
+class AdminHomestayFeePage extends StatefulWidget {
+  const AdminHomestayFeePage({super.key});
 
   @override
-  State<AdminHotelFeePage> createState() =>
-      _AdminHotelFeePageState();
+  State<AdminHomestayFeePage> createState() =>
+      _AdminHomestayFeePageState();
 }
 
-class _AdminHotelFeePageState
-    extends State<AdminHotelFeePage> {
+class _AdminHomestayFeePageState
+    extends State<AdminHomestayFeePage> {
   static const Color _rdGreen = Color(0xFF2E7D32);
   static const Color _rdBlue = Color(0xFF1565C0);
   static const Color _rdRed = Color(0xFFD32F2F);
@@ -73,7 +73,7 @@ class _AdminHotelFeePageState
   DocumentReference<Map<String, dynamic>>
       get _settingsRef =>
           FirebaseFirestore.instance
-              .collection('hotel_fee_settings')
+              .collection('homestay_settings')
               .doc('global');
 
   String _money(dynamic value) {
@@ -289,7 +289,7 @@ class _AdminHotelFeePageState
       });
 
       _message(
-        'Could not load Hotel fee settings.\n'
+        'Could not load Homestay fee settings.\n'
         '$error',
       );
     }
@@ -411,12 +411,12 @@ class _AdminHotelFeePageState
 
       if (mounted) {
         _message(
-          'Hotel fee settings saved.',
+          'Homestay fee settings saved.',
         );
       }
     } catch (error) {
       _message(
-        'Could not save Hotel fee settings.\n'
+        'Could not save Homestay fee settings.\n'
         '$error',
       );
     } finally {
@@ -438,7 +438,7 @@ class _AdminHotelFeePageState
               Map<String, dynamic>>
           ref = FirebaseFirestore.instance
               .collection(
-                'hotel_fee_audit_logs',
+                'homestay_fee_audit_logs',
               )
               .doc();
 
@@ -490,9 +490,9 @@ class _AdminHotelFeePageState
     try {
       final QuerySnapshot<
               Map<String, dynamic>>
-          hotelSnapshot =
+          homestaySnapshot =
           await FirebaseFirestore.instance
-              .collection('hotels')
+              .collection('homestays')
               .where(
                 'isApproved',
                 isEqualTo: true,
@@ -507,9 +507,9 @@ class _AdminHotelFeePageState
         return;
       }
 
-      if (hotelSnapshot.docs.isEmpty) {
+      if (homestaySnapshot.docs.isEmpty) {
         _message(
-          'No approved active Hotel found.',
+          'No approved active Homestay found.',
         );
         return;
       }
@@ -519,8 +519,8 @@ class _AdminHotelFeePageState
         barrierDismissible: false,
         builder:
             (BuildContext dialogContext) {
-          return _GenerateHotelFeeInvoiceDialog(
-            hotels: hotelSnapshot.docs,
+          return _GenerateHomestayFeeInvoiceDialog(
+            homestays: homestaySnapshot.docs,
             months: _billingMonths(),
             onGenerate:
                 _generateInvoice,
@@ -529,7 +529,7 @@ class _AdminHotelFeePageState
       );
     } catch (error) {
       _message(
-        'Could not load Hotels for invoice generation.\n'
+        'Could not load Homestays for invoice generation.\n'
         '$error',
       );
     }
@@ -538,7 +538,7 @@ class _AdminHotelFeePageState
   Future<String?> _generateInvoice({
     required QueryDocumentSnapshot<
             Map<String, dynamic>>
-        hotelDoc,
+        homestayDoc,
     required String billingMonth,
     required double adjustmentAmount,
     required double discountAmount,
@@ -578,17 +578,17 @@ class _AdminHotelFeePageState
                   ?.toInt() ??
               3;
 
-      final Map<String, dynamic> hotel =
-          hotelDoc.data();
+      final Map<String, dynamic> homestay =
+          homestayDoc.data();
 
       final String partnerId =
-          hotel['partnerId']
+          homestay['partnerId']
                   ?.toString()
                   .trim() ??
               '';
 
       if (partnerId.isEmpty) {
-        return 'Hotel Partner ID is missing.';
+        return 'Homestay Partner ID is missing.';
       }
 
       final DateTime periodStart =
@@ -602,7 +602,7 @@ class _AdminHotelFeePageState
           bookings =
           await FirebaseFirestore.instance
               .collection(
-                'hotel_bookings',
+                'homestay_bookings',
               )
               .where(
                 'partnerId',
@@ -695,7 +695,7 @@ class _AdminHotelFeePageState
           invoiceRef =
           FirebaseFirestore.instance
               .collection(
-                'hotel_fee_invoices',
+                'homestay_fee_invoices',
               )
               .doc(invoiceId);
 
@@ -732,10 +732,10 @@ class _AdminHotelFeePageState
         <String, dynamic>{
           'invoiceId': invoiceId,
           'partnerId': partnerId,
-          'hotelId': hotelDoc.id,
-          'hotelName':
-              hotel['name']?.toString() ??
-                  'Hotel',
+          'homestayId': homestayDoc.id,
+          'homestayName':
+              homestay['name']?.toString() ??
+                  'Homestay',
           'billingMonth':
               billingMonth,
           'periodStart':
@@ -796,7 +796,7 @@ class _AdminHotelFeePageState
             : 'invoice_generated',
         targetId: invoiceId,
         details:
-            '${hotel['name'] ?? 'Hotel'} $billingMonth total $totalDue',
+            '${homestay['name'] ?? 'Homestay'} $billingMonth total $totalDue',
       );
 
       return null;
@@ -844,7 +844,7 @@ class _AdminHotelFeePageState
               invoiceRef =
               FirebaseFirestore.instance
                   .collection(
-                    'hotel_fee_invoices',
+                    'homestay_fee_invoices',
                   )
                   .doc(invoiceId);
 
@@ -932,12 +932,12 @@ class _AdminHotelFeePageState
         action: 'payment_verified',
         targetId: paymentDoc.id,
         details:
-            'Hotel fee payment verified',
+            'Homestay fee payment verified',
       );
 
       if (mounted) {
         _message(
-          'Hotel fee payment verified.',
+          'Homestay fee payment verified.',
         );
       }
     } catch (error) {
@@ -962,7 +962,7 @@ class _AdminHotelFeePageState
           (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text(
-            'Reject Hotel Fee Payment',
+            'Reject Homestay Fee Payment',
             style: TextStyle(
               fontWeight:
                   FontWeight.w900,
@@ -1037,7 +1037,7 @@ class _AdminHotelFeePageState
 
       if (mounted) {
         _message(
-          'Hotel fee payment rejected.',
+          'Homestay fee payment rejected.',
         );
       }
     } catch (error) {
@@ -1082,7 +1082,7 @@ class _AdminHotelFeePageState
           content: Text(
             'Mark ${_money(outstanding)} as '
             'received and verified for '
-            '${invoice['hotelName'] ?? 'Hotel'}?',
+            '${invoice['homestayName'] ?? 'Homestay'}?',
           ),
           actions: <Widget>[
             TextButton(
@@ -1118,7 +1118,7 @@ class _AdminHotelFeePageState
           paymentRef =
           FirebaseFirestore.instance
               .collection(
-                'hotel_fee_payments',
+                'homestay_fee_payments',
               )
               .doc();
 
@@ -1134,10 +1134,10 @@ class _AdminHotelFeePageState
               invoiceDoc.id,
           'partnerId':
               invoice['partnerId'],
-          'hotelId':
-              invoice['hotelId'],
-          'hotelName':
-              invoice['hotelName'],
+          'homestayId':
+              invoice['homestayId'],
+          'homestayName':
+              invoice['homestayName'],
           'billingMonth':
               invoice['billingMonth'],
           'amount':
@@ -1222,7 +1222,7 @@ class _AdminHotelFeePageState
           (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text(
-            'Waive Hotel Fee Invoice',
+            'Waive Homestay Fee Invoice',
             style: TextStyle(
               fontWeight:
                   FontWeight.w900,
@@ -1297,7 +1297,7 @@ class _AdminHotelFeePageState
 
       if (mounted) {
         _message(
-          'Hotel fee invoice waived.',
+          'Homestay fee invoice waived.',
         );
       }
     } catch (error) {
@@ -1392,7 +1392,7 @@ class _AdminHotelFeePageState
             Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection(
-            'hotel_fee_invoices',
+            'homestay_fee_invoices',
           )
           .snapshots(),
       builder: (
@@ -1407,7 +1407,7 @@ class _AdminHotelFeePageState
                 Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
               .collection(
-                'hotel_fee_payments',
+                'homestay_fee_payments',
               )
               .snapshots(),
           builder: (
@@ -1578,7 +1578,7 @@ class _AdminHotelFeePageState
                                 .circular(14),
                       ),
                       child: const Text(
-                        'Fee calculation uses paid Hotel bookings created '
+                        'Fee calculation uses paid Homestay bookings created '
                         'inside the selected billing month. Monthly fee and '
                         'commission can both be set to 0 if RD wants to use '
                         'only one fee model. Payment verification, cash '
@@ -1657,7 +1657,7 @@ class _AdminHotelFeePageState
             Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection(
-            'hotel_fee_invoices',
+            'homestay_fee_invoices',
           )
           .snapshots(),
       builder: (
@@ -1679,7 +1679,7 @@ class _AdminHotelFeePageState
         if (snapshot.hasError) {
           return Center(
             child: Text(
-              'Could not load Hotel fee invoices.\n'
+              'Could not load Homestay fee invoices.\n'
               '${snapshot.error}',
               textAlign:
                   TextAlign.center,
@@ -1882,7 +1882,7 @@ class _AdminHotelFeePageState
               children: <Widget>[
                 Expanded(
                   child: Text(
-                    '${data['hotelName'] ?? 'Hotel'} • '
+                    '${data['homestayName'] ?? 'Homestay'} • '
                     '${data['billingMonth'] ?? ''}',
                     style:
                         const TextStyle(
@@ -2091,7 +2091,7 @@ class _AdminHotelFeePageState
             Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
           .collection(
-            'hotel_fee_payments',
+            'homestay_fee_payments',
           )
           .snapshots(),
       builder: (
@@ -2113,7 +2113,7 @@ class _AdminHotelFeePageState
         if (snapshot.hasError) {
           return Center(
             child: Text(
-              'Could not load Hotel fee payments.\n'
+              'Could not load Homestay fee payments.\n'
               '${snapshot.error}',
               textAlign:
                   TextAlign.center,
@@ -2255,7 +2255,7 @@ class _AdminHotelFeePageState
                         24,
                       ),
                       child: Text(
-                        'No Hotel fee payment found.',
+                        'No Homestay fee payment found.',
                         textAlign:
                             TextAlign.center,
                       ),
@@ -2308,7 +2308,7 @@ class _AdminHotelFeePageState
               children: <Widget>[
                 Expanded(
                   child: Text(
-                    '${data['hotelName'] ?? 'Hotel'} • '
+                    '${data['homestayName'] ?? 'Homestay'} • '
                     '${data['billingMonth'] ?? ''}',
                     style:
                         const TextStyle(
@@ -2469,7 +2469,7 @@ class _AdminHotelFeePageState
     return StreamBuilder<
         QuerySnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
-          .collection('hotel_fee_audit_logs')
+          .collection('homestay_fee_audit_logs')
           .snapshots(),
       builder: (
         BuildContext context,
@@ -2488,7 +2488,7 @@ class _AdminHotelFeePageState
         if (snapshot.hasError) {
           return Center(
             child: Text(
-              'Could not load Hotel fee audit log.\n'
+              'Could not load Homestay fee audit log.\n'
               '${snapshot.error}',
               textAlign: TextAlign.center,
             ),
@@ -2527,7 +2527,7 @@ class _AdminHotelFeePageState
               padding: const EdgeInsets.all(16),
               children: <Widget>[
                 const Text(
-                  'Hotel Fee Audit Log',
+                  'Homestay Fee Audit Log',
                   style: TextStyle(
                     fontSize: 21,
                     fontWeight: FontWeight.w900,
@@ -2549,7 +2549,7 @@ class _AdminHotelFeePageState
                     child: Padding(
                       padding: EdgeInsets.all(24),
                       child: Text(
-                        'No Hotel fee audit entry yet.',
+                        'No Homestay fee audit entry yet.',
                         textAlign: TextAlign.center,
                       ),
                     ),
@@ -2633,7 +2633,7 @@ class _AdminHotelFeePageState
             SwitchListTile(
               value: _feeEnabled,
               title: const Text(
-                'Hotel Fee System Active',
+                'Homestay Fee System Active',
                 style: TextStyle(
                   fontWeight:
                       FontWeight.w900,
@@ -2719,7 +2719,7 @@ class _AdminHotelFeePageState
                 labelText:
                     'Payment Instructions',
                 hintText:
-                    'Bank / eWallet / office payment instructions for Hotel Partners',
+                    'Bank / eWallet / office payment instructions for Homestay Partners',
                 border:
                     OutlineInputBorder(),
               ),
@@ -2748,7 +2748,7 @@ class _AdminHotelFeePageState
                             .save_rounded,
                       ),
                 label: const Text(
-                  'Save Hotel Fee Settings',
+                  'Save Homestay Fee Settings',
                   style: TextStyle(
                     fontWeight:
                         FontWeight
@@ -2846,7 +2846,7 @@ class _AdminHotelFeePageState
             const Color(0xFFF7F8FA),
         appBar: AppBar(
           title: const Text(
-            'Hotel Fees & Admin',
+            'Homestay Fees & Admin',
             style: TextStyle(
               fontWeight:
                   FontWeight.w900,
@@ -2908,24 +2908,24 @@ class _AdminHotelFeePageState
   }
 }
 
-class _GenerateHotelFeeInvoiceDialog
+class _GenerateHomestayFeeInvoiceDialog
     extends StatefulWidget {
-  const _GenerateHotelFeeInvoiceDialog({
-    required this.hotels,
+  const _GenerateHomestayFeeInvoiceDialog({
+    required this.homestays,
     required this.months,
     required this.onGenerate,
   });
 
   final List<
       QueryDocumentSnapshot<
-          Map<String, dynamic>>> hotels;
+          Map<String, dynamic>>> homestays;
 
   final List<String> months;
 
   final Future<String?> Function({
     required QueryDocumentSnapshot<
             Map<String, dynamic>>
-        hotelDoc,
+        homestayDoc,
     required String billingMonth,
     required double adjustmentAmount,
     required double discountAmount,
@@ -2933,15 +2933,15 @@ class _GenerateHotelFeeInvoiceDialog
   }) onGenerate;
 
   @override
-  State<_GenerateHotelFeeInvoiceDialog>
+  State<_GenerateHomestayFeeInvoiceDialog>
       createState() =>
-          _GenerateHotelFeeInvoiceDialogState();
+          _GenerateHomestayFeeInvoiceDialogState();
 }
 
-class _GenerateHotelFeeInvoiceDialogState
+class _GenerateHomestayFeeInvoiceDialogState
     extends State<
-        _GenerateHotelFeeInvoiceDialog> {
-  late String _hotelId;
+        _GenerateHomestayFeeInvoiceDialog> {
+  late String _homestayId;
   late String _month;
 
   final TextEditingController _adjustment =
@@ -2963,8 +2963,8 @@ class _GenerateHotelFeeInvoiceDialogState
   void initState() {
     super.initState();
 
-    _hotelId =
-        widget.hotels.first.id;
+    _homestayId =
+        widget.homestays.first.id;
 
     _month =
         widget.months.first;
@@ -3004,14 +3004,14 @@ class _GenerateHotelFeeInvoiceDialogState
 
     final QueryDocumentSnapshot<
             Map<String, dynamic>>
-        hotelDoc =
-        widget.hotels.firstWhere(
+        homestayDoc =
+        widget.homestays.firstWhere(
       (
         QueryDocumentSnapshot<
                 Map<String, dynamic>>
             doc,
       ) =>
-          doc.id == _hotelId,
+          doc.id == _homestayId,
     );
 
     setState(() {
@@ -3020,7 +3020,7 @@ class _GenerateHotelFeeInvoiceDialogState
 
     final String? error =
         await widget.onGenerate(
-      hotelDoc: hotelDoc,
+      homestayDoc: homestayDoc,
       billingMonth: _month,
       adjustmentAmount:
           adjustment,
@@ -3048,7 +3048,7 @@ class _GenerateHotelFeeInvoiceDialogState
       ..showSnackBar(
         const SnackBar(
           content: Text(
-            'Hotel fee invoice generated.',
+            'Homestay fee invoice generated.',
           ),
         ),
       );
@@ -3072,7 +3072,7 @@ class _GenerateHotelFeeInvoiceDialogState
   Widget build(BuildContext context) {
     return AlertDialog(
       title: const Text(
-        'Generate Hotel Fee Invoice',
+        'Generate Homestay Fee Invoice',
         style: TextStyle(
           fontWeight:
               FontWeight.w900,
@@ -3085,14 +3085,14 @@ class _GenerateHotelFeeInvoiceDialogState
             children: <Widget>[
               DropdownButtonFormField<
                   String>(
-                initialValue: _hotelId,
+                initialValue: _homestayId,
                 decoration:
                     const InputDecoration(
-                  labelText: 'Hotel',
+                  labelText: 'Homestay',
                   border:
                       OutlineInputBorder(),
                 ),
-                items: widget.hotels
+                items: widget.homestays
                     .map(
                       (
                         QueryDocumentSnapshot<
@@ -3107,7 +3107,7 @@ class _GenerateHotelFeeInvoiceDialogState
                           doc.data()[
                                       'name']
                                   ?.toString() ??
-                              'Hotel',
+                              'Homestay',
                         ),
                       ),
                     )
@@ -3119,7 +3119,7 @@ class _GenerateHotelFeeInvoiceDialogState
                   }
 
                   setState(() {
-                    _hotelId = value;
+                    _homestayId = value;
                   });
                 },
               ),
@@ -3218,7 +3218,7 @@ class _GenerateHotelFeeInvoiceDialogState
               ),
               const Text(
                 'Commission is calculated automatically from paid '
-                'Hotel bookings created in the selected month.',
+                'Homestay bookings created in the selected month.',
                 style: TextStyle(
                   fontSize: 12,
                   fontWeight:

@@ -7,7 +7,6 @@ import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'hotel_cloudinary_service.dart';
-import 'hotel_partner_auth_page.dart';
 
 Future<void> _openHotelDirections(
   BuildContext context, {
@@ -1876,19 +1875,6 @@ class _HotelBookingPageState
         ),
         centerTitle: true,
         actions: <Widget>[
-          IconButton(
-            tooltip: 'Hotel Partner Login',
-            onPressed: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) =>
-                    const HotelPartnerAuthPage(),
-              ),
-            ),
-            icon: const Icon(
-              Icons.business_center_rounded,
-            ),
-          ),
           IconButton(
             tooltip:
                 'My Hotel Bookings',

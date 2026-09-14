@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 
-import 'bus_operator_auth_page.dart';
 import 'bus_ticket_booking_page.dart';
 import 'flight_ticket_booking_page.dart';
 
@@ -98,21 +97,6 @@ class TicketBookingHubPage extends StatelessWidget {
           ),
         ),
         centerTitle: true,
-        actions: <Widget>[
-          IconButton(
-            tooltip: 'Bus Operator Login',
-            onPressed: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) =>
-                    const BusOperatorAuthPage(),
-              ),
-            ),
-            icon: const Icon(
-              Icons.directions_bus_filled_rounded,
-            ),
-          ),
-        ],
       ),
       body: SafeArea(
         child: LayoutBuilder(

@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import 'ride_booking_page.dart';
 import 'ride_driver_auth_page.dart';
+import 'ride_my_rides_page.dart';
 
 class RideBookingHubPage extends StatelessWidget {
   const RideBookingHubPage({super.key});
@@ -113,6 +114,20 @@ class RideBookingHubPage extends StatelessWidget {
         ),
         centerTitle: true,
         actions: <Widget>[
+          IconButton(
+            tooltip: 'My Rides',
+            onPressed: () {
+              Navigator.push<void>(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => const RideMyRidesPage(),
+                ),
+              );
+            },
+            icon: const Icon(
+              Icons.route_rounded,
+            ),
+          ),
           IconButton(
             tooltip: 'Ride Driver',
             onPressed: () {

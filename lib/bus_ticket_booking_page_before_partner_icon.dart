@@ -11,8 +11,6 @@ import 'package:qr_flutter/qr_flutter.dart';
 import 'package:speech_to_text/speech_to_text.dart' as stt;
 import 'package:url_launcher/url_launcher.dart';
 
-import 'bus_operator_auth_page.dart';
-
 class BusTicketBookingPage extends StatefulWidget {
   const BusTicketBookingPage({super.key});
 
@@ -1278,18 +1276,6 @@ class _BusTicketBookingPageState
         ),
         centerTitle: true,
         actions: <Widget>[
-          IconButton(
-            tooltip: 'Bus Operator Login',
-            onPressed: () => Navigator.push<void>(
-              context,
-              MaterialPageRoute<void>(
-                builder: (_) => const BusOperatorAuthPage(),
-              ),
-            ),
-            icon: const Icon(
-              Icons.directions_bus_filled_rounded,
-            ),
-          ),
           IconButton(
             tooltip: 'Verify Ticket',
             onPressed: _openVerifyTicket,

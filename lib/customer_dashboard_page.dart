@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'cart_page.dart';
 import 'order_data.dart';
 import 'order_history_page.dart';
-import 'ride_my_rides_page.dart';
 import 'wishlist_page.dart';
 
 class CustomerDashboardPage extends StatefulWidget {
@@ -198,17 +197,6 @@ class _CustomerDashboardPageState
                     onTap: () {
                       _open(
                         const OrderHistoryPage(),
-                      );
-                    },
-                  ),
-                  _dashboardButton(
-                    icon: Icons.route_rounded,
-                    title: 'My Rides',
-                    subtitle:
-                        'See current rides, live distance, live fare and ride history.',
-                    onTap: () {
-                      _open(
-                        const RideMyRidesPage(),
                       );
                     },
                   ),
