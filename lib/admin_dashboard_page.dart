@@ -4,6 +4,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
+import 'services/active_session_role.dart';
+
 import 'admin_bus_operator_management_page.dart';
 import 'admin_bus_ticket_management_page.dart';
 import 'admin_hotel_partner_management_page.dart';
@@ -12,6 +14,9 @@ import 'admin_hotel_fee_page.dart';
 import 'admin_homestay_management_page.dart';
 import 'admin_homestay_partner_management_page.dart';
 import 'admin_homestay_fee_page.dart';
+import 'admin_resort_management_page.dart';
+import 'admin_resort_partner_management_page.dart';
+import 'admin_resort_fee_page.dart';
 import 'admin_earnings_page.dart';
 import 'admin_notification_center_page.dart';
 import 'admin_order_page.dart';
@@ -335,6 +340,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
 
     if (confirm != true) return;
 
+    await ActiveSessionRole.clear();
     await FirebaseAuth.instance.signOut();
     await FirebaseAuth.instance.signInAnonymously();
 
@@ -483,6 +489,14 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                 title: 'Hotel Dashboard',
                 onTap: () =>
                     _openHotelDashboard(
+                  context,
+                ),
+              ),
+              _dashboardCard(
+                icon: Icons.holiday_village_rounded,
+                title: 'Resort Dashboard',
+                onTap: () =>
+                    _openResortDashboard(
                   context,
                 ),
               ),
@@ -706,6 +720,54 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
     );
   }
 
+
+
+  void _openResortDashboard(
+    BuildContext context,
+  ) {
+    _openGroupDashboard(
+      context,
+      title: 'Resort Dashboard',
+      cards: <Widget>[
+        _dashboardCard(
+          icon: Icons.holiday_village_rounded,
+          title: 'Resorts',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminResortManagementPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon: Icons.business_center_rounded,
+          title: 'Resort Partners',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminResortPartnerManagementPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon: Icons.request_quote_rounded,
+          title: 'Resort Fees',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminResortFeePage(),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
 
   void _openHomestayDashboard(
     BuildContext context,

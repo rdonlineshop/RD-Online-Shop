@@ -12,6 +12,8 @@ import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 
+import 'services/active_session_role.dart';
+
 class HomestayCloudinaryService {
   const HomestayCloudinaryService._();
 
@@ -84,7 +86,23 @@ class _HomestayPartnerAuthPageState extends State<HomestayPartnerAuthPage> {
 
   Future<void> _resume() async {
     final User? user = FirebaseAuth.instance.currentUser;
-    if (user == null || user.isAnonymous) return;
+    if (user == null || user.isAnonymous) {
+      await ActiveSessionRole.clear();
+      return;
+    }
+
+    final String? activeRole =
+        await ActiveSessionRole.resolveForCurrentUser(
+      fallbackPartnerCollection: 'homestay_partners',
+      fallbackPartnerRole:
+          ActiveSessionRole.homestayPartner,
+    );
+
+    if (activeRole !=
+        ActiveSessionRole.homestayPartner) {
+      return;
+    }
+
     final doc = await FirebaseFirestore.instance
         .collection('homestay_partners')
         .doc(user.uid)
@@ -113,6 +131,7 @@ class _HomestayPartnerAuthPageState extends State<HomestayPartnerAuthPage> {
   }
 
   Future<void> _restoreAnonymous() async {
+    await ActiveSessionRole.clear();
     await FirebaseAuth.instance.signOut();
     await FirebaseAuth.instance.signInAnonymously();
   }
@@ -254,6 +273,10 @@ class _HomestayPartnerAuthPageState extends State<HomestayPartnerAuthPage> {
       'lastLoginAt': FieldValue.serverTimestamp(),
       'updatedAt': FieldValue.serverTimestamp(),
     });
+
+    await ActiveSessionRole.setRole(
+      ActiveSessionRole.homestayPartner,
+    );
 
     if (!mounted) return;
     Navigator.pushReplacement<void, void>(
@@ -406,13 +429,14 @@ class HomestayPartnerDashboardPage extends StatelessWidget {
   const HomestayPartnerDashboardPage({super.key});
 
   Future<void> _logout(BuildContext context) async {
-    Navigator.pushAndRemoveUntil<void>(
+    if (!context.mounted) return;
+
+    Navigator.popUntil(
       context,
-      MaterialPageRoute<void>(
-        builder: (_) => const HomestayPartnerAuthPage(),
-      ),
-      (_) => false,
+      (Route<dynamic> route) => route.isFirst,
     );
+
+    await ActiveSessionRole.clear();
     await FirebaseAuth.instance.signOut();
     await FirebaseAuth.instance.signInAnonymously();
   }
@@ -487,6 +511,12 @@ class HomestayPartnerDashboardPage extends StatelessWidget {
                       const HomestayPartnerBookingsPage()),
                   _card(context, Icons.account_balance_wallet_rounded, 'Earnings',
                       const HomestayPartnerFinancePage()),
+                  _card(
+                    context,
+                    Icons.payments_rounded,
+                    'Direct Online Payment',
+                    const HomestayPartnerDirectPaymentPage(),
+                  ),
                 ],
               );
             },
@@ -514,6 +544,492 @@ class HomestayPartnerDashboardPage extends StatelessWidget {
               style: const TextStyle(fontWeight: FontWeight.w900),
             ),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+
+class HomestayPartnerDirectPaymentPage extends StatefulWidget {
+  const HomestayPartnerDirectPaymentPage({super.key});
+
+  @override
+  State<HomestayPartnerDirectPaymentPage> createState() =>
+      _HomestayPartnerDirectPaymentPageState();
+}
+
+class _HomestayPartnerDirectPaymentPageState
+    extends State<HomestayPartnerDirectPaymentPage> {
+  static const Color _rdGreen = Color(0xFF2E7D32);
+  static const Color _rdBlue = Color(0xFF1565C0);
+
+  final TextEditingController _esewaName = TextEditingController();
+  final TextEditingController _esewaNumber = TextEditingController();
+  final TextEditingController _khaltiName = TextEditingController();
+  final TextEditingController _khaltiNumber = TextEditingController();
+  final TextEditingController _bankName = TextEditingController();
+  final TextEditingController _bankAccountName = TextEditingController();
+  final TextEditingController _bankAccountNumber = TextEditingController();
+  final TextEditingController _connectIpsId = TextEditingController();
+  final TextEditingController _mobileBankingDetails =
+      TextEditingController();
+  final TextEditingController _instructions = TextEditingController();
+
+  bool _enabled = false;
+  bool _loading = true;
+  bool _saving = false;
+  bool _uploadingQr = false;
+  String _paymentQrUrl = '';
+
+  User? get _user => FirebaseAuth.instance.currentUser;
+
+  DocumentReference<Map<String, dynamic>>? get _ref {
+    final User? user = _user;
+    if (user == null || user.isAnonymous) {
+      return null;
+    }
+
+    return FirebaseFirestore.instance
+        .collection('homestay_direct_payment_accounts')
+        .doc(user.uid);
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _load();
+  }
+
+  @override
+  void dispose() {
+    _esewaName.dispose();
+    _esewaNumber.dispose();
+    _khaltiName.dispose();
+    _khaltiNumber.dispose();
+    _bankName.dispose();
+    _bankAccountName.dispose();
+    _bankAccountNumber.dispose();
+    _connectIpsId.dispose();
+    _mobileBankingDetails.dispose();
+    _instructions.dispose();
+    super.dispose();
+  }
+
+  Future<void> _load() async {
+    final DocumentReference<Map<String, dynamic>>? ref = _ref;
+
+    if (ref == null) {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> doc =
+          await ref.get();
+      final Map<String, dynamic> data =
+          doc.data() ?? <String, dynamic>{};
+
+      _enabled = data['enabled'] == true;
+      _esewaName.text = data['esewaName']?.toString() ?? '';
+      _esewaNumber.text = data['esewaNumber']?.toString() ?? '';
+      _khaltiName.text = data['khaltiName']?.toString() ?? '';
+      _khaltiNumber.text = data['khaltiNumber']?.toString() ?? '';
+      _bankName.text = data['bankName']?.toString() ?? '';
+      _bankAccountName.text =
+          data['bankAccountName']?.toString() ?? '';
+      _bankAccountNumber.text =
+          data['bankAccountNumber']?.toString() ?? '';
+      _connectIpsId.text = data['connectIpsId']?.toString() ?? '';
+      _mobileBankingDetails.text =
+          data['mobileBankingDetails']?.toString() ?? '';
+      _instructions.text = data['instructions']?.toString() ?? '';
+      _paymentQrUrl = data['paymentQrUrl']?.toString() ?? '';
+    } catch (error) {
+      _message(
+        'Could not load Homestay receiving details.\n$error',
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _loading = false);
+      }
+    }
+  }
+
+  bool get _hasMethod =>
+      _esewaNumber.text.trim().isNotEmpty ||
+      _khaltiNumber.text.trim().isNotEmpty ||
+      (_bankName.text.trim().isNotEmpty &&
+          _bankAccountNumber.text.trim().isNotEmpty) ||
+      _connectIpsId.text.trim().isNotEmpty ||
+      _mobileBankingDetails.text.trim().isNotEmpty ||
+      _paymentQrUrl.trim().isNotEmpty;
+
+  Future<void> _uploadQr() async {
+    if (_uploadingQr) {
+      return;
+    }
+
+    setState(() => _uploadingQr = true);
+
+    try {
+      final String? url =
+          await HomestayCloudinaryService.pickAndUploadImage(
+        imageQuality: 92,
+      );
+
+      if (!mounted || url == null) {
+        return;
+      }
+
+      setState(() {
+        _paymentQrUrl = url;
+      });
+
+      _message('Homestay payment QR uploaded.');
+    } catch (error) {
+      _message('Could not upload QR.\n$error');
+    } finally {
+      if (mounted) {
+        setState(() => _uploadingQr = false);
+      }
+    }
+  }
+
+  Future<void> _save() async {
+    if (_saving) {
+      return;
+    }
+
+    final User? user = _user;
+    final DocumentReference<Map<String, dynamic>>? ref = _ref;
+
+    if (user == null || user.isAnonymous || ref == null) {
+      _message('Homestay Partner login is required.');
+      return;
+    }
+
+    if (_enabled && !_hasMethod) {
+      _message(
+        'Add at least one receiving method before enabling '
+        'Direct Online Payment.',
+      );
+      return;
+    }
+
+    setState(() => _saving = true);
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> existing =
+          await ref.get();
+
+      final Map<String, dynamic> payload = <String, dynamic>{
+        'partnerId': user.uid,
+        'homestayId': user.uid,
+        'enabled': _enabled,
+        'esewaName': _esewaName.text.trim(),
+        'esewaNumber': _esewaNumber.text.trim(),
+        'khaltiName': _khaltiName.text.trim(),
+        'khaltiNumber': _khaltiNumber.text.trim(),
+        'bankName': _bankName.text.trim(),
+        'bankAccountName': _bankAccountName.text.trim(),
+        'bankAccountNumber': _bankAccountNumber.text.trim(),
+        'connectIpsId': _connectIpsId.text.trim(),
+        'mobileBankingDetails':
+            _mobileBankingDetails.text.trim(),
+        'paymentQrUrl': _paymentQrUrl.trim(),
+        'instructions': _instructions.text.trim(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      };
+
+      if (!existing.exists) {
+        payload['createdAt'] = FieldValue.serverTimestamp();
+      }
+
+      await ref.set(
+        payload,
+        SetOptions(merge: true),
+      );
+
+      _message('Homestay receiving details saved.');
+    } catch (error) {
+      _message(
+        'Could not save Homestay receiving details.\n$error',
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _saving = false);
+      }
+    }
+  }
+
+  void _message(String text) {
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(text)),
+      );
+  }
+
+  Widget _field(
+    TextEditingController controller,
+    String label,
+    IconData icon, {
+    TextInputType? keyboardType,
+    int maxLines = 1,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 10),
+      child: TextField(
+        controller: controller,
+        keyboardType: keyboardType,
+        maxLines: maxLines,
+        decoration: InputDecoration(
+          labelText: label,
+          prefixIcon: Icon(icon),
+          border: const OutlineInputBorder(),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final User? user = _user;
+
+    if (user == null || user.isAnonymous) {
+      return const Scaffold(
+        body: Center(
+          child: Text(
+            'Homestay Partner login required.',
+          ),
+        ),
+      );
+    }
+
+    if (_loading) {
+      return const Scaffold(
+        body: Center(
+          child: CircularProgressIndicator(),
+        ),
+      );
+    }
+
+    return Scaffold(
+      backgroundColor: const Color(0xFFF7F8FA),
+      appBar: AppBar(
+        title: const Text(
+          'Direct Online Payment',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        centerTitle: true,
+      ),
+      body: SafeArea(
+        child: Center(
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(
+              maxWidth: 850,
+            ),
+            child: ListView(
+              padding: const EdgeInsets.all(16),
+              children: <Widget>[
+                Container(
+                  padding: const EdgeInsets.all(15),
+                  decoration: BoxDecoration(
+                    gradient: const LinearGradient(
+                      colors: <Color>[
+                        _rdBlue,
+                        _rdGreen,
+                      ],
+                    ),
+                    borderRadius:
+                        BorderRadius.circular(18),
+                  ),
+                  child: const Text(
+                    'Customer booking payment can go directly '
+                    'to your Homestay receiving account. '
+                    'Verify the actual money received before marking '
+                    'a booking PAID. Never ask customers for OTP, '
+                    'PIN or bank password.',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontWeight: FontWeight.w800,
+                      height: 1.4,
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 14),
+                SwitchListTile(
+                  value: _enabled,
+                  onChanged: (bool value) {
+                    setState(() {
+                      _enabled = value;
+                    });
+                  },
+                  title: const Text(
+                    'Enable Direct Online Payment',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                  subtitle: const Text(
+                    'Only enabled Homestay receiving details '
+                    'are visible to signed-in customers during booking.',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'eSewa',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _field(
+                  _esewaName,
+                  'eSewa Account Name',
+                  Icons.person_outline,
+                ),
+                _field(
+                  _esewaNumber,
+                  'eSewa ID / Number',
+                  Icons.phone_android_rounded,
+                  keyboardType: TextInputType.phone,
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Khalti',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _field(
+                  _khaltiName,
+                  'Khalti Account Name',
+                  Icons.person_outline,
+                ),
+                _field(
+                  _khaltiNumber,
+                  'Khalti ID / Number',
+                  Icons.phone_android_rounded,
+                  keyboardType: TextInputType.phone,
+                ),
+                const SizedBox(height: 4),
+                const Text(
+                  'Bank',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                _field(
+                  _bankName,
+                  'Bank Name',
+                  Icons.account_balance_rounded,
+                ),
+                _field(
+                  _bankAccountName,
+                  'Bank Account Name',
+                  Icons.badge_outlined,
+                ),
+                _field(
+                  _bankAccountNumber,
+                  'Bank Account Number',
+                  Icons.numbers_rounded,
+                ),
+                const SizedBox(height: 4),
+                _field(
+                  _connectIpsId,
+                  'connectIPS ID',
+                  Icons.link_rounded,
+                ),
+                _field(
+                  _mobileBankingDetails,
+                  'Mobile Banking Details',
+                  Icons.phone_android_rounded,
+                  maxLines: 2,
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      _uploadingQr ? null : _uploadQr,
+                  icon: _uploadingQr
+                      ? const SizedBox.square(
+                          dimension: 18,
+                          child:
+                              CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.qr_code_2_rounded,
+                        ),
+                  label: Text(
+                    _paymentQrUrl.isEmpty
+                        ? 'Upload Homestay Payment QR'
+                        : 'Replace Homestay Payment QR',
+                  ),
+                ),
+                if (_paymentQrUrl.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 8),
+                  ClipRRect(
+                    borderRadius:
+                        BorderRadius.circular(12),
+                    child: Image.network(
+                      _paymentQrUrl,
+                      height: 220,
+                      fit: BoxFit.contain,
+                      errorBuilder:
+                          (_, __, ___) =>
+                              const SizedBox.shrink(),
+                    ),
+                  ),
+                ],
+                const SizedBox(height: 10),
+                _field(
+                  _instructions,
+                  'Customer Payment Instructions',
+                  Icons.info_outline_rounded,
+                  maxLines: 4,
+                ),
+                SizedBox(
+                  height: 50,
+                  child: FilledButton.icon(
+                    onPressed:
+                        _saving ? null : _save,
+                    icon: _saving
+                        ? const SizedBox.square(
+                            dimension: 18,
+                            child:
+                                CircularProgressIndicator(
+                              strokeWidth: 2,
+                            ),
+                          )
+                        : const Icon(
+                            Icons.save_rounded,
+                          ),
+                    label: const Text(
+                      'Save Homestay Receiving Details',
+                      style: TextStyle(
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -4628,9 +5144,20 @@ class _HomestayBookingPageState
       final User? user =
           FirebaseAuth.instance.currentUser;
 
+      final String? activeRole =
+          await ActiveSessionRole.resolveForCurrentUser(
+        fallbackPartnerCollection:
+            'homestay_partners',
+        fallbackPartnerRole:
+            ActiveSessionRole.homestayPartner,
+      );
+
       bool partnerSession = false;
 
-      if (user != null && !user.isAnonymous) {
+      if (activeRole ==
+              ActiveSessionRole.homestayPartner &&
+          user != null &&
+          !user.isAnonymous) {
         try {
           final DocumentSnapshot<
                   Map<String, dynamic>>
@@ -6191,6 +6718,31 @@ class _HomestayBookingPageState
             ),
           ),
           centerTitle: true,
+          actions: <Widget>[
+            IconButton(
+              tooltip: 'Homestay Partner Dashboard',
+              onPressed: () {
+                Navigator.push<void>(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        const HomestayPartnerDashboardPage(),
+                  ),
+                );
+              },
+              icon: const Icon(
+                Icons.person_outline,
+              ),
+            ),
+            IconButton(
+              tooltip:
+                  'Customer bookings unavailable while Homestay Partner is logged in',
+              onPressed: null,
+              icon: const Icon(
+                Icons.book_online_rounded,
+              ),
+            ),
+          ],
         ),
         body: Center(
           child: ConstrainedBox(
@@ -6226,10 +6778,11 @@ class _HomestayBookingPageState
                     ),
                     const SizedBox(height: 10),
                     const Text(
-                      'For privacy, a Homestay Partner account can manage only its own Homestay. '
-                      'Other Homestays are not available while this Partner ID is active.\n\n'
-                      'To book a Homestay as a customer, first use the Homestay Partner Logout button '
-                      'and then open the customer Homestay booking section.',
+                      'This Homestay page stays open so the Partner Dashboard and Logout remain accessible. '
+                      'Customer Homestay browsing and My Homestay Bookings stay blocked while the '
+                      'Homestay Partner session is active.\n\n'
+                      'Open the Partner Dashboard and logout when you want to use Homestay booking '
+                      'as a customer.',
                       textAlign:
                           TextAlign.center,
                       style: TextStyle(
@@ -6238,6 +6791,24 @@ class _HomestayBookingPageState
                     ),
                     const SizedBox(height: 16),
                     FilledButton.icon(
+                      onPressed: () {
+                        Navigator.push<void>(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                const HomestayPartnerDashboardPage(),
+                          ),
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.dashboard_rounded,
+                      ),
+                      label: const Text(
+                        'Open Homestay Partner Dashboard',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
                       onPressed: () =>
                           Navigator.pop(
                         context,

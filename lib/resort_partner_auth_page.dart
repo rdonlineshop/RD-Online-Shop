@@ -2,19 +2,19 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'hotel_partner_dashboard_page.dart';
+import 'resort_partner_dashboard_page.dart';
 import 'services/active_session_role.dart';
 
-class HotelPartnerAuthPage extends StatefulWidget {
-  const HotelPartnerAuthPage({super.key});
+class ResortPartnerAuthPage extends StatefulWidget {
+  const ResortPartnerAuthPage({super.key});
 
   @override
-  State<HotelPartnerAuthPage> createState() =>
-      _HotelPartnerAuthPageState();
+  State<ResortPartnerAuthPage> createState() =>
+      _ResortPartnerAuthPageState();
 }
 
-class _HotelPartnerAuthPageState
-    extends State<HotelPartnerAuthPage> {
+class _ResortPartnerAuthPageState
+    extends State<ResortPartnerAuthPage> {
   final GlobalKey<FormState> _formKey =
       GlobalKey<FormState>();
 
@@ -38,101 +38,8 @@ class _HotelPartnerAuthPageState
   bool _registering = false;
   bool _loading = false;
   bool _hidePassword = true;
-  bool _checkingExistingSession = true;
 
   static const Color _rdGreen = Color(0xFF2E7D32);
-
-  @override
-  void initState() {
-    super.initState();
-    _resumeExistingSession();
-  }
-
-  Future<void> _resumeExistingSession() async {
-    final User? user = FirebaseAuth.instance.currentUser;
-
-    if (user == null || user.isAnonymous) {
-      await ActiveSessionRole.clear();
-      if (mounted) {
-        setState(() {
-          _checkingExistingSession = false;
-        });
-      }
-      return;
-    }
-
-    final String? activeRole =
-        await ActiveSessionRole.resolveForCurrentUser(
-      fallbackPartnerCollection: 'hotel_partners',
-      fallbackPartnerRole:
-          ActiveSessionRole.hotelPartner,
-    );
-
-    if (activeRole !=
-        ActiveSessionRole.hotelPartner) {
-      if (mounted) {
-        setState(() {
-          _checkingExistingSession = false;
-        });
-      }
-      return;
-    }
-
-    try {
-      final DocumentSnapshot<Map<String, dynamic>> doc =
-          await FirebaseFirestore.instance
-              .collection('hotel_partners')
-              .doc(user.uid)
-              .get();
-
-      final Map<String, dynamic> data =
-          doc.data() ?? <String, dynamic>{};
-
-      final bool approved =
-          doc.exists && data['isApproved'] == true;
-
-      final bool active =
-          doc.exists && data['isActive'] == true;
-
-      final String status =
-          data['status']?.toString().toLowerCase() ?? '';
-
-      if (approved &&
-          active &&
-          status != 'rejected') {
-        await FirebaseFirestore.instance
-            .collection('hotel_partners')
-            .doc(user.uid)
-            .update(
-          <String, dynamic>{
-            'lastLoginAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-        );
-
-        if (!mounted) {
-          return;
-        }
-
-        Navigator.pushReplacement<void, void>(
-          context,
-          MaterialPageRoute<void>(
-            builder: (_) =>
-                const HotelPartnerDashboardPage(),
-          ),
-        );
-        return;
-      }
-    } catch (_) {
-      // Fall back to normal login screen if session check fails.
-    }
-
-    if (mounted) {
-      setState(() {
-        _checkingExistingSession = false;
-      });
-    }
-  }
 
   @override
   void dispose() {
@@ -182,11 +89,11 @@ class _HotelPartnerAuthPageState
   }
 
   Future<void> _register() async {
-    final String email = _email.text.trim();
+    final String email = _email.text.trim().toLowerCase();
     final String password = _password.text;
 
     UserCredential credential;
-    bool createdNewAccount = false;
+    bool createdNewAuthUser = false;
 
     try {
       credential = await FirebaseAuth.instance
@@ -194,12 +101,14 @@ class _HotelPartnerAuthPageState
         email: email,
         password: password,
       );
-      createdNewAccount = true;
+      createdNewAuthUser = true;
     } on FirebaseAuthException catch (error) {
       if (error.code != 'email-already-in-use') {
         rethrow;
       }
 
+      // Universal test mode: reuse the same Firebase Auth account
+      // and create a separate Resort Partner profile for this role.
       credential = await FirebaseAuth.instance
           .signInWithEmailAndPassword(
         email: email,
@@ -210,56 +119,25 @@ class _HotelPartnerAuthPageState
     final User? user = credential.user;
     if (user == null) {
       throw StateError(
-        'Hotel Partner account could not be opened.',
+        'Resort Partner account could not be created.',
       );
     }
 
     final DocumentReference<Map<String, dynamic>>
         reference = FirebaseFirestore.instance
-            .collection('hotel_partners')
+            .collection('resort_partners')
             .doc(user.uid);
-
-    final DocumentSnapshot<Map<String, dynamic>>
-        existing = await reference.get();
-
-    if (existing.exists) {
-      final Map<String, dynamic> data =
-          existing.data() ?? <String, dynamic>{};
-
-      final String status =
-          data['status']?.toString().toLowerCase() ??
-              'pending';
-
-      if (status == 'approved' &&
-          data['isApproved'] == true) {
-        throw StateError(
-          'This account is already registered as a Hotel Partner.',
-        );
-      }
-
-      if (status == 'pending') {
-        throw StateError(
-          'This Hotel Partner registration is already waiting for Admin approval.',
-        );
-      }
-
-      if (status == 'rejected') {
-        throw StateError(
-          'This Hotel Partner registration was rejected. Please contact RD Admin.',
-        );
-      }
-    }
 
     try {
       await reference.set(
         <String, dynamic>{
           'partnerId': user.uid,
           'authUid': user.uid,
-          'role': 'hotel_partner',
+          'role': 'resort_partner',
           'businessName': _businessName.text.trim(),
           'ownerName': _ownerName.text.trim(),
           'phone': _phone.text.trim(),
-          'email': email,
+          'email': _email.text.trim(),
           'address': _address.text.trim(),
           'registrationNumber':
               _registrationNumber.text.trim(),
@@ -274,7 +152,9 @@ class _HotelPartnerAuthPageState
         },
       );
     } catch (_) {
-      if (createdNewAccount) {
+      // Delete only a brand-new Auth user created by this registration.
+      // Never delete an existing RD account reused by another role.
+      if (createdNewAuthUser) {
         try {
           await user.delete();
         } catch (_) {}
@@ -303,14 +183,10 @@ class _HotelPartnerAuthPageState
               fontWeight: FontWeight.w900,
             ),
           ),
-          content: Text(
-            createdNewAccount
-                ? 'Your new Hotel Partner account is waiting for Admin approval. '
-                    'After approval, sign in again to manage your hotel, rooms, '
-                    'availability and bookings.'
-                : 'Your existing RD account has been registered as a Hotel Partner '
-                    'and is waiting for Admin approval. Use the same email and password '
-                    'after approval.',
+          content: const Text(
+            'Your Resort Partner account is waiting for Admin approval. '
+            'After approval, sign in again to manage your resort, rooms, '
+            'availability and bookings.',
             textAlign: TextAlign.center,
           ),
           actions: <Widget>[
@@ -346,19 +222,19 @@ class _HotelPartnerAuthPageState
 
     final User? user = credential.user;
     if (user == null) {
-      throw StateError('Hotel Partner login failed.');
+      throw StateError('Resort Partner login failed.');
     }
 
     final DocumentSnapshot<Map<String, dynamic>> doc =
         await FirebaseFirestore.instance
-            .collection('hotel_partners')
+            .collection('resort_partners')
             .doc(user.uid)
             .get();
 
     if (!doc.exists) {
       await _restoreAnonymous();
       _showMessage(
-        'This account is not registered as a Hotel Partner.',
+        'This account is not registered as a Resort Partner.',
       );
       return;
     }
@@ -379,7 +255,7 @@ class _HotelPartnerAuthPageState
       await _restoreAnonymous();
       _showMessage(
         reason.isEmpty
-            ? 'This Hotel Partner registration was rejected.'
+            ? 'This Resort Partner registration was rejected.'
             : 'Registration rejected: $reason',
       );
       return;
@@ -388,7 +264,7 @@ class _HotelPartnerAuthPageState
     if (!approved) {
       await _restoreAnonymous();
       _showMessage(
-        'Your Hotel Partner account is waiting for Admin approval.',
+        'Your Resort Partner account is waiting for Admin approval.',
       );
       return;
     }
@@ -396,14 +272,14 @@ class _HotelPartnerAuthPageState
     if (!active) {
       await _restoreAnonymous();
       _showMessage(
-        'Your Hotel Partner account is currently inactive. '
+        'Your Resort Partner account is currently inactive. '
         'Please contact RD Admin.',
       );
       return;
     }
 
     await FirebaseFirestore.instance
-        .collection('hotel_partners')
+        .collection('resort_partners')
         .doc(user.uid)
         .update(
       <String, dynamic>{
@@ -413,7 +289,7 @@ class _HotelPartnerAuthPageState
     );
 
     await ActiveSessionRole.setRole(
-      ActiveSessionRole.hotelPartner,
+      ActiveSessionRole.resortPartner,
     );
 
     if (!mounted) {
@@ -424,7 +300,7 @@ class _HotelPartnerAuthPageState
       context,
       MaterialPageRoute<void>(
         builder: (_) =>
-            const HotelPartnerDashboardPage(),
+            const ResortPartnerDashboardPage(),
       ),
     );
   }
@@ -480,21 +356,13 @@ class _HotelPartnerAuthPageState
 
   @override
   Widget build(BuildContext context) {
-    if (_checkingExistingSession) {
-      return const Scaffold(
-        body: Center(
-          child: CircularProgressIndicator(),
-        ),
-      );
-    }
-
     return Scaffold(
       backgroundColor: const Color(0xFFF7F8FA),
       appBar: AppBar(
         title: Text(
           _registering
-              ? 'Hotel Partner Registration'
-              : 'Hotel Partner Login',
+              ? 'Resort Partner Registration'
+              : 'Resort Partner Login',
           style: const TextStyle(
             fontWeight: FontWeight.w900,
           ),
@@ -516,12 +384,12 @@ class _HotelPartnerAuthPageState
                   if (_registering) ...<Widget>[
                     _field(
                       controller: _businessName,
-                      label: 'Hotel / Business Name',
-                      icon: Icons.hotel_rounded,
+                      label: 'Resort / Business Name',
+                      icon: Icons.holiday_village_rounded,
                       validator: (String? value) =>
                           _required(
                         value,
-                        'Hotel / Business Name',
+                        'Resort / Business Name',
                       ),
                     ),
                     _gap(),
@@ -663,7 +531,7 @@ class _HotelPartnerAuthPageState
                     child: Text(
                       _registering
                           ? 'Already registered? Login'
-                          : 'New Hotel Partner? Register',
+                          : 'New Resort Partner? Register',
                     ),
                   ),
                 ],
@@ -705,7 +573,7 @@ class _HotelPartnerAuthPageState
                   CrossAxisAlignment.start,
               children: <Widget>[
                 const Text(
-                  'RD Hotel Partner',
+                  'RD Resort Partner',
                   style: TextStyle(
                     color: Colors.white,
                     fontSize: 21,
@@ -715,8 +583,8 @@ class _HotelPartnerAuthPageState
                 const SizedBox(height: 4),
                 Text(
                   _registering
-                      ? 'Register your hotel business. Admin approval is required before management access.'
-                      : 'Login to manage your approved hotel business.',
+                      ? 'Register your resort business. Admin approval is required before management access.'
+                      : 'Login to manage your approved resort business.',
                   style: const TextStyle(
                     color: Colors.white,
                     height: 1.3,

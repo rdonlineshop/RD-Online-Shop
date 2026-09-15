@@ -4,15 +4,15 @@ import 'package:flutter/material.dart';
 
 import 'services/active_session_role.dart';
 
-import 'hotel_partner_availability_page.dart';
-import 'hotel_partner_bookings_page.dart';
-import 'hotel_partner_direct_payment_page.dart';
-import 'hotel_partner_fee_page.dart';
-import 'hotel_partner_profile_page.dart';
-import 'hotel_partner_rooms_page.dart';
+import 'resort_partner_availability_page.dart';
+import 'resort_partner_bookings_page.dart';
+import 'resort_partner_direct_payment_page.dart';
+import 'resort_partner_fee_page.dart';
+import 'resort_partner_profile_page.dart';
+import 'resort_partner_rooms_page.dart';
 
-class HotelPartnerDashboardPage extends StatelessWidget {
-  const HotelPartnerDashboardPage({super.key});
+class ResortPartnerDashboardPage extends StatelessWidget {
+  const ResortPartnerDashboardPage({super.key});
 
   static const Color _rdGreen = Color(0xFF2E7D32);
   static const Color _rdBlue = Color(0xFF1565C0);
@@ -22,7 +22,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
       context: context,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
-          title: const Text('Hotel Partner Logout'),
+          title: const Text('Resort Partner Logout'),
           content: const Text(
             'Are you sure you want to logout?',
           ),
@@ -48,7 +48,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
       return;
     }
 
-    // Leave the Hotel Partner page first so its auth/Firestore
+    // Leave the Resort Partner page first so its auth/Firestore
     // StreamBuilders cannot briefly show a progress/login-required
     // screen while the account is being signed out.
     Navigator.popUntil(
@@ -69,7 +69,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
       return const Scaffold(
         body: Center(
           child: Text(
-            'Hotel Partner login required.',
+            'Resort Partner login required.',
             style: TextStyle(
               fontWeight: FontWeight.w800,
             ),
@@ -81,7 +81,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
     return StreamBuilder<
         DocumentSnapshot<Map<String, dynamic>>>(
       stream: FirebaseFirestore.instance
-          .collection('hotel_partners')
+          .collection('resort_partners')
           .doc(user.uid)
           .snapshots(),
       builder: (
@@ -106,7 +106,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
               child: Padding(
                 padding: const EdgeInsets.all(24),
                 child: Text(
-                  'Could not load Hotel Partner account.\n'
+                  'Could not load Resort Partner account.\n'
                   '${snapshot.error}',
                   textAlign: TextAlign.center,
                 ),
@@ -123,20 +123,20 @@ class HotelPartnerDashboardPage extends StatelessWidget {
         final bool allowed = doc?.exists == true &&
             data['isApproved'] == true &&
             data['isActive'] == true &&
-            data['role'] == 'hotel_partner';
+            data['role'] == 'resort_partner';
 
         if (!allowed) {
           return Scaffold(
             appBar: AppBar(
               title: const Text(
-                'Hotel Partner',
+                'Resort Partner',
               ),
             ),
             body: const Center(
               child: Padding(
                 padding: EdgeInsets.all(24),
                 child: Text(
-                  'This Hotel Partner account is not currently approved and active.',
+                  'This Resort Partner account is not currently approved and active.',
                   textAlign: TextAlign.center,
                   style: TextStyle(
                     fontWeight: FontWeight.w800,
@@ -165,7 +165,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
       backgroundColor: const Color(0xFFF7F8FA),
       appBar: AppBar(
         title: const Text(
-          'Hotel Partner Dashboard',
+          'Resort Partner Dashboard',
           style: TextStyle(
             fontWeight: FontWeight.w900,
           ),
@@ -202,7 +202,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                     _header(
                       businessName:
                           businessName.isEmpty
-                              ? 'Hotel Partner'
+                              ? 'Resort Partner'
                               : businessName,
                       ownerName: ownerName,
                       email:
@@ -212,7 +212,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                     ),
                     const SizedBox(height: 18),
                     const Text(
-                      'Hotel Management',
+                      'Resort Management',
                       style: TextStyle(
                         fontSize: 21,
                         fontWeight: FontWeight.w900,
@@ -231,15 +231,15 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                       children: <Widget>[
                         _card(
                           context,
-                          icon: Icons.hotel_rounded,
-                          title: 'Hotel Profile',
+                          icon: Icons.holiday_village_rounded,
+                          title: 'Resort Profile',
                           subtitle:
-                              'Create and update hotel information',
+                              'Create and update resort information',
                           onTap: () => Navigator.push<void>(
                             context,
                             MaterialPageRoute<void>(
                               builder: (_) =>
-                                  const HotelPartnerProfilePage(),
+                                  const ResortPartnerProfilePage(),
                             ),
                           ),
                         ),
@@ -253,7 +253,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                             context,
                             MaterialPageRoute<void>(
                               builder: (_) =>
-                                  const HotelPartnerRoomsPage(),
+                                  const ResortPartnerRoomsPage(),
                             ),
                           ),
                         ),
@@ -268,7 +268,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                             context,
                             MaterialPageRoute<void>(
                               builder: (_) =>
-                                  const HotelPartnerAvailabilityPage(),
+                                  const ResortPartnerAvailabilityPage(),
                             ),
                           ),
                         ),
@@ -282,7 +282,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                             context,
                             MaterialPageRoute<void>(
                               builder: (_) =>
-                                  const HotelPartnerBookingsPage(),
+                                  const ResortPartnerBookingsPage(),
                             ),
                           ),
                         ),
@@ -296,7 +296,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                             context,
                             MaterialPageRoute<void>(
                               builder: (_) =>
-                                  const HotelPartnerFeePage(),
+                                  const ResortPartnerFeePage(),
                             ),
                           ),
                         ),
@@ -305,12 +305,12 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                           icon: Icons.payments_rounded,
                           title: 'Direct Online Payment',
                           subtitle:
-                              'Receive customer booking payment directly to your Hotel account',
+                              'Receive customer booking payment directly to your Resort account',
                           onTap: () => Navigator.push<void>(
                             context,
                             MaterialPageRoute<void>(
                               builder: (_) =>
-                                  const HotelPartnerDirectPaymentPage(),
+                                  const ResortPartnerDirectPaymentPage(),
                             ),
                           ),
                         ),
@@ -326,9 +326,9 @@ class HotelPartnerDashboardPage extends StatelessWidget {
                             BorderRadius.circular(14),
                       ),
                       child: const Text(
-                        'Hotel management is connected to Firestore. '
+                        'Resort management is connected to Firestore. '
                         'Manage profile, rooms, date-wise availability, customer bookings, '
-                        'direct Hotel receiving details and RD Hotel fees from this dashboard.',
+                        'direct Resort receiving details and RD Resort fees from this dashboard.',
                         style: TextStyle(
                           fontWeight: FontWeight.w700,
                           height: 1.4,
@@ -368,7 +368,7 @@ class HotelPartnerDashboardPage extends StatelessWidget {
             radius: 29,
             backgroundColor: Colors.white24,
             child: Icon(
-              Icons.hotel_class_rounded,
+              Icons.holiday_village_rounded,
               color: Colors.white,
               size: 31,
             ),

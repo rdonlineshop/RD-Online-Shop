@@ -3,6 +3,7 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 import 'admin_dashboard_page.dart';
+import 'services/active_session_role.dart';
 
 class AdminAuthPage extends StatefulWidget {
   const AdminAuthPage({super.key});
@@ -49,6 +50,16 @@ class _AdminAuthPageState extends State<AdminAuthPage> {
     final User? user = FirebaseAuth.instance.currentUser;
 
     if (user == null || user.isAnonymous) {
+      await ActiveSessionRole.clear();
+      _finishSavedSessionCheck();
+      return;
+    }
+
+    final String? activeRole =
+        await ActiveSessionRole.getRole();
+
+    if (activeRole != null &&
+        activeRole != ActiveSessionRole.admin) {
       _finishSavedSessionCheck();
       return;
     }
@@ -84,6 +95,10 @@ class _AdminAuthPageState extends State<AdminAuthPage> {
         return;
       }
 
+      await ActiveSessionRole.setRole(
+        ActiveSessionRole.admin,
+      );
+
       if (!mounted) {
         return;
       }
@@ -100,6 +115,7 @@ class _AdminAuthPageState extends State<AdminAuthPage> {
   }
 
   Future<void> _restoreCustomerSession() async {
+    await ActiveSessionRole.clear();
     await FirebaseAuth.instance.signOut();
     await FirebaseAuth.instance.signInAnonymously();
   }
@@ -155,6 +171,10 @@ class _AdminAuthPageState extends State<AdminAuthPage> {
           message: 'This account does not have active Admin access.',
         );
       }
+
+      await ActiveSessionRole.setRole(
+        ActiveSessionRole.admin,
+      );
 
       if (!mounted) {
         return;

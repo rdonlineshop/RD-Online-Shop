@@ -6,19 +6,19 @@ import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
 
-import 'hotel_cloudinary_service.dart';
-import 'hotel_partner_auth_page.dart';
-import 'hotel_partner_dashboard_page.dart';
+import 'resort_cloudinary_service.dart';
+import 'resort_partner_auth_page.dart';
+import 'resort_partner_dashboard_page.dart';
 import 'services/active_session_role.dart';
 
-Future<void> _openHotelDirections(
+Future<void> _openResortDirections(
   BuildContext context, {
-  required double? hotelLatitude,
-  required double? hotelLongitude,
-  required String hotelName,
+  required double? resortLatitude,
+  required double? resortLongitude,
+  required String resortName,
 }) async {
-  if (hotelLatitude == null ||
-      hotelLongitude == null) {
+  if (resortLatitude == null ||
+      resortLongitude == null) {
     if (!context.mounted) {
       return;
     }
@@ -28,9 +28,9 @@ Future<void> _openHotelDirections(
       ..showSnackBar(
         const SnackBar(
           content: Text(
-            'Hotel GPS location is not saved yet. '
-            'Hotel Partner must enable Location, capture current location '
-            'and save the Hotel Profile first.',
+            'Resort GPS location is not saved yet. '
+            'Resort Partner must enable Location, capture current location '
+            'and save the Resort Profile first.',
           ),
         ),
       );
@@ -78,7 +78,7 @@ Future<void> _openHotelDirections(
         'origin':
             '${customerPosition.latitude},${customerPosition.longitude}',
         'destination':
-            '$hotelLatitude,$hotelLongitude',
+            '$resortLatitude,$resortLongitude',
         'destination_place_id': '',
         'travelmode': 'driving',
         'dir_action': 'navigate',
@@ -107,21 +107,21 @@ Future<void> _openHotelDirections(
       ..showSnackBar(
         SnackBar(
           content: Text(
-            'Could not start navigation to $hotelName.\n$error',
+            'Could not start navigation to $resortName.\n$error',
           ),
         ),
       );
   }
 }
 
-Future<void> _openHotelPin(
+Future<void> _openResortPin(
   BuildContext context, {
-  required double? hotelLatitude,
-  required double? hotelLongitude,
-  required String hotelName,
+  required double? resortLatitude,
+  required double? resortLongitude,
+  required String resortName,
 }) async {
-  if (hotelLatitude == null ||
-      hotelLongitude == null) {
+  if (resortLatitude == null ||
+      resortLongitude == null) {
     if (!context.mounted) {
       return;
     }
@@ -131,7 +131,7 @@ Future<void> _openHotelPin(
       ..showSnackBar(
         const SnackBar(
           content: Text(
-            'Hotel GPS location is not saved yet.',
+            'Resort GPS location is not saved yet.',
           ),
         ),
       );
@@ -144,7 +144,7 @@ Future<void> _openHotelPin(
       '/maps/search/',
       <String, String>{
         'api': '1',
-        'query': '$hotelLatitude,$hotelLongitude',
+        'query': '$resortLatitude,$resortLongitude',
       },
     );
 
@@ -168,23 +168,23 @@ Future<void> _openHotelPin(
       ..showSnackBar(
         SnackBar(
           content: Text(
-            'Could not open $hotelName location.\n$error',
+            'Could not open $resortName location.\n$error',
           ),
         ),
       );
   }
 }
 
-class HotelBookingPage extends StatefulWidget {
-  const HotelBookingPage({super.key});
+class ResortBookingPage extends StatefulWidget {
+  const ResortBookingPage({super.key});
 
   @override
-  State<HotelBookingPage> createState() =>
-      _HotelBookingPageState();
+  State<ResortBookingPage> createState() =>
+      _ResortBookingPageState();
 }
 
-class _HotelBookingPageState
-    extends State<HotelBookingPage> {
+class _ResortBookingPageState
+    extends State<ResortBookingPage> {
   static const Color _rdBlue =
       Color(0xFF1565C0);
   static const Color _rdGreen =
@@ -205,7 +205,7 @@ class _HotelBookingPageState
 
   bool _sessionReady = false;
   String _sessionError = '';
-  bool _hotelPartnerSessionActive = false;
+  bool _resortPartnerSessionActive = false;
 
   Position? _customerPosition;
   bool _locatingCustomer = false;
@@ -237,15 +237,15 @@ class _HotelBookingPageState
 
       final String? activeRole =
           await ActiveSessionRole.resolveForCurrentUser(
-        fallbackPartnerCollection: 'hotel_partners',
+        fallbackPartnerCollection: 'resort_partners',
         fallbackPartnerRole:
-            ActiveSessionRole.hotelPartner,
+            ActiveSessionRole.resortPartner,
       );
 
       bool partnerSession = false;
 
       if (activeRole ==
-              ActiveSessionRole.hotelPartner &&
+              ActiveSessionRole.resortPartner &&
           user != null &&
           !user.isAnonymous) {
         try {
@@ -254,7 +254,7 @@ class _HotelBookingPageState
               partnerDoc =
               await FirebaseFirestore.instance
                   .collection(
-                    'hotel_partners',
+                    'resort_partners',
                   )
                   .doc(user.uid)
                   .get();
@@ -268,7 +268,7 @@ class _HotelBookingPageState
                   data['isApproved'] == true &&
                   data['isActive'] == true &&
                   data['role'] ==
-                      'hotel_partner';
+                      'resort_partner';
         } catch (_) {
           partnerSession = false;
         }
@@ -281,7 +281,7 @@ class _HotelBookingPageState
       setState(() {
         _sessionReady = true;
         _sessionError = '';
-        _hotelPartnerSessionActive =
+        _resortPartnerSessionActive =
             partnerSession;
       });
 
@@ -482,18 +482,18 @@ class _HotelBookingPageState
     return false;
   }
 
-  double? _hotelDistanceKm(
-    Map<String, dynamic> hotel,
+  double? _resortDistanceKm(
+    Map<String, dynamic> resort,
   ) {
     final Position? customer =
         _customerPosition;
 
     final double? latitude =
-        (hotel['latitude'] as num?)
+        (resort['latitude'] as num?)
             ?.toDouble();
 
     final double? longitude =
-        (hotel['longitude'] as num?)
+        (resort['longitude'] as num?)
             ?.toDouble();
 
     if (customer == null ||
@@ -514,10 +514,10 @@ class _HotelBookingPageState
   }
 
   int? _estimatedDriveMinutes(
-    Map<String, dynamic> hotel,
+    Map<String, dynamic> resort,
   ) {
     final double? distance =
-        _hotelDistanceKm(hotel);
+        _resortDistanceKm(resort);
 
     if (distance == null) {
       return null;
@@ -573,7 +573,7 @@ class _HotelBookingPageState
         _customerPosition = position;
         _nearestFirst = true;
         _locationStatus =
-            'Nearest approved Hotels are shown first.';
+            'Nearest approved Resorts are shown first.';
       });
     } catch (_) {
       // Near Me remains optional until tapped.
@@ -617,7 +617,7 @@ class _HotelBookingPageState
           permission ==
               LocationPermission.deniedForever) {
         throw StateError(
-          'Location permission is required to show nearest Hotels.',
+          'Location permission is required to show nearest Resorts.',
         );
       }
 
@@ -637,7 +637,7 @@ class _HotelBookingPageState
         _customerPosition = position;
         _nearestFirst = true;
         _locationStatus =
-            'Nearest approved Hotels are shown first.';
+            'Nearest approved Resorts are shown first.';
       });
     } catch (error) {
       if (!mounted) {
@@ -666,7 +666,7 @@ class _HotelBookingPageState
     }
   }
 
-  void _sortHotelsByDistance(
+  void _sortResortsByDistance(
     List<QueryDocumentSnapshot<
             Map<String, dynamic>>>
         docs,
@@ -686,11 +686,11 @@ class _HotelBookingPageState
             second,
       ) {
         final double firstDistance =
-            _hotelDistanceKm(first.data()) ??
+            _resortDistanceKm(first.data()) ??
                 double.infinity;
 
         final double secondDistance =
-            _hotelDistanceKm(second.data()) ??
+            _resortDistanceKm(second.data()) ??
                 double.infinity;
 
         return firstDistance
@@ -724,14 +724,14 @@ class _HotelBookingPageState
           inventory =
           await FirebaseFirestore.instance
               .collection(
-                'hotel_room_inventory',
+                'resort_room_inventory',
               )
               .doc(
                 '${roomId}_${_dateKey(date)}',
               )
               .get();
 
-      // No inventory document means the Hotel has not blocked/closed
+      // No inventory document means the Resort has not blocked/closed
       // this future date and no RD booking has reserved it yet.
       // In that case all rooms are available by default.
       if (!inventory.exists) {
@@ -742,7 +742,7 @@ class _HotelBookingPageState
           inventory.data() ??
               <String, dynamic>{};
 
-      // Hotel Partner can explicitly close a date.
+      // Resort Partner can explicitly close a date.
       if (data['isOpen'] == false) {
         return 0;
       }
@@ -777,18 +777,18 @@ class _HotelBookingPageState
     return minimum < 0 ? 0 : minimum;
   }
 
-  Future<_HotelSummary>
-      _hotelAvailability(
-    String hotelId,
+  Future<_ResortSummary>
+      _resortAvailability(
+    String resortId,
   ) async {
     final QuerySnapshot<
             Map<String, dynamic>>
         rooms =
         await FirebaseFirestore.instance
-            .collection('hotel_rooms')
+            .collection('resort_rooms')
             .where(
-              'hotelId',
-              isEqualTo: hotelId,
+              'resortId',
+              isEqualTo: resortId,
             )
             .where(
               'isActive',
@@ -837,7 +837,7 @@ class _HotelBookingPageState
       }
     }
 
-    return _HotelSummary(
+    return _ResortSummary(
       activeRoomTypes:
           rooms.docs.length,
       availableRooms:
@@ -852,7 +852,7 @@ class _HotelBookingPageState
       context,
       MaterialPageRoute<void>(
         builder: (_) =>
-            const MyHotelBookingsPage(),
+            const MyResortBookingsPage(),
       ),
     );
   }
@@ -910,7 +910,7 @@ class _HotelBookingPageState
                 Colors.white24,
             child: Icon(
               Icons
-                  .hotel_class_rounded,
+                  .bed_rounded,
               color: Colors.white,
               size: 30,
             ),
@@ -918,8 +918,8 @@ class _HotelBookingPageState
           SizedBox(width: 12),
           Expanded(
             child: Text(
-              'Choose an approved hotel. Use Near Me to see closest Hotels first, '
-              'or search Hotel / city / area such as Kathmandu. '
+              'Choose an approved resort. Use Near Me to see closest Resorts first, '
+              'or search Resort / city / area such as Kathmandu. '
               'Check photos, facilities, price and real date-wise availability before booking.',
               style: TextStyle(
                 color: Colors.white,
@@ -948,7 +948,7 @@ class _HotelBookingPageState
               decoration:
                   const InputDecoration(
                 labelText:
-                    'Search Hotel / city / area (e.g. Kathmandu)',
+                    'Search Resort / city / area (e.g. Kathmandu)',
                 prefixIcon: Icon(
                   Icons.search_rounded,
                 ),
@@ -1116,7 +1116,7 @@ class _HotelBookingPageState
     );
   }
 
-  Widget _nearbyHotelsMap(
+  Widget _nearbyResortsMap(
     List<QueryDocumentSnapshot<
             Map<String, dynamic>>>
         docs,
@@ -1124,21 +1124,21 @@ class _HotelBookingPageState
     final List<
             QueryDocumentSnapshot<
                 Map<String, dynamic>>>
-        mappedHotels = docs.where(
+        mappedResorts = docs.where(
       (
         QueryDocumentSnapshot<
                 Map<String, dynamic>>
             doc,
       ) {
-        final Map<String, dynamic> hotel =
+        final Map<String, dynamic> resort =
             doc.data();
 
-        return hotel['latitude'] is num &&
-            hotel['longitude'] is num;
+        return resort['latitude'] is num &&
+            resort['longitude'] is num;
       },
     ).toList();
 
-    if (mappedHotels.isEmpty &&
+    if (mappedResorts.isEmpty &&
         _customerPosition == null) {
       return Card(
         child: Padding(
@@ -1155,9 +1155,9 @@ class _HotelBookingPageState
               Expanded(
                 child: Text(
                   docs.isEmpty
-                      ? 'No Hotel is available on the map yet.'
-                      : 'Hotel map is waiting for saved GPS coordinates. '
-                          'Hotel Partners must save their Hotel location first.',
+                      ? 'No Resort is available on the map yet.'
+                      : 'Resort map is waiting for saved GPS coordinates. '
+                          'Resort Partners must save their Resort location first.',
                   style: const TextStyle(
                     height: 1.4,
                     fontWeight:
@@ -1180,7 +1180,7 @@ class _HotelBookingPageState
       );
     } else {
       final Map<String, dynamic> first =
-          mappedHotels.first.data();
+          mappedResorts.first.data();
 
       center = LatLng(
         (first['latitude'] as num)
@@ -1208,26 +1208,26 @@ class _HotelBookingPageState
             ),
           ),
         ),
-      ...mappedHotels.map(
+      ...mappedResorts.map(
         (
           QueryDocumentSnapshot<
                   Map<String, dynamic>>
               doc,
         ) {
-          final Map<String, dynamic> hotel =
+          final Map<String, dynamic> resort =
               doc.data();
 
           final double latitude =
-              (hotel['latitude'] as num)
+              (resort['latitude'] as num)
                   .toDouble();
 
           final double longitude =
-              (hotel['longitude'] as num)
+              (resort['longitude'] as num)
                   .toDouble();
 
-          final String hotelName =
-              hotel['name']?.toString() ??
-                  'Hotel';
+          final String resortName =
+              resort['name']?.toString() ??
+                  'Resort';
 
           return Marker(
             point:
@@ -1235,18 +1235,18 @@ class _HotelBookingPageState
             width: 60,
             height: 60,
             child: Tooltip(
-              message: hotelName,
+              message: resortName,
               child: GestureDetector(
                 onTap: () =>
-                    _openHotelPin(
+                    _openResortPin(
                   context,
-                  hotelLatitude: latitude,
-                  hotelLongitude:
+                  resortLatitude: latitude,
+                  resortLongitude:
                       longitude,
-                  hotelName: hotelName,
+                  resortName: resortName,
                 ),
                 child: const Icon(
-                  Icons.hotel_rounded,
+                  Icons.holiday_village_rounded,
                   size: 39,
                   color: _rdGreen,
                 ),
@@ -1280,7 +1280,7 @@ class _HotelBookingPageState
                 const SizedBox(width: 8),
                 const Expanded(
                   child: Text(
-                    'Nearby Hotels Map',
+                    'Nearby Resorts Map',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight:
@@ -1290,7 +1290,7 @@ class _HotelBookingPageState
                 ),
                 if (_customerPosition != null)
                   Text(
-                    '${mappedHotels.length} Hotel(s)',
+                    '${mappedResorts.length} Resort(s)',
                     style: const TextStyle(
                       fontWeight:
                           FontWeight.w700,
@@ -1333,8 +1333,8 @@ class _HotelBookingPageState
           const Padding(
             padding: EdgeInsets.all(10),
             child: Text(
-              'Blue marker = your location • Green Hotel marker = approved Hotel. '
-              'Tap a Hotel marker to open its map location.',
+              'Blue marker = your location • Green Resort marker = approved Resort. '
+              'Tap a Resort marker to open its map location.',
               textAlign:
                   TextAlign.center,
               style: TextStyle(
@@ -1349,55 +1349,55 @@ class _HotelBookingPageState
     );
   }
 
-  Widget _hotelCard(
+  Widget _resortCard(
     QueryDocumentSnapshot<
             Map<String, dynamic>>
         doc,
   ) {
-    final Map<String, dynamic> hotel =
+    final Map<String, dynamic> resort =
         doc.data();
 
     final String cover =
-        hotel['coverUrl']
+        resort['coverUrl']
                 ?.toString()
                 .trim() ??
             '';
 
     final String profile =
-        hotel['profileUrl']
+        resort['profileUrl']
                 ?.toString()
                 .trim() ??
             '';
 
     final double? distanceKm =
-        _hotelDistanceKm(hotel);
+        _resortDistanceKm(resort);
 
     final int? driveMinutes =
-        _estimatedDriveMinutes(hotel);
+        _estimatedDriveMinutes(resort);
 
-    final double? hotelLatitude =
-        (hotel['latitude'] as num?)
+    final double? resortLatitude =
+        (resort['latitude'] as num?)
             ?.toDouble();
 
-    final double? hotelLongitude =
-        (hotel['longitude'] as num?)
+    final double? resortLongitude =
+        (resort['longitude'] as num?)
             ?.toDouble();
 
-    return FutureBuilder<_HotelSummary>(
+    return FutureBuilder<_ResortSummary>(
       future:
-          _hotelAvailability(doc.id),
+          _resortAvailability(doc.id),
       builder: (
         BuildContext context,
-        AsyncSnapshot<_HotelSummary>
+        AsyncSnapshot<_ResortSummary>
             snapshot,
       ) {
         final bool loading =
             snapshot.connectionState ==
                 ConnectionState.waiting;
 
-        final _HotelSummary summary =
+        final _ResortSummary summary =
             snapshot.data ??
-                const _HotelSummary(
+                const _ResortSummary(
                   activeRoomTypes: 0,
                   availableRooms: 0,
                   lowestAvailablePrice:
@@ -1419,21 +1419,19 @@ class _HotelBookingPageState
           clipBehavior:
               Clip.antiAlias,
           child: InkWell(
-            onTap: _hotelPartnerSessionActive
-                ? null
-                : () =>
-                    Navigator.push<void>(
-                  context,
-                  MaterialPageRoute<void>(
-                    builder: (_) =>
-                        HotelDetailsPage(
-                      hotelId: doc.id,
-                      hotel: hotel,
-                      checkIn: _checkIn,
-                      checkOut: _checkOut,
-                    ),
-                  ),
+            onTap: () =>
+                Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    ResortDetailsPage(
+                  resortId: doc.id,
+                  resort: resort,
+                  checkIn: _checkIn,
+                  checkOut: _checkOut,
                 ),
+              ),
+            ),
             child: Column(
               crossAxisAlignment:
                   CrossAxisAlignment
@@ -1544,7 +1542,7 @@ class _HotelBookingPageState
                             profile.isEmpty
                                 ? const Icon(
                                     Icons
-                                        .hotel_class_rounded,
+                                        .bed_rounded,
                                     color:
                                         _rdGreen,
                                   )
@@ -1560,9 +1558,9 @@ class _HotelBookingPageState
                                   .start,
                           children: <Widget>[
                             Text(
-                              hotel['name']
+                              resort['name']
                                       ?.toString() ??
-                                  'Hotel',
+                                  'Resort',
                               style:
                                   const TextStyle(
                                 fontSize:
@@ -1576,17 +1574,17 @@ class _HotelBookingPageState
                               height: 3,
                             ),
                             Text(
-                              hotel['location']
+                              resort['location']
                                       ?.toString() ??
                                   '',
                             ),
-                            if ((hotel['phone']
+                            if ((resort['phone']
                                         ?.toString()
                                         .trim() ??
                                     '')
                                 .isNotEmpty)
                               SelectableText(
-                                hotel['phone']
+                                resort['phone']
                                     .toString(),
                                 style:
                                     const TextStyle(
@@ -1672,8 +1670,8 @@ class _HotelBookingPageState
                                 ),
                               ),
                             ],
-                            if (hotelLatitude != null &&
-                                hotelLongitude != null) ...<Widget>[
+                            if (resortLatitude != null &&
+                                resortLongitude != null) ...<Widget>[
                               const SizedBox(
                                 height: 7,
                               ),
@@ -1683,16 +1681,16 @@ class _HotelBookingPageState
                                 children: <Widget>[
                                   TextButton.icon(
                                     onPressed: () =>
-                                        _openHotelPin(
+                                        _openResortPin(
                                       context,
-                                      hotelLatitude:
-                                          hotelLatitude,
-                                      hotelLongitude:
-                                          hotelLongitude,
-                                      hotelName:
-                                          hotel['name']
+                                      resortLatitude:
+                                          resortLatitude,
+                                      resortLongitude:
+                                          resortLongitude,
+                                      resortName:
+                                          resort['name']
                                                   ?.toString() ??
-                                              'Hotel',
+                                              'Resort',
                                     ),
                                     icon: const Icon(
                                       Icons.map_rounded,
@@ -1703,16 +1701,16 @@ class _HotelBookingPageState
                                   ),
                                   TextButton.icon(
                                     onPressed: () =>
-                                        _openHotelDirections(
+                                        _openResortDirections(
                                       context,
-                                      hotelLatitude:
-                                          hotelLatitude,
-                                      hotelLongitude:
-                                          hotelLongitude,
-                                      hotelName:
-                                          hotel['name']
+                                      resortLatitude:
+                                          resortLatitude,
+                                      resortLongitude:
+                                          resortLongitude,
+                                      resortName:
+                                          resort['name']
                                                   ?.toString() ??
-                                              'Hotel',
+                                              'Resort',
                                     ),
                                     icon: const Icon(
                                       Icons
@@ -1728,11 +1726,10 @@ class _HotelBookingPageState
                             const SizedBox(
                               height: 5,
                             ),
-                            Text(
-                              _hotelPartnerSessionActive
-                                  ? 'Hotel Partner mode: customer booking is disabled'
-                                  : 'Tap to view rooms',
-                              style: const TextStyle(
+                            const Text(
+                              'Tap to view rooms',
+                              style:
+                                  TextStyle(
                                 color:
                                     _rdBlue,
                                 fontWeight:
@@ -1760,7 +1757,7 @@ class _HotelBookingPageState
       return Scaffold(
         appBar: AppBar(
           title:
-              const Text('Hotels'),
+              const Text('Resorts'),
         ),
         body: Center(
           child:
@@ -1799,14 +1796,135 @@ class _HotelBookingPageState
       );
     }
 
-
+    if (_resortPartnerSessionActive) {
+      return Scaffold(
+        backgroundColor:
+            const Color(0xFFF7F8FA),
+        appBar: AppBar(
+          title: const Text(
+            'Resorts',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          centerTitle: true,
+          actions: <Widget>[
+            IconButton(
+              tooltip: 'Resort Partner Dashboard',
+              onPressed: () {
+                Navigator.push<void>(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        const ResortPartnerDashboardPage(),
+                  ),
+                );
+              },
+              icon: const Icon(
+                Icons.person_outline,
+              ),
+            ),
+            IconButton(
+              tooltip:
+                  'Customer bookings unavailable while Resort Partner is logged in',
+              onPressed: null,
+              icon: const Icon(
+                Icons.book_online_rounded,
+              ),
+            ),
+          ],
+        ),
+        body: Center(
+          child: ConstrainedBox(
+            constraints:
+                const BoxConstraints(
+              maxWidth: 520,
+            ),
+            child: Card(
+              margin:
+                  const EdgeInsets.all(20),
+              child: Padding(
+                padding:
+                    const EdgeInsets.all(22),
+                child: Column(
+                  mainAxisSize:
+                      MainAxisSize.min,
+                  children: <Widget>[
+                    const Icon(
+                      Icons.lock_person_rounded,
+                      size: 54,
+                      color: _rdBlue,
+                    ),
+                    const SizedBox(height: 14),
+                    const Text(
+                      'Resort Partner session is active',
+                      textAlign:
+                          TextAlign.center,
+                      style: TextStyle(
+                        fontSize: 21,
+                        fontWeight:
+                            FontWeight.w900,
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    const Text(
+                      'This Resort page stays open so the Partner Dashboard and Logout remain accessible. '
+                      'Customer Resort browsing and My Resort Bookings stay blocked while the '
+                      'Resort Partner session is active.\n\n'
+                      'Open the Partner Dashboard and logout when you want to use Resort booking '
+                      'as a customer.',
+                      textAlign:
+                          TextAlign.center,
+                      style: TextStyle(
+                        height: 1.4,
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    FilledButton.icon(
+                      onPressed: () {
+                        Navigator.push<void>(
+                          context,
+                          MaterialPageRoute<void>(
+                            builder: (_) =>
+                                const ResortPartnerDashboardPage(),
+                          ),
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.dashboard_rounded,
+                      ),
+                      label: const Text(
+                        'Open Resort Partner Dashboard',
+                      ),
+                    ),
+                    const SizedBox(height: 10),
+                    OutlinedButton.icon(
+                      onPressed: () =>
+                          Navigator.pop(
+                        context,
+                      ),
+                      icon: const Icon(
+                        Icons.arrow_back_rounded,
+                      ),
+                      label: const Text(
+                        'Back',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+      );
+    }
 
     return Scaffold(
       backgroundColor:
           const Color(0xFFF7F8FA),
       appBar: AppBar(
         title: const Text(
-          'Hotels',
+          'Resorts',
           style: TextStyle(
             fontWeight:
                 FontWeight.w900,
@@ -1815,45 +1933,23 @@ class _HotelBookingPageState
         centerTitle: true,
         actions: <Widget>[
           IconButton(
-            tooltip: _hotelPartnerSessionActive
-                ? 'Hotel Partner Dashboard'
-                : 'Hotel Partner Login',
-            onPressed: () async {
-              if (_hotelPartnerSessionActive) {
-                await Navigator.push<void>(
-                  context,
-                  MaterialPageRoute<void>(
-                    builder: (_) =>
-                        const HotelPartnerDashboardPage(),
-                  ),
-                );
-              } else {
-                await Navigator.push<void>(
-                  context,
-                  MaterialPageRoute<void>(
-                    builder: (_) =>
-                        const HotelPartnerAuthPage(),
-                  ),
-                );
-              }
-
-              if (!mounted) {
-                return;
-              }
-
-              await _ensureSession();
-            },
+            tooltip: 'Resort Partner Login',
+            onPressed: () => Navigator.push<void>(
+              context,
+              MaterialPageRoute<void>(
+                builder: (_) =>
+                    const ResortPartnerAuthPage(),
+              ),
+            ),
             icon: const Icon(
               Icons.person_outline,
             ),
           ),
           IconButton(
-            tooltip: _hotelPartnerSessionActive
-                ? 'Customer bookings unavailable while Hotel Partner is logged in'
-                : 'My Hotel Bookings',
-            onPressed: _hotelPartnerSessionActive
-                ? null
-                : _openMyBookings,
+            tooltip:
+                'My Resort Bookings',
+            onPressed:
+                _openMyBookings,
             icon: const Icon(
               Icons
                   .book_online_rounded,
@@ -1866,7 +1962,7 @@ class _HotelBookingPageState
             QuerySnapshot<
                 Map<String, dynamic>>>(
           stream: FirebaseFirestore.instance
-              .collection('hotels')
+              .collection('resorts')
               .where(
                 'isApproved',
                 isEqualTo: true,
@@ -1900,7 +1996,7 @@ class _HotelBookingPageState
                     24,
                   ),
                   child: Text(
-                    'Could not load hotels.\n'
+                    'Could not load resorts.\n'
                     '${snapshot.error}',
                     textAlign:
                         TextAlign.center,
@@ -1930,7 +2026,7 @@ class _HotelBookingPageState
                     )
                     .toList();
 
-            _sortHotelsByDistance(docs);
+            _sortResortsByDistance(docs);
 
             return Center(
               child: ConstrainedBox(
@@ -1952,14 +2048,14 @@ class _HotelBookingPageState
                     const SizedBox(
                       height: 16,
                     ),
-                    _nearbyHotelsMap(
+                    _nearbyResortsMap(
                       docs,
                     ),
                     const SizedBox(
                       height: 16,
                     ),
                     Text(
-                      'Available Hotels '
+                      'Available Resorts '
                       '(${docs.length})',
                       style:
                           const TextStyle(
@@ -1980,7 +2076,7 @@ class _HotelBookingPageState
                             24,
                           ),
                           child: Text(
-                            'No approved hotel is available yet.',
+                            'No approved resort is available yet.',
                             textAlign:
                                 TextAlign.center,
                           ),
@@ -1988,7 +2084,7 @@ class _HotelBookingPageState
                       )
                     else
                       ...docs.map(
-                        _hotelCard,
+                        _resortCard,
                       ),
                   ],
                 ),
@@ -2001,11 +2097,11 @@ class _HotelBookingPageState
   }
 }
 
-class HotelDetailsPage
+class ResortDetailsPage
     extends StatelessWidget {
-  const HotelDetailsPage({
-    required this.hotelId,
-    required this.hotel,
+  const ResortDetailsPage({
+    required this.resortId,
+    required this.resort,
     required this.checkIn,
     required this.checkOut,
     super.key,
@@ -2016,8 +2112,8 @@ class HotelDetailsPage
   static const Color _rdGreen =
       Color(0xFF2E7D32);
 
-  final String hotelId;
-  final Map<String, dynamic> hotel;
+  final String resortId;
+  final Map<String, dynamic> resort;
   final DateTime checkIn;
   final DateTime checkOut;
 
@@ -2026,10 +2122,10 @@ class HotelDetailsPage
       '${value.month.toString().padLeft(2, '0')}/'
       '${value.year}';
 
-  Widget _hotelGallery() {
+  Widget _resortGallery() {
     final List<dynamic> photos =
-        hotel['photoUrls'] is List
-            ? hotel['photoUrls']
+        resort['photoUrls'] is List
+            ? resort['photoUrls']
                 as List<dynamic>
             : <dynamic>[];
 
@@ -2122,40 +2218,40 @@ class HotelDetailsPage
   @override
   Widget build(BuildContext context) {
     final String cover =
-        hotel['coverUrl']
+        resort['coverUrl']
                 ?.toString()
                 .trim() ??
             '';
 
     final String profile =
-        hotel['profileUrl']
+        resort['profileUrl']
                 ?.toString()
                 .trim() ??
             '';
 
     final List<dynamic> facilities =
-        hotel['facilities'] is List
-            ? hotel['facilities']
+        resort['facilities'] is List
+            ? resort['facilities']
                 as List<dynamic>
             : <dynamic>[];
 
-    final double? hotelLatitude =
-        (hotel['latitude'] as num?)?.toDouble();
+    final double? resortLatitude =
+        (resort['latitude'] as num?)?.toDouble();
 
-    final double? hotelLongitude =
-        (hotel['longitude'] as num?)?.toDouble();
+    final double? resortLongitude =
+        (resort['longitude'] as num?)?.toDouble();
 
-    final bool hasHotelGps =
-        hotelLatitude != null &&
-            hotelLongitude != null;
+    final bool hasResortGps =
+        resortLatitude != null &&
+            resortLongitude != null;
 
     return Scaffold(
       backgroundColor:
           const Color(0xFFF7F8FA),
       appBar: AppBar(
         title: Text(
-          hotel['name']?.toString() ??
-              'Hotel',
+          resort['name']?.toString() ??
+              'Resort',
           style: const TextStyle(
             fontWeight:
                 FontWeight.w900,
@@ -2260,7 +2356,7 @@ class HotelDetailsPage
                                           .isEmpty
                                       ? const Icon(
                                           Icons
-                                              .hotel_class_rounded,
+                                              .bed_rounded,
                                           color:
                                               _rdGreen,
                                           size:
@@ -2278,9 +2374,9 @@ class HotelDetailsPage
                                         .start,
                                 children: <Widget>[
                                   Text(
-                                    hotel['name']
+                                    resort['name']
                                             ?.toString() ??
-                                        'Hotel',
+                                        'Resort',
                                     style:
                                         const TextStyle(
                                       fontSize:
@@ -2306,13 +2402,13 @@ class HotelDetailsPage
                                       ),
                                       Expanded(
                                         child: Text(
-                                          hotel['location']?.toString() ??
+                                          resort['location']?.toString() ??
                                               '',
                                         ),
                                       ),
                                     ],
                                   ),
-                                  if ((hotel['phone']
+                                  if ((resort['phone']
                                               ?.toString()
                                               .trim() ??
                                           '')
@@ -2332,18 +2428,18 @@ class HotelDetailsPage
                                               4,
                                         ),
                                         SelectableText(
-                                          hotel['phone']
+                                          resort['phone']
                                               .toString(),
                                         ),
                                       ],
                                     ),
-                                  if ((hotel['email']
+                                  if ((resort['email']
                                               ?.toString()
                                               .trim() ??
                                           '')
                                       .isNotEmpty)
                                     SelectableText(
-                                      hotel['email']
+                                      resort['email']
                                           .toString(),
                                     ),
                                 ],
@@ -2352,7 +2448,7 @@ class HotelDetailsPage
                           ],
                         ),
                       ),
-                      if ((hotel['description']
+                      if ((resort['description']
                                   ?.toString()
                                   .trim() ??
                               '')
@@ -2367,7 +2463,7 @@ class HotelDetailsPage
                             14,
                           ),
                           child: Text(
-                            hotel[
+                            resort[
                                     'description']
                                 .toString(),
                           ),
@@ -2387,7 +2483,7 @@ class HotelDetailsPage
                           CrossAxisAlignment.stretch,
                       children: <Widget>[
                         const Text(
-                          'Hotel Location',
+                          'Resort Location',
                           style: TextStyle(
                             fontSize: 18,
                             fontWeight:
@@ -2396,20 +2492,20 @@ class HotelDetailsPage
                         ),
                         const SizedBox(height: 6),
                         Text(
-                          hasHotelGps
-                              ? 'Hotel GPS location is saved. '
-                                  'You can view the hotel pin or navigate '
+                          hasResortGps
+                              ? 'Resort GPS location is saved. '
+                                  'You can view the resort pin or navigate '
                                   'from your current live location.'
-                              : 'Hotel GPS location has not been saved yet.',
+                              : 'Resort GPS location has not been saved yet.',
                           style: TextStyle(
-                            color: hasHotelGps
+                            color: hasResortGps
                                 ? _rdGreen
                                 : Colors.orange,
                             fontWeight:
                                 FontWeight.w700,
                           ),
                         ),
-                        if (hasHotelGps) ...<Widget>[
+                        if (hasResortGps) ...<Widget>[
                           const SizedBox(height: 10),
                           Wrap(
                             spacing: 8,
@@ -2417,37 +2513,37 @@ class HotelDetailsPage
                             children: <Widget>[
                               OutlinedButton.icon(
                                 onPressed: () =>
-                                    _openHotelPin(
+                                    _openResortPin(
                                   context,
-                                  hotelLatitude:
-                                      hotelLatitude,
-                                  hotelLongitude:
-                                      hotelLongitude,
-                                  hotelName:
-                                      hotel['name']
+                                  resortLatitude:
+                                      resortLatitude,
+                                  resortLongitude:
+                                      resortLongitude,
+                                  resortName:
+                                      resort['name']
                                               ?.toString() ??
-                                          'Hotel',
+                                          'Resort',
                                 ),
                                 icon: const Icon(
                                   Icons
                                       .location_on_rounded,
                                 ),
                                 label: const Text(
-                                  'View Hotel Location',
+                                  'View Resort Location',
                                 ),
                               ),
                               FilledButton.icon(
                                 onPressed: () =>
-                                    _openHotelDirections(
+                                    _openResortDirections(
                                   context,
-                                  hotelLatitude:
-                                      hotelLatitude,
-                                  hotelLongitude:
-                                      hotelLongitude,
-                                  hotelName:
-                                      hotel['name']
+                                  resortLatitude:
+                                      resortLatitude,
+                                  resortLongitude:
+                                      resortLongitude,
+                                  resortName:
+                                      resort['name']
                                               ?.toString() ??
-                                          'Hotel',
+                                          'Resort',
                                 ),
                                 icon: const Icon(
                                   Icons
@@ -2467,8 +2563,8 @@ class HotelDetailsPage
                 const SizedBox(
                   height: 12,
                 ),
-                _hotelGallery(),
-                if ((hotel['photoUrls']
+                _resortGallery(),
+                if ((resort['photoUrls']
                             as List?)
                         ?.isNotEmpty ==
                     true)
@@ -2518,7 +2614,7 @@ class HotelDetailsPage
                                 .start,
                         children: <Widget>[
                           const Text(
-                            'Hotel Facilities',
+                            'Resort Facilities',
                             style: TextStyle(
                               fontSize: 18,
                               fontWeight:
@@ -2561,7 +2657,7 @@ class HotelDetailsPage
                     ),
                   ),
                 ],
-                if ((hotel['cancellationPolicy']
+                if ((resort['cancellationPolicy']
                             ?.toString()
                             .trim() ??
                         '')
@@ -2585,14 +2681,14 @@ class HotelDetailsPage
                         ),
                       ),
                       subtitle: Text(
-                        hotel[
+                        resort[
                                 'cancellationPolicy']
                             .toString(),
                       ),
                     ),
                   ),
                 ],
-                if ((hotel['houseRules']
+                if ((resort['houseRules']
                             ?.toString()
                             .trim() ??
                         '')
@@ -2615,7 +2711,7 @@ class HotelDetailsPage
                         ),
                       ),
                       subtitle: Text(
-                        hotel['houseRules']
+                        resort['houseRules']
                             .toString(),
                       ),
                     ),
@@ -2640,12 +2736,12 @@ class HotelDetailsPage
                         Map<String, dynamic>>>(
                   stream: FirebaseFirestore.instance
                       .collection(
-                        'hotel_rooms',
+                        'resort_rooms',
                       )
                       .where(
-                        'hotelId',
+                        'resortId',
                         isEqualTo:
-                            hotelId,
+                            resortId,
                       )
                       .where(
                         'isActive',
@@ -2720,9 +2816,9 @@ class HotelDetailsPage
                                   roomDoc,
                             ) =>
                                 CustomerRoomCard(
-                              hotelId:
-                                  hotelId,
-                              hotel: hotel,
+                              resortId:
+                                  resortId,
+                              resort: resort,
                               roomDoc:
                                   roomDoc,
                               checkIn:
@@ -2747,8 +2843,8 @@ class HotelDetailsPage
 class CustomerRoomCard
     extends StatelessWidget {
   const CustomerRoomCard({
-    required this.hotelId,
-    required this.hotel,
+    required this.resortId,
+    required this.resort,
     required this.roomDoc,
     required this.checkIn,
     required this.checkOut,
@@ -2762,8 +2858,8 @@ class CustomerRoomCard
   static const Color _rdRed =
       Color(0xFFD32F2F);
 
-  final String hotelId;
-  final Map<String, dynamic> hotel;
+  final String resortId;
+  final Map<String, dynamic> resort;
   final QueryDocumentSnapshot<
       Map<String, dynamic>> roomDoc;
   final DateTime checkIn;
@@ -2821,7 +2917,7 @@ class CustomerRoomCard
           inventory =
           await FirebaseFirestore.instance
               .collection(
-                'hotel_room_inventory',
+                'resort_room_inventory',
               )
               .doc(
                 '${roomDoc.id}_${_dateKey(date)}',
@@ -3197,11 +3293,11 @@ class CustomerRoomCard
                                       void>(
                                     builder:
                                         (_) =>
-                                            HotelRoomBookingPage(
-                                      hotelId:
-                                          hotelId,
-                                      hotel:
-                                          hotel,
+                                            ResortRoomBookingPage(
+                                      resortId:
+                                          resortId,
+                                      resort:
+                                          resort,
                                       roomId:
                                           roomDoc.id,
                                       room:
@@ -3238,11 +3334,11 @@ class CustomerRoomCard
   }
 }
 
-class HotelRoomBookingPage
+class ResortRoomBookingPage
     extends StatefulWidget {
-  const HotelRoomBookingPage({
-    required this.hotelId,
-    required this.hotel,
+  const ResortRoomBookingPage({
+    required this.resortId,
+    required this.resort,
     required this.roomId,
     required this.room,
     required this.checkIn,
@@ -3251,8 +3347,8 @@ class HotelRoomBookingPage
     super.key,
   });
 
-  final String hotelId;
-  final Map<String, dynamic> hotel;
+  final String resortId;
+  final Map<String, dynamic> resort;
   final String roomId;
   final Map<String, dynamic> room;
   final DateTime checkIn;
@@ -3260,13 +3356,13 @@ class HotelRoomBookingPage
   final int available;
 
   @override
-  State<HotelRoomBookingPage>
+  State<ResortRoomBookingPage>
       createState() =>
-          _HotelRoomBookingPageState();
+          _ResortRoomBookingPageState();
 }
 
-class _HotelRoomBookingPageState
-    extends State<HotelRoomBookingPage> {
+class _ResortRoomBookingPageState
+    extends State<ResortRoomBookingPage> {
   static const Color _rdBlue =
       Color(0xFF1565C0);
   static const Color _rdGreen =
@@ -3286,7 +3382,7 @@ class _HotelRoomBookingPageState
   int _roomCount = 1;
 
   String _paymentOption =
-      'pay_at_hotel';
+      'pay_at_resort';
 
   String _paymentMethod =
       'bank_transfer';
@@ -3376,7 +3472,7 @@ class _HotelRoomBookingPageState
   }
 
   String get _partnerId =>
-      widget.hotel['partnerId']
+      widget.resort['partnerId']
               ?.toString()
               .trim() ??
           '';
@@ -3399,7 +3495,7 @@ class _HotelRoomBookingPageState
           doc =
           await FirebaseFirestore.instance
               .collection(
-                'hotel_direct_payment_accounts',
+                'resort_direct_payment_accounts',
               )
               .doc(partnerId)
               .get();
@@ -3496,7 +3592,7 @@ class _HotelRoomBookingPageState
                 .trim() ??
             '')
         .isNotEmpty) {
-      methods.add('hotel_qr');
+      methods.add('resort_qr');
     }
 
     return methods;
@@ -3516,8 +3612,8 @@ class _HotelRoomBookingPageState
         return 'connectIPS';
       case 'mobile_banking':
         return 'Mobile Banking';
-      case 'hotel_qr':
-        return 'Hotel Payment QR';
+      case 'resort_qr':
+        return 'Resort Payment QR';
       default:
         return method;
     }
@@ -3582,8 +3678,8 @@ class _HotelRoomBookingPageState
               BorderRadius.circular(12),
         ),
         child: const Text(
-          'This Hotel has not enabled Direct Online Payment yet. '
-          'Please choose Pay at Hotel.',
+          'This Resort has not enabled Direct Online Payment yet. '
+          'Please choose Pay at Resort.',
           style: TextStyle(
             color: Colors.orange,
             fontWeight:
@@ -3622,10 +3718,10 @@ class _HotelRoomBookingPageState
                 BorderRadius.circular(12),
           ),
           child: const Text(
-            'Payment goes DIRECTLY to this Hotel account. '
+            'Payment goes DIRECTLY to this Resort account. '
             'RD Online Shop does not receive this booking payment. '
             'After transfer, enter the transaction reference and upload proof. '
-            'The Hotel Partner must verify actual receipt before payment becomes PAID.',
+            'The Resort Partner must verify actual receipt before payment becomes PAID.',
             style: TextStyle(
               color: _rdGreen,
               fontWeight:
@@ -3690,7 +3786,7 @@ class _HotelRoomBookingPageState
                       .stretch,
               children: <Widget>[
                 Text(
-                  '${widget.hotel['name'] ?? 'Hotel'} Receiving Details',
+                  '${widget.resort['name'] ?? 'Resort'} Receiving Details',
                   style:
                       const TextStyle(
                     fontSize: 16,
@@ -3780,7 +3876,7 @@ class _HotelRoomBookingPageState
                         '',
                   ),
                 if (_paymentMethod ==
-                        'hotel_qr' &&
+                        'resort_qr' &&
                     qrUrl.isNotEmpty)
                   ClipRRect(
                     borderRadius:
@@ -3799,7 +3895,7 @@ class _HotelRoomBookingPageState
                     height: 8,
                   ),
                   Text(
-                    'Hotel instruction: '
+                    'Resort instruction: '
                     '$instructions',
                     style:
                         const TextStyle(
@@ -3901,7 +3997,7 @@ class _HotelRoomBookingPageState
 
     try {
       final String? url =
-          await HotelCloudinaryService
+          await ResortCloudinaryService
               .pickAndUploadImage(
         imageQuality: 88,
       );
@@ -3967,12 +4063,12 @@ class _HotelRoomBookingPageState
     }
 
     if (_paymentOption ==
-        'direct_hotel_online') {
+        'direct_resort_online') {
       if (!_directPaymentEnabled) {
         _message(
-          'This Hotel has not enabled '
+          'This Resort has not enabled '
           'Direct Online Payment. '
-          'Please choose Pay at Hotel.',
+          'Please choose Pay at Resort.',
         );
         return;
       }
@@ -3980,7 +4076,7 @@ class _HotelRoomBookingPageState
       if (!_availablePaymentMethods()
           .contains(_paymentMethod)) {
         _message(
-          'Please select a valid Hotel payment method.',
+          'Please select a valid Resort payment method.',
         );
         return;
       }
@@ -3989,7 +4085,7 @@ class _HotelRoomBookingPageState
           .trim()
           .isEmpty) {
         _message(
-          'Enter the transaction / payment reference after paying the Hotel.',
+          'Enter the transaction / payment reference after paying the Resort.',
         );
         return;
       }
@@ -4017,46 +4113,46 @@ class _HotelRoomBookingPageState
           reference =
           FirebaseFirestore.instance
               .collection(
-                'hotel_bookings',
+                'resort_bookings',
               )
               .doc();
 
       final String paymentStatus =
           _paymentOption ==
-                  'pay_at_hotel'
-              ? 'pay_at_hotel_pending'
+                  'pay_at_resort'
+              ? 'pay_at_resort_pending'
               : _paymentOption ==
-                      'direct_hotel_online'
-                  ? 'submitted_to_hotel'
+                      'direct_resort_online'
+                  ? 'submitted_to_resort'
                   : 'online_pending';
 
       await reference.set(
         <String, dynamic>{
           'bookingId':
               reference.id,
-          'serviceType': 'hotel',
+          'serviceType': 'resort',
           'customerAuthUid':
               user.uid,
           'customerId': user.uid,
           'partnerId': widget
-                  .hotel['partnerId']
+                  .resort['partnerId']
                   ?.toString() ??
               '',
-          'hotelId':
-              widget.hotelId,
-          'hotelName': widget
-                  .hotel['name']
+          'resortId':
+              widget.resortId,
+          'resortName': widget
+                  .resort['name']
                   ?.toString() ??
-              'Hotel',
-          'hotelLocation': widget
-                  .hotel['location']
+              'Resort',
+          'resortLocation': widget
+                  .resort['location']
                   ?.toString() ??
               '',
-          'hotelLatitude':
-              (widget.hotel['latitude'] as num?)
+          'resortLatitude':
+              (widget.resort['latitude'] as num?)
                   ?.toDouble(),
-          'hotelLongitude':
-              (widget.hotel['longitude'] as num?)
+          'resortLongitude':
+              (widget.resort['longitude'] as num?)
                   ?.toDouble(),
           'roomId': widget.roomId,
           'roomName': widget
@@ -4085,7 +4181,7 @@ class _HotelRoomBookingPageState
           'paymentStatus':
               paymentStatus,
           if (_paymentOption ==
-              'direct_hotel_online') ...<
+              'direct_resort_online') ...<
               String, dynamic>{
             'paymentMethod':
                 _paymentMethod,
@@ -4099,10 +4195,10 @@ class _HotelRoomBookingPageState
                     .serverTimestamp(),
             'paymentReceiverPartnerId':
                 _partnerId,
-            'paymentReceiverHotelId':
-                widget.hotelId,
+            'paymentReceiverResortId':
+                widget.resortId,
             'paymentReceiverType':
-                'hotel_direct',
+                'resort_direct',
           },
           'bookingStatus':
               'request_submitted',
@@ -4126,14 +4222,14 @@ class _HotelRoomBookingPageState
       }
 
       final String bookingSubmitMessage =
-          _paymentOption == 'direct_hotel_online'
-              ? 'Your payment proof was sent directly to the Hotel Partner. '
-                  'The payment becomes PAID only after the Hotel confirms '
+          _paymentOption == 'direct_resort_online'
+              ? 'Your payment proof was sent directly to the Resort Partner. '
+                  'The payment becomes PAID only after the Resort confirms '
                   'that the money arrived in its own receiving account.\n\n'
-                  'The Hotel Partner will also confirm room availability. '
+                  'The Resort Partner will also confirm room availability. '
                   'This request is not a confirmed reservation until '
                   'the booking status becomes Confirmed.'
-              : 'The Hotel Partner will confirm '
+              : 'The Resort Partner will confirm '
                   'availability. This request is not '
                   'a confirmed reservation until '
                   'the status becomes Confirmed.';
@@ -4163,7 +4259,7 @@ class _HotelRoomBookingPageState
             ),
             content: Text(
               'Booking ID: ${reference.id}\n'
-              '${widget.hotel['name'] ?? 'Hotel'}\n'
+              '${widget.resort['name'] ?? 'Resort'}\n'
               '${widget.room['name'] ?? 'Room'} × $_roomCount\n'
               '${_date(widget.checkIn)} → '
               '${_date(widget.checkOut)}\n'
@@ -4290,10 +4386,10 @@ class _HotelRoomBookingPageState
                               .start,
                       children: <Widget>[
                         Text(
-                          widget.hotel[
+                          widget.resort[
                                       'name']
                                   ?.toString() ??
-                              'Hotel',
+                              'Resort',
                           style:
                               const TextStyle(
                             fontSize: 20,
@@ -4475,9 +4571,9 @@ class _HotelRoomBookingPageState
                             ButtonSegment<
                                 String>(
                               value:
-                                  'pay_at_hotel',
+                                  'pay_at_resort',
                               label: Text(
-                                'Pay at Hotel',
+                                'Pay at Resort',
                               ),
                               icon: Icon(
                                 Icons
@@ -4487,9 +4583,9 @@ class _HotelRoomBookingPageState
                             ButtonSegment<
                                 String>(
                               value:
-                                  'direct_hotel_online',
+                                  'direct_resort_online',
                               label: Text(
-                                'Direct Online to Hotel',
+                                'Direct Online to Resort',
                               ),
                               icon: Icon(
                                 Icons
@@ -4512,7 +4608,7 @@ class _HotelRoomBookingPageState
                           },
                         ),
                         if (_paymentOption ==
-                            'direct_hotel_online') ...<
+                            'direct_resort_online') ...<
                             Widget>[
                           const SizedBox(
                             height: 10,
@@ -4612,9 +4708,9 @@ class _HotelRoomBookingPageState
   }
 }
 
-class MyHotelBookingsPage
+class MyResortBookingsPage
     extends StatelessWidget {
-  const MyHotelBookingsPage({
+  const MyResortBookingsPage({
     super.key,
   });
 
@@ -4762,7 +4858,7 @@ class MyHotelBookingsPage
           const Color(0xFFF7F8FA),
       appBar: AppBar(
         title: const Text(
-          'My Hotel Bookings',
+          'My Resort Bookings',
           style: TextStyle(
             fontWeight:
                 FontWeight.w900,
@@ -4775,7 +4871,7 @@ class MyHotelBookingsPage
               Map<String, dynamic>>>(
         stream: FirebaseFirestore.instance
             .collection(
-              'hotel_bookings',
+              'resort_bookings',
             )
             .where(
               'customerAuthUid',
@@ -4864,7 +4960,7 @@ class MyHotelBookingsPage
                               24,
                             ),
                             child: Text(
-                              'No hotel booking yet.',
+                              'No resort booking yet.',
                               textAlign:
                                   TextAlign.center,
                             ),
@@ -4940,12 +5036,12 @@ class MyHotelBookingsPage
                 ? _rdRed
                 : Colors.orange;
 
-    final double? hotelLatitude =
-        (data['hotelLatitude'] as num?)
+    final double? resortLatitude =
+        (data['resortLatitude'] as num?)
             ?.toDouble();
 
-    final double? hotelLongitude =
-        (data['hotelLongitude'] as num?)
+    final double? resortLongitude =
+        (data['resortLongitude'] as num?)
             ?.toDouble();
 
     Color statusColor = Colors.orange;
@@ -4975,9 +5071,9 @@ class MyHotelBookingsPage
               children: <Widget>[
                 Expanded(
                   child: Text(
-                    data['hotelName']
+                    data['resortName']
                             ?.toString() ??
-                        'Hotel',
+                        'Resort',
                     style: const TextStyle(
                       fontSize: 18,
                       fontWeight:
@@ -5025,10 +5121,10 @@ class MyHotelBookingsPage
               '${data['paymentStatus'] ?? ''}',
             ),
             if (data['paymentOption'] ==
-                'direct_hotel_online') ...<
+                'direct_resort_online') ...<
                 Widget>[
               Text(
-                'Direct to Hotel: '
+                'Direct to Resort: '
                 '${data['paymentMethod'] ?? ''}',
               ),
               SelectableText(
@@ -5077,12 +5173,12 @@ class MyHotelBookingsPage
                         ),
                         Text(
                           issued
-                              ? 'Hotel booking is confirmed. '
-                                  'Show this booking ID at the hotel.'
+                              ? 'Resort booking is confirmed. '
+                                  'Show this booking ID at the resort.'
                               : issueClosed
                                   ? 'This booking is no longer active.'
                                   : 'Voucher will be issued automatically '
-                                      'after Hotel Partner confirms the booking.',
+                                      'after Resort Partner confirms the booking.',
                           style: const TextStyle(
                             fontSize: 12,
                           ),
@@ -5131,13 +5227,13 @@ class MyHotelBookingsPage
             FilledButton.tonalIcon(
               onPressed: () async {
                 double? latitude =
-                    hotelLatitude;
+                    resortLatitude;
                 double? longitude =
-                    hotelLongitude;
+                    resortLongitude;
 
                 if ((latitude == null ||
                         longitude == null) &&
-                    (data['hotelId']
+                    (data['resortId']
                                 ?.toString()
                                 .trim() ??
                             '')
@@ -5145,26 +5241,26 @@ class MyHotelBookingsPage
                   try {
                     final DocumentSnapshot<
                             Map<String, dynamic>>
-                        hotelDoc =
+                        resortDoc =
                         await FirebaseFirestore
                             .instance
                             .collection(
-                              'hotels',
+                              'resorts',
                             )
                             .doc(
-                              data['hotelId']
+                              data['resortId']
                                   .toString(),
                             )
                             .get();
 
                     latitude =
-                        (hotelDoc.data()?[
+                        (resortDoc.data()?[
                                     'latitude']
                                 as num?)
                             ?.toDouble();
 
                     longitude =
-                        (hotelDoc.data()?[
+                        (resortDoc.data()?[
                                     'longitude']
                                 as num?)
                             ?.toDouble();
@@ -5178,23 +5274,23 @@ class MyHotelBookingsPage
                   return;
                 }
 
-                await _openHotelDirections(
+                await _openResortDirections(
                   context,
-                  hotelLatitude:
+                  resortLatitude:
                       latitude,
-                  hotelLongitude:
+                  resortLongitude:
                       longitude,
-                  hotelName:
-                      data['hotelName']
+                  resortName:
+                      data['resortName']
                               ?.toString() ??
-                          'Hotel',
+                          'Resort',
                 );
               },
               icon: const Icon(
                 Icons.navigation_rounded,
               ),
               label: const Text(
-                'Navigate to Hotel from My Live Location',
+                'Navigate to Resort from My Live Location',
               ),
             ),
             if (cancellable) ...<Widget>[
@@ -5230,8 +5326,8 @@ class MyHotelBookingsPage
   }
 }
 
-class _HotelSummary {
-  const _HotelSummary({
+class _ResortSummary {
+  const _ResortSummary({
     required this.activeRoomTypes,
     required this.availableRooms,
     required this.lowestAvailablePrice,
