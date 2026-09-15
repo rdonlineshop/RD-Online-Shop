@@ -697,6 +697,13 @@ class _ResortPartnerBookingsPageState
       return;
     }
 
+    final Map<String, dynamic> refreshData =
+        doc.data();
+    final String refreshRoomId =
+        refreshData['roomId']?.toString() ?? '';
+    final String refreshResortId =
+        refreshData['resortId']?.toString() ?? '';
+
     try {
       await FirebaseFirestore.instance
           .runTransaction<void>(
@@ -847,6 +854,11 @@ class _ResortPartnerBookingsPageState
                         nextBooked
                     : 0;
 
+            final String lastBookingId =
+                data['lastBookingId']
+                        ?.toString() ??
+                    '';
+
             transaction.update(
               entry.reference,
               <String, dynamic>{
@@ -854,6 +866,10 @@ class _ResortPartnerBookingsPageState
                     nextBooked,
                 'availableRooms':
                     nextAvailable,
+                'lastBookingId':
+                    lastBookingId == doc.id
+                        ? ''
+                        : lastBookingId,
                 'updatedAt':
                     FieldValue
                         .serverTimestamp(),
@@ -874,9 +890,42 @@ class _ResortPartnerBookingsPageState
         },
       );
 
+      // The room inventory is already released inside the transaction.
+      // These best-effort timestamp updates only trigger the existing
+      // customer Resort/room streams to rebuild immediately.
+      if (refreshRoomId.isNotEmpty) {
+        try {
+          await FirebaseFirestore.instance
+              .collection('resort_rooms')
+              .doc(refreshRoomId)
+              .update(
+            <String, dynamic>{
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        } catch (_) {
+          // Availability is already released; this refresh pulse is optional.
+        }
+      }
+
+      if (refreshResortId.isNotEmpty) {
+        try {
+          await FirebaseFirestore.instance
+              .collection('resorts')
+              .doc(refreshResortId)
+              .update(
+            <String, dynamic>{
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        } catch (_) {
+          // Availability is already released; this refresh pulse is optional.
+        }
+      }
+
       if (mounted) {
         _message(
-          'Booking completed. Room availability restored automatically.',
+          'Booking completed. Room is available again immediately.',
         );
       }
     } catch (error) {

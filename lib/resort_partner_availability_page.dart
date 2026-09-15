@@ -15,8 +15,14 @@ class _ResortPartnerAvailabilityPageState
   static const Color _rdGreen = Color(0xFF2E7D32);
   static const Color _rdBlue = Color(0xFF1565C0);
 
-  DateTime _from = DateTime.now();
-  DateTime _to = DateTime.now();
+  DateTime _from =
+      DateTime.now().add(
+    const Duration(days: 1),
+  );
+  DateTime _to =
+      DateTime.now().add(
+    const Duration(days: 2),
+  );
   bool _open = true;
   int _blocked = 0;
   String? _savingRoomId;
@@ -55,35 +61,53 @@ class _ResortPartnerAvailabilityPageState
   }
 
   Future<void> _pickDate({required bool from}) async {
-    final DateTime today = DateTime.now();
-    final DateTime firstDate = DateTime(
-      today.year,
-      today.month,
-      today.day,
+    final DateTime now = DateTime.now();
+    final DateTime today = DateTime(
+      now.year,
+      now.month,
+      now.day,
     );
-    final DateTime initial = from ? _from : _to;
+    final DateTime firstDate = from
+        ? today
+        : DateTime(
+            _from.year,
+            _from.month,
+            _from.day,
+          ).add(
+            const Duration(days: 1),
+          );
+    final DateTime current =
+        from ? _from : _to;
+    final DateTime initial =
+        current.isBefore(firstDate)
+            ? firstDate
+            : current;
 
     final DateTime? selected = await showDatePicker(
       context: context,
-      initialDate: initial.isBefore(firstDate)
-          ? firstDate
-          : initial,
+      initialDate: initial,
       firstDate: firstDate,
-      lastDate: firstDate.add(const Duration(days: 730)),
+      lastDate: today.add(const Duration(days: 730)),
     );
 
     if (selected == null || !mounted) {
       return;
     }
 
+    final DateTime selectedDay = DateTime(
+      selected.year,
+      selected.month,
+      selected.day,
+    );
+
     setState(() {
       if (from) {
-        _from = selected;
-        if (_to.isBefore(_from)) {
-          _to = _from;
-        }
+        _from = selectedDay;
+        _to = selectedDay.add(
+          const Duration(days: 1),
+        );
       } else {
-        _to = selected;
+        _to = selectedDay;
       }
     });
   }

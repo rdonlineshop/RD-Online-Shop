@@ -3080,7 +3080,7 @@ service cloud.firestore {
         && request.resource.data.totalAmount >= 0
         && request.resource.data.currency == 'Rs.'
         && request.resource.data.paymentOption
-          in ['pay_at_hotel', 'online']
+          in ['pay_at_hotel', 'online', 'direct_hotel_online']
         && (
           (
             request.resource.data.paymentOption == 'pay_at_hotel'
@@ -3089,6 +3089,20 @@ service cloud.firestore {
           || (
             request.resource.data.paymentOption == 'online'
             && request.resource.data.paymentStatus == 'online_pending'
+          )
+          || (
+            request.resource.data.paymentOption == 'direct_hotel_online'
+            && request.resource.data.paymentStatus == 'submitted_to_hotel'
+            && request.resource.data.paymentMethod is string
+            && request.resource.data.paymentReference is string
+            && request.resource.data.paymentReference.size() > 0
+            && request.resource.data.paymentProofUrl is string
+            && request.resource.data.paymentProofUrl.size() > 0
+            && request.resource.data.paymentReceiverPartnerId
+              == request.resource.data.partnerId
+            && request.resource.data.paymentReceiverHotelId
+              == request.resource.data.hotelId
+            && request.resource.data.paymentReceiverType == 'hotel_direct'
           )
         )
         && request.resource.data.bookingStatus == 'request_submitted'
@@ -3377,7 +3391,6 @@ service cloud.firestore {
         || ownsResort()
         || (
           signedIn()
-          && !isActiveResortPartner()
           && resource.data.isApproved == true
           && resource.data.isActive == true
         );
@@ -3469,7 +3482,6 @@ service cloud.firestore {
         || ownsRoom()
         || (
           signedIn()
-          && !isActiveResortPartner()
           && resource.data.isActive == true
           && roomResortExists()
           && roomResortData().isApproved == true

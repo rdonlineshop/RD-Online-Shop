@@ -697,6 +697,13 @@ class _HotelPartnerBookingsPageState
       return;
     }
 
+    final Map<String, dynamic> refreshData =
+        doc.data();
+    final String refreshRoomId =
+        refreshData['roomId']?.toString() ?? '';
+    final String refreshHotelId =
+        refreshData['hotelId']?.toString() ?? '';
+
     try {
       await FirebaseFirestore.instance
           .runTransaction<void>(
@@ -739,6 +746,11 @@ class _HotelPartnerBookingsPageState
                       ?.toString() ??
                   '';
 
+          final String hotelId =
+              booking['hotelId']
+                      ?.toString() ??
+                  '';
+
           final int roomCount =
               (booking['roomCount'] as num?)
                       ?.toInt() ??
@@ -753,11 +765,56 @@ class _HotelPartnerBookingsPageState
                   as Timestamp?;
 
           if (roomId.isEmpty ||
+              hotelId.isEmpty ||
               roomCount < 1 ||
               checkInStamp == null ||
               checkOutStamp == null) {
             throw StateError(
               'Booking data is incomplete.',
+            );
+          }
+
+          final DocumentReference<
+                  Map<String, dynamic>>
+              roomReference =
+              FirebaseFirestore.instance
+                  .collection('hotel_rooms')
+                  .doc(roomId);
+
+          final DocumentSnapshot<
+                  Map<String, dynamic>>
+              roomSnapshot =
+              await transaction.get(
+            roomReference,
+          );
+
+          if (!roomSnapshot.exists) {
+            throw StateError(
+              'Hotel room no longer exists.',
+            );
+          }
+
+          final Map<String, dynamic>
+              room =
+              roomSnapshot.data() ??
+                  <String, dynamic>{};
+
+          if (room['partnerId'] !=
+              user.uid ||
+              room['hotelId'] != hotelId) {
+            throw StateError(
+              'Room ownership does not match this booking.',
+            );
+          }
+
+          final int currentRoomTotal =
+              (room['totalRooms'] as num?)
+                      ?.toInt() ??
+                  0;
+
+          if (currentRoomTotal < 1) {
+            throw StateError(
+              'Room total is invalid.',
             );
           }
 
@@ -808,23 +865,70 @@ class _HotelPartnerBookingsPageState
 
           for (final _InventoryEntry entry
               in entries) {
-            if (!entry.snapshot.exists) {
-              continue;
-            }
-
             final Map<String, dynamic> data =
                 entry.snapshot.data() ??
                     <String, dynamic>{};
 
-            final int total =
+            if (!entry.snapshot.exists) {
+              transaction.set(
+                entry.reference,
+                <String, dynamic>{
+                  'inventoryId':
+                      entry.reference.id,
+                  'hotelId': hotelId,
+                  'roomId': roomId,
+                  'partnerId': user.uid,
+                  'date': Timestamp.fromDate(
+                    _day(entry.date),
+                  ),
+                  'totalRooms':
+                      currentRoomTotal,
+                  'blockedRooms': 0,
+                  'bookedRooms': 0,
+                  'availableRooms':
+                      currentRoomTotal,
+                  'isOpen': true,
+                  'lastBookingId': '',
+                  'updatedAt': FieldValue
+                      .serverTimestamp(),
+                },
+              );
+              continue;
+            }
+
+            if (data['partnerId'] !=
+                    user.uid ||
+                data['roomId'] != roomId ||
+                data['hotelId'] != hotelId) {
+              throw StateError(
+                'Inventory ownership mismatch on '
+                '${entry.date.day}/'
+                '${entry.date.month}/'
+                '${entry.date.year}.',
+              );
+            }
+
+            final int storedTotal =
                 (data['totalRooms'] as num?)
+                        ?.toInt() ??
+                    currentRoomTotal;
+
+            final int total =
+                storedTotal > 0
+                    ? storedTotal
+                    : currentRoomTotal;
+
+            final int rawBlocked =
+                (data['blockedRooms'] as num?)
                         ?.toInt() ??
                     0;
 
             final int blocked =
-                (data['blockedRooms'] as num?)
-                        ?.toInt() ??
-                    0;
+                rawBlocked < 0
+                    ? 0
+                    : rawBlocked > total
+                        ? total
+                        : rawBlocked;
 
             final int booked =
                 (data['bookedRooms'] as num?)
@@ -834,18 +938,29 @@ class _HotelPartnerBookingsPageState
             final int nextBooked =
                 booked - roomCount < 0
                     ? 0
-                    : booked -
-                        roomCount;
+                    : booked - roomCount;
 
             final bool open =
                 data['isOpen'] != false;
 
-            final int nextAvailable =
+            final int calculatedAvailable =
                 open
                     ? total -
                         blocked -
                         nextBooked
                     : 0;
+
+            final int nextAvailable =
+                calculatedAvailable < 0
+                    ? 0
+                    : calculatedAvailable > total
+                        ? total
+                        : calculatedAvailable;
+
+            final String lastBookingId =
+                data['lastBookingId']
+                        ?.toString() ??
+                    '';
 
             transaction.update(
               entry.reference,
@@ -854,9 +969,12 @@ class _HotelPartnerBookingsPageState
                     nextBooked,
                 'availableRooms':
                     nextAvailable,
-                'updatedAt':
-                    FieldValue
-                        .serverTimestamp(),
+                'lastBookingId':
+                    lastBookingId == doc.id
+                        ? ''
+                        : lastBookingId,
+                'updatedAt': FieldValue
+                    .serverTimestamp(),
               },
             );
           }
@@ -866,17 +984,52 @@ class _HotelPartnerBookingsPageState
             <String, dynamic>{
               'bookingStatus':
                   'completed',
-              'updatedAt':
-                  FieldValue
-                      .serverTimestamp(),
+              'confirmationStatus':
+                  'completed',
+              'partnerConfirmed': false,
+              'updatedAt': FieldValue
+                  .serverTimestamp(),
             },
           );
         },
       );
 
+      // The room inventory is already released inside the transaction.
+      // These best-effort timestamp updates only trigger the existing
+      // customer Hotel/room streams to rebuild immediately.
+      if (refreshRoomId.isNotEmpty) {
+        try {
+          await FirebaseFirestore.instance
+              .collection('hotel_rooms')
+              .doc(refreshRoomId)
+              .update(
+            <String, dynamic>{
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        } catch (_) {
+          // Availability is already released; this refresh pulse is optional.
+        }
+      }
+
+      if (refreshHotelId.isNotEmpty) {
+        try {
+          await FirebaseFirestore.instance
+              .collection('hotels')
+              .doc(refreshHotelId)
+              .update(
+            <String, dynamic>{
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        } catch (_) {
+          // Availability is already released; this refresh pulse is optional.
+        }
+      }
+
       if (mounted) {
         _message(
-          'Booking completed. Room availability restored automatically.',
+          'Booking completed. Room is available again immediately.',
         );
       }
     } catch (error) {

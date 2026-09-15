@@ -215,6 +215,7 @@ class _HotelBookingPageState
   @override
   void initState() {
     super.initState();
+    _normalizeStayDates();
     _ensureSession();
   }
 
@@ -308,6 +309,25 @@ class _HotelBookingPageState
         value.day,
       );
 
+  void _normalizeStayDates() {
+    final DateTime today =
+        _day(DateTime.now());
+
+    if (_day(_checkIn).isBefore(today)) {
+      _checkIn = today;
+    }
+
+    final DateTime minimumCheckOut =
+        _day(_checkIn).add(
+      const Duration(days: 1),
+    );
+
+    if (!_day(_checkOut)
+        .isAfter(_day(_checkIn))) {
+      _checkOut = minimumCheckOut;
+    }
+  }
+
   int get _nights {
     final int value = _day(_checkOut)
         .difference(_day(_checkIn))
@@ -371,21 +391,17 @@ class _HotelBookingPageState
     }
 
     setState(() {
-      _checkIn = picked;
-
-      if (!_checkOut
-          .isAfter(_checkIn)) {
-        _checkOut =
-            _checkIn.add(
-          const Duration(days: 1),
-        );
-      }
+      _checkIn = _day(picked);
+      _checkOut =
+          _day(picked).add(
+        const Duration(days: 1),
+      );
     });
   }
 
   Future<void> _pickCheckOut() async {
     final DateTime first =
-        _checkIn.add(
+        _day(_checkIn).add(
       const Duration(days: 1),
     );
 
@@ -3934,6 +3950,14 @@ class _HotelRoomBookingPageState
 
   Future<void> _submit() async {
     if (_submitting) {
+      return;
+    }
+
+    if (!_day(widget.checkOut)
+        .isAfter(_day(widget.checkIn))) {
+      _message(
+        'Check-out must be at least 1 day after Check-in.',
+      );
       return;
     }
 

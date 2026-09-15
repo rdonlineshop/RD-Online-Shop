@@ -217,7 +217,9 @@ class _HomestayPartnerAuthPageState extends State<HomestayPartnerAuthPage> {
       });
     } catch (_) {
       if (created) {
-        try { await user.delete(); } catch (_) {}
+        try { await user.delete(); } catch (_) {
+          // Availability is already released; this refresh pulse is optional.
+        }
       }
       rethrow;
     }
@@ -4093,8 +4095,14 @@ class _HomestayPartnerAvailabilityPageState
   static const Color _rdGreen = Color(0xFF2E7D32);
   static const Color _rdBlue = Color(0xFF1565C0);
 
-  DateTime _from = DateTime.now();
-  DateTime _to = DateTime.now();
+  DateTime _from =
+      DateTime.now().add(
+    const Duration(days: 1),
+  );
+  DateTime _to =
+      DateTime.now().add(
+    const Duration(days: 2),
+  );
   bool _open = true;
   int _blocked = 0;
   String? _savingRoomId;
@@ -4133,35 +4141,53 @@ class _HomestayPartnerAvailabilityPageState
   }
 
   Future<void> _pickDate({required bool from}) async {
-    final DateTime today = DateTime.now();
-    final DateTime firstDate = DateTime(
-      today.year,
-      today.month,
-      today.day,
+    final DateTime now = DateTime.now();
+    final DateTime today = DateTime(
+      now.year,
+      now.month,
+      now.day,
     );
-    final DateTime initial = from ? _from : _to;
+    final DateTime firstDate = from
+        ? today
+        : DateTime(
+            _from.year,
+            _from.month,
+            _from.day,
+          ).add(
+            const Duration(days: 1),
+          );
+    final DateTime current =
+        from ? _from : _to;
+    final DateTime initial =
+        current.isBefore(firstDate)
+            ? firstDate
+            : current;
 
     final DateTime? selected = await showDatePicker(
       context: context,
-      initialDate: initial.isBefore(firstDate)
-          ? firstDate
-          : initial,
+      initialDate: initial,
       firstDate: firstDate,
-      lastDate: firstDate.add(const Duration(days: 730)),
+      lastDate: today.add(const Duration(days: 730)),
     );
 
     if (selected == null || !mounted) {
       return;
     }
 
+    final DateTime selectedDay = DateTime(
+      selected.year,
+      selected.month,
+      selected.day,
+    );
+
     setState(() {
       if (from) {
-        _from = selected;
-        if (_to.isBefore(_from)) {
-          _to = _from;
-        }
+        _from = selectedDay;
+        _to = selectedDay.add(
+          const Duration(days: 1),
+        );
       } else {
-        _to = selected;
+        _to = selectedDay;
       }
     });
   }
@@ -4731,113 +4757,648 @@ class _HomestayPartnerAvailabilityPageState
 class HomestayPartnerBookingsPage extends StatelessWidget {
   const HomestayPartnerBookingsPage({super.key});
 
+  DateTime _day(DateTime value) => DateTime(
+        value.year,
+        value.month,
+        value.day,
+      );
+
+  String _dateKey(DateTime date) =>
+      '${date.year.toString().padLeft(4, '0')}'
+      '${date.month.toString().padLeft(2, '0')}'
+      '${date.day.toString().padLeft(2, '0')}';
+
+  List<DateTime> _stayDates(
+    DateTime checkIn,
+    DateTime checkOut,
+  ) {
+    final int nights = _day(checkOut)
+        .difference(_day(checkIn))
+        .inDays;
+
+    if (nights < 1) {
+      return <DateTime>[];
+    }
+
+    return List<DateTime>.generate(
+      nights,
+      (int index) => _day(checkIn).add(
+        Duration(days: index),
+      ),
+    );
+  }
+
+  void _message(
+    BuildContext context,
+    String message,
+  ) {
+    if (!context.mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context)
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(content: Text(message)),
+      );
+  }
+
   Future<void> _update(
     BuildContext context,
     DocumentReference<Map<String, dynamic>> ref,
     Map<String, dynamic> data,
   ) async {
-    await ref.update({
-      ...data,
-      'updatedAt': FieldValue.serverTimestamp(),
-    });
-    if (context.mounted) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Booking updated.')),
+    try {
+      await ref.update(<String, dynamic>{
+        ...data,
+        'updatedAt': FieldValue.serverTimestamp(),
+      });
+      if (!context.mounted) {
+        return;
+      }
+      _message(context, 'Booking updated.');
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+      _message(
+        context,
+        'Could not update booking.\n$error',
+      );
+    }
+  }
+
+  Future<void> _confirmBooking(
+    BuildContext context,
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) async {
+    final User? user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.isAnonymous) {
+      return;
+    }
+
+    try {
+      await FirebaseFirestore.instance
+          .runTransaction<void>(
+        (Transaction transaction) async {
+          final DocumentSnapshot<Map<String, dynamic>> fresh =
+              await transaction.get(doc.reference);
+
+          if (!fresh.exists) {
+            throw StateError('Booking no longer exists.');
+          }
+
+          final Map<String, dynamic> booking =
+              fresh.data() ?? <String, dynamic>{};
+
+          if (booking['bookingStatus'] !=
+              'request_submitted') {
+            throw StateError(
+              'Only a new booking request can be confirmed.',
+            );
+          }
+
+          if (booking['partnerId'] != user.uid) {
+            throw StateError(
+              'This booking does not belong to this Homestay Partner.',
+            );
+          }
+
+          final String roomId =
+              booking['roomId']?.toString() ?? '';
+          final String homestayId =
+              booking['homestayId']?.toString() ?? '';
+          final int roomCount =
+              (booking['roomCount'] as num?)?.toInt() ?? 0;
+          final Timestamp? checkInStamp =
+              booking['checkIn'] as Timestamp?;
+          final Timestamp? checkOutStamp =
+              booking['checkOut'] as Timestamp?;
+
+          if (roomId.isEmpty ||
+              homestayId.isEmpty ||
+              roomCount < 1 ||
+              checkInStamp == null ||
+              checkOutStamp == null) {
+            throw StateError('Booking data is incomplete.');
+          }
+
+          final DocumentReference<Map<String, dynamic>> roomRef =
+              FirebaseFirestore.instance
+                  .collection('homestay_rooms')
+                  .doc(roomId);
+          final DocumentSnapshot<Map<String, dynamic>> roomDoc =
+              await transaction.get(roomRef);
+          final Map<String, dynamic> room =
+              roomDoc.data() ?? <String, dynamic>{};
+
+          if (!roomDoc.exists ||
+              room['partnerId'] != user.uid ||
+              room['homestayId'] != homestayId ||
+              room['isActive'] != true) {
+            throw StateError(
+              'Room is not active for this Homestay.',
+            );
+          }
+
+          final int roomTotal =
+              (room['totalRooms'] as num?)?.toInt() ?? 0;
+          final List<DateTime> dates = _stayDates(
+            checkInStamp.toDate(),
+            checkOutStamp.toDate(),
+          );
+
+          if (roomTotal < 1 || dates.isEmpty) {
+            throw StateError('Stay dates are invalid.');
+          }
+
+          final List<
+                  MapEntry<
+                    DocumentReference<Map<String, dynamic>>,
+                    DocumentSnapshot<Map<String, dynamic>>
+                  >>
+              inventoryEntries = <
+                  MapEntry<
+                    DocumentReference<Map<String, dynamic>>,
+                    DocumentSnapshot<Map<String, dynamic>>
+                  >>[];
+
+          for (final DateTime date in dates) {
+            final DocumentReference<Map<String, dynamic>> reference =
+                FirebaseFirestore.instance
+                    .collection('homestay_inventory')
+                    .doc('${roomId}_${_dateKey(date)}');
+            final DocumentSnapshot<Map<String, dynamic>> inventory =
+                await transaction.get(reference);
+            inventoryEntries.add(
+              MapEntry(reference, inventory),
+            );
+          }
+
+          for (final entry in inventoryEntries) {
+            final Map<String, dynamic> data =
+                entry.value.data() ?? <String, dynamic>{};
+            final bool open =
+                data.isEmpty ? true : data['isOpen'] != false;
+            final int total =
+                (data['totalRooms'] as num?)?.toInt() ??
+                    roomTotal;
+            final int blocked =
+                (data['blockedRooms'] as num?)?.toInt() ?? 0;
+            final int booked =
+                (data['bookedRooms'] as num?)?.toInt() ?? 0;
+            final int available =
+                data.isEmpty
+                    ? total
+                    : (data['availableRooms'] as num?)
+                            ?.toInt() ??
+                        (total - blocked - booked);
+
+            if (!open || available < roomCount) {
+              throw StateError(
+                'Not enough rooms available for the selected dates.',
+              );
+            }
+          }
+
+          for (int index = 0;
+              index < inventoryEntries.length;
+              index++) {
+            final entry = inventoryEntries[index];
+            final Map<String, dynamic> data =
+                entry.value.data() ?? <String, dynamic>{};
+            final int total =
+                (data['totalRooms'] as num?)?.toInt() ??
+                    roomTotal;
+            final int blocked =
+                (data['blockedRooms'] as num?)?.toInt() ?? 0;
+            final int booked =
+                (data['bookedRooms'] as num?)?.toInt() ?? 0;
+            final int nextBooked = booked + roomCount;
+            final int nextAvailable =
+                total - blocked - nextBooked;
+            final DateTime date = dates[index];
+
+            if (nextAvailable < 0) {
+              throw StateError(
+                'Not enough rooms available for the selected dates.',
+              );
+            }
+
+            final Map<String, dynamic> next =
+                <String, dynamic>{
+              'inventoryId': entry.key.id,
+              'homestayId': homestayId,
+              'partnerId': user.uid,
+              'roomId': roomId,
+              'date': Timestamp.fromDate(_day(date)),
+              'totalRooms': total,
+              'blockedRooms': blocked,
+              'bookedRooms': nextBooked,
+              'availableRooms': nextAvailable,
+              'isOpen': true,
+              'lastBookingId': doc.id,
+              'updatedAt': FieldValue.serverTimestamp(),
+            };
+
+            if (entry.value.exists) {
+              transaction.update(
+                entry.key,
+                <String, dynamic>{
+                  'totalRooms': total,
+                  'blockedRooms': blocked,
+                  'bookedRooms': nextBooked,
+                  'availableRooms': nextAvailable,
+                  'isOpen': true,
+                  'lastBookingId': doc.id,
+                  'updatedAt': FieldValue.serverTimestamp(),
+                },
+              );
+            } else {
+              transaction.set(
+                entry.key,
+                <String, dynamic>{
+                  ...next,
+                  'createdAt': FieldValue.serverTimestamp(),
+                },
+              );
+            }
+          }
+
+          transaction.update(
+            doc.reference,
+            <String, dynamic>{
+              'bookingStatus': 'confirmed',
+              'confirmationStatus': 'confirmed',
+              'partnerConfirmed': true,
+              'confirmedAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        },
+      );
+
+      if (!context.mounted) {
+        return;
+      }
+      _message(
+        context,
+        'Homestay booking confirmed. Room availability updated automatically.',
+      );
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+      _message(
+        context,
+        'Could not confirm booking.\n$error',
+      );
+    }
+  }
+
+  Future<void> _completeBooking(
+    BuildContext context,
+    QueryDocumentSnapshot<Map<String, dynamic>> doc,
+  ) async {
+    final User? user = FirebaseAuth.instance.currentUser;
+    if (user == null || user.isAnonymous) {
+      return;
+    }
+
+    final Map<String, dynamic> refreshData =
+        doc.data();
+    final String refreshRoomId =
+        refreshData['roomId']?.toString() ?? '';
+    final String refreshHomestayId =
+        refreshData['homestayId']?.toString() ?? '';
+
+    try {
+      await FirebaseFirestore.instance
+          .runTransaction<void>(
+        (Transaction transaction) async {
+          final DocumentSnapshot<Map<String, dynamic>> fresh =
+              await transaction.get(doc.reference);
+
+          if (!fresh.exists) {
+            throw StateError('Booking no longer exists.');
+          }
+
+          final Map<String, dynamic> booking =
+              fresh.data() ?? <String, dynamic>{};
+
+          if (booking['bookingStatus'] != 'checked_in') {
+            throw StateError(
+              'Only a checked-in booking can be completed.',
+            );
+          }
+
+          if (booking['partnerId'] != user.uid) {
+            throw StateError(
+              'This booking does not belong to this Homestay Partner.',
+            );
+          }
+
+          final String roomId =
+              booking['roomId']?.toString() ?? '';
+          final int roomCount =
+              (booking['roomCount'] as num?)?.toInt() ?? 0;
+          final Timestamp? checkInStamp =
+              booking['checkIn'] as Timestamp?;
+          final Timestamp? checkOutStamp =
+              booking['checkOut'] as Timestamp?;
+
+          if (roomId.isEmpty ||
+              roomCount < 1 ||
+              checkInStamp == null ||
+              checkOutStamp == null) {
+            throw StateError('Booking data is incomplete.');
+          }
+
+          final List<DateTime> dates = _stayDates(
+            checkInStamp.toDate(),
+            checkOutStamp.toDate(),
+          );
+
+          if (dates.isEmpty) {
+            throw StateError('Stay dates are invalid.');
+          }
+
+          final List<
+                  MapEntry<
+                    DocumentReference<Map<String, dynamic>>,
+                    DocumentSnapshot<Map<String, dynamic>>
+                  >>
+              entries = <
+                  MapEntry<
+                    DocumentReference<Map<String, dynamic>>,
+                    DocumentSnapshot<Map<String, dynamic>>
+                  >>[];
+
+          for (final DateTime date in dates) {
+            final DocumentReference<Map<String, dynamic>> reference =
+                FirebaseFirestore.instance
+                    .collection('homestay_inventory')
+                    .doc('${roomId}_${_dateKey(date)}');
+            final DocumentSnapshot<Map<String, dynamic>> inventory =
+                await transaction.get(reference);
+            entries.add(MapEntry(reference, inventory));
+          }
+
+          for (final entry in entries) {
+            if (!entry.value.exists) {
+              continue;
+            }
+
+            final Map<String, dynamic> data =
+                entry.value.data() ?? <String, dynamic>{};
+            final int total =
+                (data['totalRooms'] as num?)?.toInt() ?? 0;
+            final int blocked =
+                (data['blockedRooms'] as num?)?.toInt() ?? 0;
+            final int booked =
+                (data['bookedRooms'] as num?)?.toInt() ?? 0;
+            final int nextBooked =
+                booked - roomCount < 0
+                    ? 0
+                    : booked - roomCount;
+            final bool open =
+                data['isOpen'] != false;
+            final int nextAvailable = open
+                ? total - blocked - nextBooked
+                : 0;
+
+            final String lastBookingId =
+                data['lastBookingId']?.toString() ?? '';
+
+            transaction.update(
+              entry.key,
+              <String, dynamic>{
+                'bookedRooms': nextBooked,
+                'availableRooms':
+                    nextAvailable < 0 ? 0 : nextAvailable,
+                'lastBookingId':
+                    lastBookingId == doc.id ? '' : lastBookingId,
+                'updatedAt': FieldValue.serverTimestamp(),
+              },
+            );
+          }
+
+          transaction.update(
+            doc.reference,
+            <String, dynamic>{
+              'bookingStatus': 'completed',
+              'completedAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        },
+      );
+
+      // The room inventory is already released inside the transaction.
+      // These best-effort timestamp updates only trigger the existing
+      // customer Homestay/room streams to rebuild immediately.
+      if (refreshRoomId.isNotEmpty) {
+        try {
+          await FirebaseFirestore.instance
+              .collection('homestay_rooms')
+              .doc(refreshRoomId)
+              .update(
+            <String, dynamic>{
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        } catch (_) {
+          // Availability is already released; this refresh pulse is optional.
+        }
+      }
+
+      if (refreshHomestayId.isNotEmpty) {
+        try {
+          await FirebaseFirestore.instance
+              .collection('homestays')
+              .doc(refreshHomestayId)
+              .update(
+            <String, dynamic>{
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        } catch (_) {
+          // Availability is already released; this refresh pulse is optional.
+        }
+      }
+
+      if (!context.mounted) {
+        return;
+      }
+      _message(
+        context,
+        'Booking completed. Room is available again immediately.',
+      );
+    } catch (error) {
+      if (!context.mounted) {
+        return;
+      }
+      _message(
+        context,
+        'Could not complete booking.\n$error',
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final user = FirebaseAuth.instance.currentUser;
+    final User? user = FirebaseAuth.instance.currentUser;
     if (user == null || user.isAnonymous) {
-      return const Scaffold(body: Center(child: Text('Partner login required.')));
+      return const Scaffold(
+        body: Center(
+          child: Text('Partner login required.'),
+        ),
+      );
     }
+
     return Scaffold(
-      appBar: AppBar(title: const Text('Homestay Bookings')),
-      body: StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      appBar: AppBar(
+        title: const Text('Homestay Bookings'),
+      ),
+      body: StreamBuilder<
+          QuerySnapshot<Map<String, dynamic>>>(
         stream: FirebaseFirestore.instance
             .collection('homestay_bookings')
             .where('partnerId', isEqualTo: user.uid)
             .snapshots(),
         builder: (context, s) {
-          if (!s.hasData) {
-            return const Center(child: CircularProgressIndicator());
+          if (s.hasError) {
+            return Center(
+              child: Padding(
+                padding: const EdgeInsets.all(24),
+                child: Text(
+                  'Could not load Homestay bookings.\n${s.error}',
+                  textAlign: TextAlign.center,
+                ),
+              ),
+            );
           }
+
+          if (!s.hasData) {
+            return const Center(
+              child: CircularProgressIndicator(),
+            );
+          }
+
           final docs = s.data!.docs;
-          if (docs.isEmpty) return const Center(child: Text('No bookings.'));
+          if (docs.isEmpty) {
+            return const Center(
+              child: Text('No bookings.'),
+            );
+          }
+
           return ListView.builder(
             padding: const EdgeInsets.all(14),
             itemCount: docs.length,
             itemBuilder: (context, i) {
               final doc = docs[i];
               final d = doc.data();
-              final status = d['bookingStatus']?.toString() ?? 'request_submitted';
-              final payment = d['paymentStatus']?.toString() ?? 'pending';
+              final status =
+                  d['bookingStatus']?.toString() ??
+                      'request_submitted';
+              final payment =
+                  d['paymentStatus']?.toString() ??
+                      'pending';
+
               return Card(
                 child: Padding(
                   padding: const EdgeInsets.all(12),
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
+                    crossAxisAlignment:
+                        CrossAxisAlignment.stretch,
+                    children: <Widget>[
                       Text(
-                        d['guestName']?.toString() ?? 'Guest',
+                        d['guestName']?.toString() ??
+                            'Guest',
                         style: const TextStyle(
                           fontSize: 18,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
-                      Text(d['roomName']?.toString() ?? 'Room'),
-                      Text('Total: Rs. ${(d['totalAmount'] as num?)?.toStringAsFixed(0) ?? '0'}'),
-                      Text('Status: ${status.toUpperCase()}'),
-                      Text('Payment: ${payment.toUpperCase()}'),
+                      Text(
+                        d['roomName']?.toString() ??
+                            'Room',
+                      ),
+                      Text(
+                        'Total: Rs. '
+                        '${(d['totalAmount'] as num?)?.toStringAsFixed(0) ?? '0'}',
+                      ),
+                      Text(
+                        'Status: ${status.toUpperCase()}',
+                      ),
+                      Text(
+                        'Payment: ${payment.toUpperCase()}',
+                      ),
                       const SizedBox(height: 8),
                       Wrap(
                         spacing: 8,
                         runSpacing: 8,
-                        children: [
-                          if (status == 'request_submitted')
+                        children: <Widget>[
+                          if (status ==
+                              'request_submitted')
                             FilledButton(
-                              onPressed: () => _update(context, doc.reference, {
-                                'bookingStatus': 'confirmed',
-                                'confirmationStatus': 'confirmed',
-                                'partnerConfirmed': true,
-                                'confirmedAt': FieldValue.serverTimestamp(),
-                              }),
+                              onPressed: () =>
+                                  _confirmBooking(
+                                context,
+                                doc,
+                              ),
                               child: const Text('Confirm'),
                             ),
-                          if (status == 'request_submitted')
+                          if (status ==
+                              'request_submitted')
                             OutlinedButton(
-                              onPressed: () => _update(context, doc.reference, {
-                                'bookingStatus': 'rejected',
-                                'confirmationStatus': 'rejected',
-                                'rejectedAt': FieldValue.serverTimestamp(),
-                              }),
+                              onPressed: () => _update(
+                                context,
+                                doc.reference,
+                                <String, dynamic>{
+                                  'bookingStatus': 'rejected',
+                                  'confirmationStatus': 'rejected',
+                                  'rejectedAt': FieldValue.serverTimestamp(),
+                                },
+                              ),
                               child: const Text('Reject'),
                             ),
                           if (payment != 'paid' &&
-                              {'confirmed', 'checked_in', 'completed'}.contains(status))
+                              <String>{
+                                'confirmed',
+                                'checked_in',
+                                'completed',
+                              }.contains(status))
                             OutlinedButton(
-                              onPressed: () => _update(context, doc.reference, {
-                                'paymentStatus': 'paid',
-                                'paidAt': FieldValue.serverTimestamp(),
-                              }),
+                              onPressed: () => _update(
+                                context,
+                                doc.reference,
+                                <String, dynamic>{
+                                  'paymentStatus': 'paid',
+                                  'paidAt': FieldValue.serverTimestamp(),
+                                },
+                              ),
                               child: const Text('Mark Paid'),
                             ),
                           if (status == 'confirmed')
                             FilledButton.tonal(
-                              onPressed: () => _update(context, doc.reference, {
-                                'bookingStatus': 'checked_in',
-                                'checkedInAt': FieldValue.serverTimestamp(),
-                              }),
+                              onPressed: () => _update(
+                                context,
+                                doc.reference,
+                                <String, dynamic>{
+                                  'bookingStatus': 'checked_in',
+                                  'checkedInAt': FieldValue.serverTimestamp(),
+                                },
+                              ),
                               child: const Text('Check In'),
                             ),
                           if (status == 'checked_in')
                             FilledButton.tonal(
-                              onPressed: () => _update(context, doc.reference, {
-                                'bookingStatus': 'completed',
-                                'completedAt': FieldValue.serverTimestamp(),
-                              }),
+                              onPressed: () =>
+                                  _completeBooking(
+                                context,
+                                doc,
+                              ),
                               child: const Text('Complete'),
                             ),
                         ],

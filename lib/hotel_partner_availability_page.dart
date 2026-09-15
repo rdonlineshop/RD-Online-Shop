@@ -30,7 +30,7 @@ class _HotelPartnerAvailabilityPageState
 
   DateTime _to =
       DateTime.now()
-          .add(const Duration(days: 1));
+          .add(const Duration(days: 2));
 
   int _blockedRooms = 0;
   bool _isOpen = true;
@@ -81,25 +81,29 @@ class _HotelPartnerAvailabilityPageState
     }
 
     setState(() {
-      _from = picked;
-
-      if (_to.isBefore(_from)) {
-        _to = _from;
-      }
+      _from = _day(picked);
+      _to = _from.add(
+        const Duration(days: 1),
+      );
     });
 
     await _loadSelectedDay();
   }
 
   Future<void> _pickTo() async {
+    final DateTime first =
+        _day(_from).add(
+      const Duration(days: 1),
+    );
+
     final DateTime? picked =
         await showDatePicker(
       context: context,
       initialDate:
-          _to.isBefore(_from)
-              ? _from
-              : _to,
-      firstDate: _from,
+          _day(_to).isBefore(first)
+              ? first
+              : _day(_to),
+      firstDate: first,
       lastDate:
           DateTime(_from.year + 2, 12, 31),
     );
@@ -109,7 +113,7 @@ class _HotelPartnerAvailabilityPageState
     }
 
     setState(() {
-      _to = picked;
+      _to = _day(picked);
     });
   }
 
