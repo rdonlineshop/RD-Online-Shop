@@ -51,6 +51,22 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
 
   String get _driverId => widget.driverId.trim();
 
+  static const List<String> _rideVehicleTypes = <String>[
+    'Bike',
+    'Auto',
+    'Taxi',
+    'Car',
+    'Jeep / SUV',
+    'Van / Hiace',
+    'Microbus',
+    'Mini Bus',
+    'Bus',
+    'Ambulance',
+    'Pickup',
+    'Truck',
+  ];
+
+
   String _agreementTimestampText(dynamic value) {
     if (value is! Timestamp) {
       return 'Not recorded';
@@ -713,6 +729,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       );
       return;
     }
+
 
     setState(() {
       _updatingOnlineStatus = true;
@@ -1908,6 +1925,22 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                               : 'Go Online',
                     ),
                   ),
+                const SizedBox(height: 10),
+                OutlinedButton.icon(
+                  onPressed: suspended || isOnline
+                      ? null
+                      : () => _editVehicleProfile(
+                            currentVehicleType: vehicleType,
+                            currentVehicleNumber: vehicleNumber,
+                            isOnline: isOnline,
+                          ),
+                  icon: const Icon(Icons.edit_rounded),
+                  label: Text(
+                    isOnline
+                        ? 'Go Offline to Edit Vehicle'
+                        : 'Edit Vehicle',
+                  ),
+                ),
                 const SizedBox(height: 12),
                 Container(
                   padding: const EdgeInsets.all(12),
@@ -2516,6 +2549,9 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       return;
     }
 
+
+    if (!mounted) return;
+
     final bool confirmed = await showDialog<bool>(
           context: context,
           builder: (BuildContext dialogContext) {
@@ -2569,6 +2605,154 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       ),
       (Route<dynamic> route) => false,
     );
+  }
+
+  Future<void> _editVehicleProfile({
+    required String currentVehicleType,
+    required String currentVehicleNumber,
+    required bool isOnline,
+  }) async {
+    if (isOnline) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Go Offline before editing your vehicle type or number.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    if (_activeRideRequestId != null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Complete the active ride before editing vehicle.'),
+        ),
+      );
+      return;
+    }
+
+
+    if (!mounted) return;
+
+    String selectedType = _rideVehicleTypes.contains(
+      currentVehicleType,
+    )
+        ? currentVehicleType
+        : _rideVehicleTypes.first;
+    final TextEditingController numberController = TextEditingController(
+      text: currentVehicleNumber,
+    );
+
+    final Map<String, String>? result = await showDialog<Map<String, String>>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext dialogContext,
+            StateSetter setDialogState,
+          ) {
+            return AlertDialog(
+              title: const Text('Edit Vehicle'),
+              content: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 460),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    DropdownButtonFormField<String>(
+                      initialValue: selectedType,
+                      decoration: const InputDecoration(
+                        labelText: 'Vehicle Type',
+                        border: OutlineInputBorder(),
+                      ),
+                      items: _rideVehicleTypes
+                          .map(
+                            (String type) => DropdownMenuItem<String>(
+                              value: type,
+                              child: Text(type),
+                            ),
+                          )
+                          .toList(),
+                      onChanged: (String? value) {
+                        if (value != null) {
+                          setDialogState(() => selectedType = value);
+                        }
+                      },
+                    ),
+                    const SizedBox(height: 12),
+                    TextField(
+                      controller: numberController,
+                      textCapitalization: TextCapitalization.characters,
+                      decoration: const InputDecoration(
+                        labelText: 'Vehicle Number',
+                        border: OutlineInputBorder(),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  onPressed: () {
+                    final String number = numberController.text.trim();
+                    if (number.length < 3) {
+                      ScaffoldMessenger.of(dialogContext).showSnackBar(
+                        const SnackBar(
+                          content: Text('Enter a valid vehicle number.'),
+                        ),
+                      );
+                      return;
+                    }
+                    Navigator.pop(
+                      dialogContext,
+                      <String, String>{
+                        'vehicleType': selectedType,
+                        'vehicleNumber': number,
+                      },
+                    );
+                  },
+                  icon: const Icon(Icons.save_rounded),
+                  label: const Text('Save Vehicle'),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    numberController.dispose();
+
+    if (result == null || !mounted) {
+      return;
+    }
+
+    try {
+      await _driverRef.update(
+        <String, dynamic>{
+          'vehicleType': result['vehicleType'],
+          'vehicleNumber': result['vehicleNumber'],
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Vehicle updated: ${result['vehicleType']} • ${result['vehicleNumber']}',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not update vehicle: $error')),
+      );
+    }
   }
 
   @override

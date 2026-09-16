@@ -5,8 +5,33 @@ import 'package:flutter/material.dart';
 import 'ride_driver_agreement_page.dart';
 import 'widgets/ride_driver_rating_summary.dart';
 
-class AdminRideDriverManagementPage extends StatelessWidget {
+class AdminRideDriverManagementPage extends StatefulWidget {
   const AdminRideDriverManagementPage({super.key});
+
+  @override
+  State<AdminRideDriverManagementPage> createState() =>
+      _AdminRideDriverManagementPageState();
+}
+
+class _AdminRideDriverManagementPageState
+    extends State<AdminRideDriverManagementPage> {
+  static const List<String> _driverCategories = <String>[
+    'All',
+    'Bike',
+    'Auto',
+    'Taxi',
+    'Car',
+    'Jeep / SUV',
+    'Van / Hiace',
+    'Microbus',
+    'Mini Bus',
+    'Bus',
+    'Ambulance',
+    'Pickup',
+    'Truck',
+  ];
+
+  String _selectedCategory = 'All';
 
   CollectionReference<Map<String, dynamic>> get _rideDrivers =>
       FirebaseFirestore.instance.collection('ride_drivers');
@@ -541,6 +566,99 @@ class AdminRideDriverManagementPage extends StatelessWidget {
     );
   }
 
+  String _normaliseVehicleType(String value) {
+    return value.trim().toLowerCase().replaceAll(RegExp(r'\s+'), ' ');
+  }
+
+  bool _matchesCategory(
+    Map<String, dynamic> driver,
+    String category,
+  ) {
+    if (category == 'All') {
+      return true;
+    }
+
+    final String driverVehicle =
+        _normaliseVehicleType(driver['vehicleType']?.toString() ?? '');
+    final String wantedVehicle = _normaliseVehicleType(category);
+    return driverVehicle == wantedVehicle;
+  }
+
+  int _categoryCount(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> drivers,
+    String category,
+  ) {
+    return drivers
+        .where(
+          (QueryDocumentSnapshot<Map<String, dynamic>> doc) =>
+              _matchesCategory(doc.data(), category),
+        )
+        .length;
+  }
+
+  Widget _categoryFilterBar(
+    List<QueryDocumentSnapshot<Map<String, dynamic>>> drivers,
+  ) {
+    return Material(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(12, 12, 12, 8),
+        child: SingleChildScrollView(
+          scrollDirection: Axis.horizontal,
+          child: Row(
+            children: _driverCategories.map((String category) {
+              final bool selected = _selectedCategory == category;
+              final int count = _categoryCount(drivers, category);
+
+              return Padding(
+                padding: const EdgeInsets.only(right: 8),
+                child: ChoiceChip(
+                  selected: selected,
+                  onSelected: (_) {
+                    if (_selectedCategory == category) {
+                      return;
+                    }
+                    setState(() {
+                      _selectedCategory = category;
+                    });
+                  },
+                  avatar: Icon(
+                    category == 'Bike'
+                        ? Icons.two_wheeler_rounded
+                            : category == 'Auto'
+                                ? Icons.electric_rickshaw_rounded
+                                : category == 'Taxi'
+                                    ? Icons.local_taxi_rounded
+                                    : category == 'Ambulance'
+                                        ? Icons.emergency_rounded
+                                        : category == 'Pickup' ||
+                                                category == 'Truck'
+                                            ? Icons.local_shipping_rounded
+                                            : category == 'Bus' ||
+                                                    category == 'Microbus' ||
+                                                    category == 'Mini Bus'
+                                                ? Icons.directions_bus_rounded
+                                                : category == 'All'
+                                                    ? Icons.apps_rounded
+                                                    : Icons
+                                                        .directions_car_rounded,
+                    size: 18,
+                  ),
+                  label: Text(
+                    '$category ($count)',
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -587,45 +705,75 @@ class AdminRideDriverManagementPage extends StatelessWidget {
               },
             );
 
-            if (drivers.isEmpty) {
-              return const _MessageView(
-                icon: Icons.drive_eta_rounded,
-                title: 'No Ride Drivers Yet',
-                message: 'New Ride Driver registrations will appear here.',
-              );
-            }
+            final List<QueryDocumentSnapshot<Map<String, dynamic>>>
+                filteredDrivers = drivers
+                    .where(
+                      (QueryDocumentSnapshot<Map<String, dynamic>> doc) =>
+                          _matchesCategory(doc.data(), _selectedCategory),
+                    )
+                    .toList();
 
-            return Center(
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 900),
-                child: ListView.separated(
-                  padding: const EdgeInsets.all(16),
-                  itemCount: drivers.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 12),
-                  itemBuilder: (BuildContext context, int index) {
-                    final QueryDocumentSnapshot<Map<String, dynamic>> doc =
-                        drivers[index];
-                    return _DriverCard(
-                      doc: doc,
-                      onVerifyLicence: () =>
-                          _verifyLicence(context, doc.reference),
-                      onApprove: () => _approveDriver(context, doc),
-                      onSuspend: () => _suspendDriver(context, doc),
-                      onApproveReactivation: () =>
-                          _approveReactivation(context, doc),
-                      onRejectReactivation: () =>
-                          _rejectReactivation(context, doc),
-                      onAdminOverride: () =>
-                          _unsuspendWithoutPayment(context, doc),
-                      onReject: () => _rejectDriver(context, doc),
-                      onShowFront: (String url) =>
-                          _showImage(context, 'Driving Licence Front', url),
-                      onShowBack: (String url) =>
-                          _showImage(context, 'Driving Licence Back', url),
-                    );
-                  },
+            return Column(
+              children: <Widget>[
+                _categoryFilterBar(drivers),
+                Expanded(
+                  child: filteredDrivers.isEmpty
+                      ? _MessageView(
+                          icon: Icons.drive_eta_rounded,
+                          title: 'No $_selectedCategory Drivers',
+                          message: _selectedCategory == 'All'
+                              ? 'New Ride Driver registrations will appear here.'
+                              : 'No Ride Driver is registered in this category yet.',
+                        )
+                      : Center(
+                          child: ConstrainedBox(
+                            constraints: const BoxConstraints(maxWidth: 900),
+                            child: ListView.separated(
+                              padding: const EdgeInsets.fromLTRB(16, 8, 16, 16),
+                              itemCount: filteredDrivers.length,
+                              separatorBuilder: (_, __) =>
+                                  const SizedBox(height: 12),
+                              itemBuilder: (
+                                BuildContext context,
+                                int index,
+                              ) {
+                                final QueryDocumentSnapshot<
+                                    Map<String, dynamic>> doc =
+                                    filteredDrivers[index];
+
+                                return _DriverCard(
+                                  doc: doc,
+                                  onVerifyLicence: () =>
+                                      _verifyLicence(context, doc.reference),
+                                  onApprove: () =>
+                                      _approveDriver(context, doc),
+                                  onSuspend: () =>
+                                      _suspendDriver(context, doc),
+                                  onApproveReactivation: () =>
+                                      _approveReactivation(context, doc),
+                                  onRejectReactivation: () =>
+                                      _rejectReactivation(context, doc),
+                                  onAdminOverride: () =>
+                                      _unsuspendWithoutPayment(context, doc),
+                                  onReject: () =>
+                                      _rejectDriver(context, doc),
+                                  onShowFront: (String url) => _showImage(
+                                    context,
+                                    'Driving Licence Front',
+                                    url,
+                                  ),
+                                  onShowBack: (String url) => _showImage(
+                                    context,
+                                    'Driving Licence Back',
+                                    url,
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
                 ),
-              ),
+              ],
             );
           },
         ),
