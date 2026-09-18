@@ -11,6 +11,8 @@ import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'nearby_drivers_page.dart';
+import 'ride_driver_auth_page.dart';
+import 'ride_my_rides_page.dart';
 import 'ride_location_picker_page.dart';
 import 'services/ride_incoming_share_service.dart';
 import 'services/ride_location_input_service.dart';
@@ -1420,6 +1422,36 @@ class _RideBookingPageState extends State<RideBookingPage> {
           ),
         ),
         centerTitle: true,
+        actions: <Widget>[
+          IconButton(
+            tooltip: '${widget.vehicleType} My Rides',
+            onPressed: () {
+              Navigator.push<void>(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => RideMyRidesPage(
+                    vehicleType: widget.vehicleType,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.route_rounded),
+          ),
+          IconButton(
+            tooltip: '${widget.vehicleType} Ride Driver',
+            onPressed: () {
+              Navigator.push<void>(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => RideDriverAuthPage(
+                    initialVehicleType: widget.vehicleType,
+                  ),
+                ),
+              );
+            },
+            icon: const Icon(Icons.drive_eta_rounded),
+          ),
+        ],
       ),
       body: SafeArea(
         child: Center(

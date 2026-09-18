@@ -7,7 +7,14 @@ import 'ride_customer_tracking_page.dart';
 import 'services/ride_request_service.dart';
 
 class RideMyRidesPage extends StatelessWidget {
-  const RideMyRidesPage({super.key});
+  const RideMyRidesPage({
+    this.vehicleType,
+    super.key,
+  });
+
+  final String? vehicleType;
+
+  String get _vehicleFilter => vehicleType?.trim() ?? '';
 
   static const Color _rdBlue = Color(0xFF1565C0);
 
@@ -741,9 +748,11 @@ class RideMyRidesPage extends StatelessWidget {
     return Scaffold(
       backgroundColor: const Color(0xFFF7F8FA),
       appBar: AppBar(
-        title: const Text(
-          'My Rides',
-          style: TextStyle(
+        title: Text(
+          _vehicleFilter.isEmpty
+              ? 'My Rides'
+              : '$_vehicleFilter My Rides',
+          style: const TextStyle(
             fontWeight: FontWeight.w900,
           ),
         ),
@@ -787,7 +796,17 @@ class RideMyRidesPage extends StatelessWidget {
                   final List<QueryDocumentSnapshot<Map<String, dynamic>>> rides =
                       <QueryDocumentSnapshot<Map<String, dynamic>>>[
                     ...?snapshot.data?.docs,
-                  ];
+                  ].where(
+                    (QueryDocumentSnapshot<Map<String, dynamic>> ride) {
+                      if (_vehicleFilter.isEmpty) {
+                        return true;
+                      }
+
+                      final String rideVehicleType =
+                          ride.data()['vehicleType']?.toString().trim() ?? '';
+                      return rideVehicleType == _vehicleFilter;
+                    },
+                  ).toList();
 
                   rides.sort((
                     QueryDocumentSnapshot<Map<String, dynamic>> first,
@@ -808,9 +827,12 @@ class RideMyRidesPage extends StatelessWidget {
                   if (rides.isEmpty) {
                     return _message(
                       icon: Icons.route_outlined,
-                      title: 'No rides yet',
-                      message:
-                          'Your RD Ride bookings will appear here automatically.',
+                      title: _vehicleFilter.isEmpty
+                          ? 'No rides yet'
+                          : 'No $_vehicleFilter rides yet',
+                      message: _vehicleFilter.isEmpty
+                          ? 'Your RD Ride bookings will appear here automatically.'
+                          : 'Your $_vehicleFilter bookings will appear here automatically.',
                     );
                   }
 

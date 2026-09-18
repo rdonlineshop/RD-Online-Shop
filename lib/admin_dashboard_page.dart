@@ -904,6 +904,7 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             ),
           ),
         ),
+
         _dashboardCard(
           icon:
               Icons.account_balance_wallet_rounded,

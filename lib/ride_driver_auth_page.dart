@@ -10,7 +10,12 @@ import 'ride_driver_agreement_page.dart';
 import 'ride_driver_requests_page.dart';
 
 class RideDriverAuthPage extends StatefulWidget {
-  const RideDriverAuthPage({super.key});
+  const RideDriverAuthPage({
+    this.initialVehicleType,
+    super.key,
+  });
+
+  final String? initialVehicleType;
 
   @override
   State<RideDriverAuthPage> createState() =>
@@ -72,6 +77,12 @@ class _RideDriverAuthPageState
   @override
   void initState() {
     super.initState();
+
+    final String initialType =
+        widget.initialVehicleType?.trim() ?? '';
+    if (_vehicleTypes.contains(initialType)) {
+      _vehicleType = initialType;
+    }
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _restoreSavedDriverSession();
@@ -156,6 +167,54 @@ class _RideDriverAuthPageState
         data['approvalStatus']?.toString().trim().toLowerCase() ?? '';
     final bool isSuspended =
         isApproved && !isActive && approvalStatus == 'suspended';
+
+    final String expectedVehicleType =
+        widget.initialVehicleType?.trim() ?? '';
+    final String registeredVehicleType =
+        data['vehicleType']?.toString().trim() ?? '';
+
+    if (expectedVehicleType.isNotEmpty &&
+        registeredVehicleType.isNotEmpty &&
+        registeredVehicleType != expectedVehicleType) {
+      if (!mounted) {
+        return false;
+      }
+
+      if (showStatusDialog) {
+        await showDialog<void>(
+          context: context,
+          builder: (BuildContext dialogContext) {
+            return AlertDialog(
+              icon: const Icon(
+                Icons.directions_car_rounded,
+                size: 42,
+              ),
+              title: const Text('Different Vehicle Category'),
+              content: Text(
+                'This Ride Driver account is registered as '
+                '$registeredVehicleType. Open the $registeredVehicleType '
+                'category to manage this driver account.',
+              ),
+              actions: <Widget>[
+                FilledButton(
+                  onPressed: () => Navigator.pop(dialogContext),
+                  child: const Text('OK'),
+                ),
+              ],
+            );
+          },
+        );
+      }
+
+      if (!mounted) {
+        return false;
+      }
+
+      setState(() {
+        _rememberedDriverData = data;
+      });
+      return false;
+    }
 
     // A suspended, already-approved driver may still enter the driver
     // dashboard to see the amount due and submit a reactivation request.
@@ -747,9 +806,11 @@ class _RideDriverAuthPageState
       return Scaffold(
         backgroundColor: const Color(0xFFF7F8FA),
         appBar: AppBar(
-          title: const Text(
-            'Ride Driver',
-            style: TextStyle(
+          title: Text(
+            widget.initialVehicleType?.trim().isNotEmpty == true
+                ? '${widget.initialVehicleType!.trim()} Driver'
+                : 'Ride Driver',
+            style: const TextStyle(
               fontWeight: FontWeight.w900,
             ),
           ),
@@ -796,12 +857,23 @@ class _RideDriverAuthPageState
               FirebaseAuth.instance.currentUser?.email ??
               '';
 
+      final String rememberedVehicleType =
+          remembered['vehicleType']?.toString().trim() ?? '';
+      final String expectedVehicleType =
+          widget.initialVehicleType?.trim() ?? '';
+      final bool categoryMismatch =
+          expectedVehicleType.isNotEmpty &&
+              rememberedVehicleType.isNotEmpty &&
+              rememberedVehicleType != expectedVehicleType;
+
       return Scaffold(
         backgroundColor: const Color(0xFFF7F8FA),
         appBar: AppBar(
-          title: const Text(
-            'Ride Driver Account',
-            style: TextStyle(
+          title: Text(
+            categoryMismatch
+                ? '$expectedVehicleType Driver'
+                : 'Ride Driver Account',
+            style: const TextStyle(
               fontWeight: FontWeight.w900,
             ),
           ),
@@ -823,20 +895,25 @@ class _RideDriverAuthPageState
                           CrossAxisAlignment.stretch,
                       children: <Widget>[
                         Icon(
-                          rejected
-                              ? Icons.cancel_rounded
-                              : Icons
-                                  .pending_actions_rounded,
+                          categoryMismatch
+                              ? Icons.directions_car_rounded
+                              : (rejected
+                                  ? Icons.cancel_rounded
+                                  : Icons.pending_actions_rounded),
                           size: 58,
-                          color: rejected
-                              ? Colors.red
-                              : Colors.orange,
+                          color: categoryMismatch
+                              ? Colors.blueGrey
+                              : (rejected
+                                  ? Colors.red
+                                  : Colors.orange),
                         ),
                         const SizedBox(height: 14),
                         Text(
-                          rejected
-                              ? 'Driver Account Rejected'
-                              : 'Approval Pending',
+                          categoryMismatch
+                              ? 'Different Vehicle Category'
+                              : (rejected
+                                  ? 'Driver Account Rejected'
+                                  : 'Approval Pending'),
                           textAlign: TextAlign.center,
                           style: const TextStyle(
                             fontSize: 22,
@@ -864,14 +941,20 @@ class _RideDriverAuthPageState
                         ],
                         const SizedBox(height: 16),
                         Text(
-                          rejected
-                              ? 'This account remains saved on this device. '
-                                  'Contact Admin if you need the account '
-                                  'reviewed again.'
-                              : 'Your Ride Driver account remains signed in. '
-                                  'You do not need to enter email or password '
-                                  'again while waiting for approval and '
-                                  'licence verification.',
+                          categoryMismatch
+                              ? 'This saved Ride Driver account is registered '
+                                  'as $rememberedVehicleType. Open the '
+                                  '$rememberedVehicleType category to manage '
+                                  'this driver, or logout and use another '
+                                  '$expectedVehicleType driver account.'
+                              : (rejected
+                                  ? 'This account remains saved on this device. '
+                                      'Contact Admin if you need the account '
+                                      'reviewed again.'
+                                  : 'Your Ride Driver account remains signed in. '
+                                      'You do not need to enter email or password '
+                                      'again while waiting for approval and '
+                                      'licence verification.'),
                           textAlign: TextAlign.center,
                           style: TextStyle(
                             color: Colors.grey.shade800,
@@ -879,18 +962,20 @@ class _RideDriverAuthPageState
                           ),
                         ),
                         const SizedBox(height: 18),
-                        FilledButton.icon(
-                          onPressed: _isLoading
-                              ? null
-                              : _refreshRememberedDriver,
-                          icon: const Icon(
-                            Icons.refresh_rounded,
+                        if (!categoryMismatch) ...<Widget>[
+                          FilledButton.icon(
+                            onPressed: _isLoading
+                                ? null
+                                : _refreshRememberedDriver,
+                            icon: const Icon(
+                              Icons.refresh_rounded,
+                            ),
+                            label: const Text(
+                              'Check Account Status',
+                            ),
                           ),
-                          label: const Text(
-                            'Check Account Status',
-                          ),
-                        ),
-                        const SizedBox(height: 10),
+                          const SizedBox(height: 10),
+                        ],
                         OutlinedButton.icon(
                           onPressed: _isLoading
                               ? null
@@ -917,9 +1002,12 @@ class _RideDriverAuthPageState
       backgroundColor: const Color(0xFFF7F8FA),
       appBar: AppBar(
         title: Text(
-          _isRegistering
-              ? 'Ride Driver Register'
-              : 'Ride Driver Login',
+          widget.initialVehicleType?.trim().isNotEmpty == true
+              ? '${widget.initialVehicleType!.trim()} Driver '
+                  '${_isRegistering ? 'Register' : 'Login'}'
+              : (_isRegistering
+                  ? 'Ride Driver Register'
+                  : 'Ride Driver Login'),
           style: const TextStyle(
             fontWeight: FontWeight.w900,
           ),
@@ -1031,15 +1119,20 @@ class _RideDriverAuthPageState
                                   ),
                                 )
                                 .toList(),
-                            onChanged: (String? value) {
-                              if (value == null) {
-                                return;
-                              }
+                            onChanged: widget.initialVehicleType
+                                        ?.trim()
+                                        .isNotEmpty ==
+                                    true
+                                ? null
+                                : (String? value) {
+                                    if (value == null) {
+                                      return;
+                                    }
 
-                              setState(() {
-                                _vehicleType = value;
-                              });
-                            },
+                                    setState(() {
+                                      _vehicleType = value;
+                                    });
+                                  },
                           ),
                           const SizedBox(height: 12),
                           TextFormField(
