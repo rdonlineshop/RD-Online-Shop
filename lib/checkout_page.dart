@@ -1592,22 +1592,83 @@ class _CheckoutPageState
     String title,
     IconData icon,
   ) {
+    final bool selected =
+        selectedPayment == title;
+
     return Card(
       margin:
           const EdgeInsets.only(
         top: 8,
       ),
+      color:
+          selected
+              ? Colors.green.shade50
+              : null,
+      shape:
+          RoundedRectangleBorder(
+        borderRadius:
+            BorderRadius.circular(
+          12,
+        ),
+        side:
+            BorderSide(
+          color:
+              selected
+                  ? Colors.green
+                  : Colors.grey.shade300,
+          width:
+              selected ? 1.5 : 1,
+        ),
+      ),
       child:
-          RadioListTile<String>(
-        value:
-            title,
+          ListTile(
+        onTap:
+            () {
+          setState(() {
+            selectedPayment =
+                title;
+
+            if (title ==
+                'Cash on Delivery') {
+              selectedPaymentRoute =
+                  'RD Online Shop';
+            }
+          });
+        },
+        leading:
+            Icon(
+          selected
+              ? Icons.radio_button_checked
+              : Icons.radio_button_off,
+          color:
+              selected
+                  ? Colors.green
+                  : Colors.grey,
+        ),
         title:
             Text(
           title,
+          style:
+              TextStyle(
+            fontWeight:
+                selected
+                    ? FontWeight.bold
+                    : FontWeight.w500,
+            color:
+                selected
+                    ? Colors.green.shade800
+                    : null,
+          ),
         ),
-        secondary:
+        trailing:
             Icon(
-          icon,
+          selected
+              ? Icons.check_circle
+              : icon,
+          color:
+              selected
+                  ? Colors.green
+                  : null,
         ),
       ),
     );
@@ -2143,65 +2204,100 @@ class _CheckoutPageState
               ),
             ),
 
-            RadioGroup<String>(
-              groupValue:
-                  selectedPayment,
-              onChanged:
-                  (
-                String? value,
-              ) {
-                if (value !=
-                    null) {
-                  setState(() {
-                    selectedPayment =
-                        value;
-
-                    if (value == 'Cash on Delivery') {
-                      selectedPaymentRoute =
-                          'RD Online Shop';
-                    }
-                  });
-                }
-              },
-              child:
-                  Column(
-                children:
-                    <Widget>[
-                  _paymentOption(
-                    'Cash on Delivery',
-                    Icons.money,
-                  ),
-                  _paymentOption(
-                    'eSewa',
-                    Icons.account_balance_wallet,
-                  ),
-                  _paymentOption(
-                    'Khalti',
-                    Icons.wallet,
-                  ),
-                  _paymentOption(
-                    'Bank / eBanking',
-                    Icons.account_balance,
-                  ),
-                  _paymentOption(
-                    'Mobile Banking',
-                    Icons.phone_android,
-                  ),
-                  _paymentOption(
-                    'Debit / Credit Card',
-                    Icons.credit_card,
-                  ),
-                  _paymentOption(
-                    'connectIPS',
-                    Icons.payment,
-                  ),
-                  _paymentOption(
-                    'International Payment',
-                    Icons.public,
-                  ),
-                ],
-              ),
+            Column(
+              children:
+                  <Widget>[
+                _paymentOption(
+                  'Cash on Delivery',
+                  Icons.money,
+                ),
+                _paymentOption(
+                  'eSewa',
+                  Icons.account_balance_wallet,
+                ),
+                _paymentOption(
+                  'Khalti',
+                  Icons.wallet,
+                ),
+                _paymentOption(
+                  'Bank / eBanking',
+                  Icons.account_balance,
+                ),
+                _paymentOption(
+                  'Mobile Banking',
+                  Icons.phone_android,
+                ),
+                _paymentOption(
+                  'Debit / Credit Card',
+                  Icons.credit_card,
+                ),
+                _paymentOption(
+                  'connectIPS',
+                  Icons.payment,
+                ),
+                _paymentOption(
+                  'International Payment',
+                  Icons.public,
+                ),
+              ],
             ),
+
+            if (selectedPayment ==
+                'Cash on Delivery') ...<Widget>[
+              const SizedBox(
+                height: 10,
+              ),
+              Container(
+                width:
+                    double.infinity,
+                padding:
+                    const EdgeInsets.all(
+                  12,
+                ),
+                decoration:
+                    BoxDecoration(
+                  color:
+                      Colors.green.shade50,
+                  borderRadius:
+                      BorderRadius.circular(
+                    10,
+                  ),
+                  border:
+                      Border.all(
+                    color:
+                        Colors.green.shade200,
+                  ),
+                ),
+                child:
+                    const Row(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children:
+                      <Widget>[
+                    Icon(
+                      Icons.check_circle,
+                      color:
+                          Colors.green,
+                    ),
+                    SizedBox(
+                      width:
+                          8,
+                    ),
+                    Expanded(
+                      child:
+                          Text(
+                        'Cash on Delivery selected. Pay when your order arrives. No online payment is required now.',
+                        style:
+                            TextStyle(
+                          fontWeight:
+                              FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
 
             const SizedBox(
               height:

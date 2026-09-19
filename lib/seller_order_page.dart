@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:mobile_scanner/mobile_scanner.dart' hide GeoPoint;
 import 'package:url_launcher/url_launcher.dart';
 
 import 'order_data.dart';
@@ -699,6 +701,18 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
         newStatus == 'Returned') {
       _showMessage(
         'Use the customer Cancel / Return request review section for this action.',
+      );
+      return;
+    }
+
+    final String assignedDriverId =
+        order['driverId']?.toString().trim() ?? '';
+
+    if (newStatus == 'Shipped' &&
+        assignedDriverId.isNotEmpty &&
+        order['pickupConfirmed'] != true) {
+      _showMessage(
+        'Confirm the parcel handover with the delivery person QR or pickup code first.',
       );
       return;
     }
@@ -1688,6 +1702,242 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
   }
 
   // =========================================================
+  // SELLER <-> DELIVERY PERSON PICKUP CONFIRMATION
+  // =========================================================
+
+  Future<void> _confirmPickupProof({
+    required Map<String, dynamic> order,
+    required String method,
+    required String proof,
+  }) async {
+    final String orderId =
+        order['id']?.toString().trim() ?? '';
+    final String driverId =
+        order['driverId']?.toString().trim() ?? '';
+    final String sellerId =
+        FirebaseAuth.instance.currentUser?.uid ?? '';
+    final String cleanProof = proof.trim();
+
+    if (orderId.isEmpty) {
+      _showMessage('Order ID is missing.');
+      return;
+    }
+
+    if (driverId.isEmpty) {
+      _showMessage(
+        'Please assign a delivery person first.',
+      );
+      return;
+    }
+
+    if (sellerId.isEmpty) {
+      _showMessage('Seller login is required.');
+      return;
+    }
+
+    if (order['pickupConfirmed'] == true) {
+      _showMessage('Pickup is already confirmed.');
+      return;
+    }
+
+    if (cleanProof.isEmpty) {
+      _showMessage(
+        method == 'qr'
+            ? 'Pickup QR is not valid.'
+            : 'Enter the 6-digit pickup code.',
+      );
+      return;
+    }
+
+    if (method == 'code' &&
+        !RegExp(r'^\d{6}$').hasMatch(cleanProof)) {
+      _showMessage('Enter the 6-digit pickup code.');
+      return;
+    }
+
+    try {
+      final DocumentReference<Map<String, dynamic>> orderRef =
+          FirebaseFirestore.instance
+              .collection('orders')
+              .doc(orderId);
+
+      final DocumentReference<Map<String, dynamic>>
+          confirmationRef =
+          orderRef
+              .collection('pickup_confirmations')
+              .doc('current');
+
+      final String now =
+          DateTime.now().toIso8601String();
+
+      // Firestore Rules validate this proof against the private pickup
+      // verification owned by the assigned delivery person.
+      await confirmationRef.set(
+        <String, dynamic>{
+          'orderId': orderId,
+          'sellerId': sellerId,
+          'driverId': driverId,
+          'method': method,
+          'proof': cleanProof,
+          'confirmedAt': now,
+        },
+        SetOptions(merge: false),
+      );
+
+      await updateOrderTrackingFields(
+        orderId,
+        <String, dynamic>{
+          'status': 'Shipped',
+          'trackingStatus': 'Picked Up',
+          'deliveryStartedAt': now,
+          'pickupConfirmed': true,
+          'pickupConfirmedAt': now,
+          'pickupConfirmedBySellerId': sellerId,
+          'pickupConfirmationDriverId': driverId,
+          'pickupConfirmationMethod': method,
+        },
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      await _loadOrders();
+
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage(
+        'Pickup confirmed. Parcel handed to $driverId.',
+      );
+    } on FirebaseException catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      if (error.code == 'permission-denied') {
+        _showMessage(
+          method == 'qr'
+              ? 'Pickup QR is invalid or belongs to another order.'
+              : 'Pickup code is incorrect.',
+        );
+        return;
+      }
+
+      _showMessage(
+        'Could not confirm pickup: ${error.message ?? error.code}',
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      _showMessage(
+        'Could not confirm pickup: '
+        '${error.toString().replaceFirst('Exception: ', '')}',
+      );
+    }
+  }
+
+  Future<void> _enterPickupCode(
+    Map<String, dynamic> order,
+  ) async {
+    final TextEditingController controller =
+        TextEditingController();
+
+    final String? value = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text(
+            'Confirm Parcel Pickup',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          content: TextField(
+            controller: controller,
+            keyboardType: TextInputType.number,
+            maxLength: 6,
+            autofocus: true,
+            decoration: const InputDecoration(
+              labelText: '6-digit pickup code',
+              hintText: '000000',
+              border: OutlineInputBorder(),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+              },
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                  controller.text.trim(),
+                );
+              },
+              child: const Text('Confirm'),
+            ),
+          ],
+        );
+      },
+    );
+
+    controller.dispose();
+
+    if (value == null || !mounted) {
+      return;
+    }
+
+    await _confirmPickupProof(
+      order: order,
+      method: 'code',
+      proof: value,
+    );
+  }
+
+  Future<void> _scanPickupQr(
+    Map<String, dynamic> order,
+  ) async {
+    final bool unsupportedDesktop =
+        !kIsWeb &&
+        (defaultTargetPlatform == TargetPlatform.windows ||
+            defaultTargetPlatform == TargetPlatform.linux);
+
+    if (unsupportedDesktop) {
+      _showMessage(
+        'QR scanning is not available on this desktop. Enter the 6-digit pickup code instead.',
+      );
+      return;
+    }
+
+    final String? value = await Navigator.push<String>(
+      context,
+      MaterialPageRoute<String>(
+        builder: (_) =>
+            const _SellerPickupQrScannerPage(),
+      ),
+    );
+
+    if (value == null ||
+        value.trim().isEmpty ||
+        !mounted) {
+      return;
+    }
+
+    await _confirmPickupProof(
+      order: order,
+      method: 'qr',
+      proof: value,
+    );
+  }
+
+  // =========================================================
   // DELIVERY PERSON CARD
   // =========================================================
 
@@ -1743,6 +1993,21 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     final bool assigned =
         driverId.isNotEmpty ||
             driverName.isNotEmpty;
+
+    final bool pickupConfirmed =
+        order['pickupConfirmed'] == true;
+
+    final String pickupConfirmedAt =
+        order['pickupConfirmedAt']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String pickupConfirmationMethod =
+        order['pickupConfirmationMethod']
+                ?.toString()
+                .trim() ??
+            '';
 
     final bool hasLiveLocation =
         driverLat != null &&
@@ -1922,6 +2187,105 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                     10,
               ),
 
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: pickupConfirmed
+                      ? Colors.green.withValues(alpha: 0.08)
+                      : Colors.orange.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: pickupConfirmed
+                        ? Colors.green.withValues(alpha: 0.35)
+                        : Colors.orange.withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Icon(
+                          pickupConfirmed
+                              ? Icons.verified_rounded
+                              : Icons.inventory_2_outlined,
+                          color: pickupConfirmed
+                              ? Colors.green
+                              : Colors.orange.shade800,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            pickupConfirmed
+                                ? 'Parcel Handover Confirmed'
+                                : 'Confirm Handover to Delivery Person',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      pickupConfirmed
+                          ? 'The parcel was confirmed as handed to the assigned delivery person.'
+                          : 'Ask the delivery person to show their Pickup QR or 6-digit Pickup Code.',
+                    ),
+                    if (pickupConfirmed &&
+                        pickupConfirmedAt.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Confirmed: $pickupConfirmedAt'
+                        '${pickupConfirmationMethod.isEmpty ? '' : ' • ${pickupConfirmationMethod.toUpperCase()}'}',
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                    if (!pickupConfirmed) ...<Widget>[
+                      const SizedBox(height: 10),
+                      SizedBox(
+                        width: double.infinity,
+                        child: FilledButton.icon(
+                          onPressed: () {
+                            _scanPickupQr(order);
+                          },
+                          icon: const Icon(
+                            Icons.qr_code_scanner_rounded,
+                          ),
+                          label: const Text(
+                            'Scan Delivery Pickup QR',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      SizedBox(
+                        width: double.infinity,
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            _enterPickupCode(order);
+                          },
+                          icon: const Icon(
+                            Icons.password_rounded,
+                          ),
+                          label: const Text(
+                            'Enter 6-digit Pickup Code',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+
+              const SizedBox(
+                height:
+                    10,
+              ),
+
               SizedBox(
                 width:
                     double.infinity,
@@ -2077,11 +2441,13 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                   OutlinedButton
                       .icon(
                 onPressed:
-                    () {
-                  _assignDeliveryPerson(
-                    order,
-                  );
-                },
+                    pickupConfirmed
+                        ? null
+                        : () {
+                            _assignDeliveryPerson(
+                              order,
+                            );
+                          },
                 icon:
                     Icon(
                   assigned
@@ -2091,9 +2457,11 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                 ),
                 label:
                     Text(
-                  assigned
-                      ? 'Change Delivery Person'
-                      : 'Assign Delivery Person',
+                  pickupConfirmed
+                      ? 'Delivery Person Locked After Pickup'
+                      : assigned
+                          ? 'Change Delivery Person'
+                          : 'Assign Delivery Person',
                 ),
               ),
             ),
@@ -2248,26 +2616,6 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     final String now =
         DateTime.now().toIso8601String();
 
-    final double amount =
-        _toDouble(order['amount']) ?? 0;
-
-    final Map<String, dynamic> currentSettlement =
-        _currentSellerSettlement(order);
-
-    final String currentSettlementStatus =
-        currentSettlement['status']?.toString().trim() ?? '';
-
-    final double alreadyPaidToSeller =
-        _toDouble(
-              currentSettlement['amount'] ??
-                  currentSettlement['sellerPayable'],
-            ) ??
-            0;
-
-    final bool sellerWasAlreadyPaid =
-        currentSettlementStatus == 'Paid' &&
-            alreadyPaidToSeller > 0;
-
     final Map<String, dynamic> update =
         <String, dynamic>{
       'customerRequestType':
@@ -2309,8 +2657,9 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                 'Return approved by seller',
             'refundRequestedAt':
                 now,
+            // Admin selects and validates the final refund amount.
             'refundAmount':
-                amount,
+                0,
           },
         );
       }
@@ -2357,32 +2706,12 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                     : 'No completed prepaid payment found',
             'refundRequestedAt':
                 refundNeeded ? now : '',
+            // Admin selects and validates the final refund amount.
             'refundAmount':
-                refundNeeded ? amount : 0,
+                0,
           },
         );
       }
-    }
-
-    if (approve && sellerWasAlreadyPaid) {
-      update.addAll(
-        <String, dynamic>{
-          'sellerAdjustmentRequired':
-              true,
-          'sellerAdjustmentStatus':
-              'Pending',
-          'sellerAdjustmentSellerId':
-              sellerId,
-          'sellerAdjustmentAmount':
-              alreadyPaidToSeller,
-          'sellerAdjustmentReason':
-              isReturn
-                  ? 'Seller was already paid before the approved return.'
-                  : 'Seller was already paid before the approved cancellation.',
-          'sellerAdjustmentCreatedAt':
-              now,
-        },
-      );
     }
 
     await updateOrderTrackingFields(
@@ -3797,3 +4126,119 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     super.dispose();
   }
 }
+
+class _SellerPickupQrScannerPage extends StatefulWidget {
+  const _SellerPickupQrScannerPage();
+
+  @override
+  State<_SellerPickupQrScannerPage> createState() =>
+      _SellerPickupQrScannerPageState();
+}
+
+class _SellerPickupQrScannerPageState
+    extends State<_SellerPickupQrScannerPage> {
+  final MobileScannerController _scannerController =
+      MobileScannerController(
+    formats: const <BarcodeFormat>[
+      BarcodeFormat.qrCode,
+    ],
+  );
+
+  bool _returned = false;
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_returned || capture.barcodes.isEmpty) {
+      return;
+    }
+
+    final String value =
+        capture.barcodes.first.rawValue?.trim() ?? '';
+
+    if (!value.startsWith('NRD_PICKUP|')) {
+      return;
+    }
+
+    _returned = true;
+
+    Navigator.pop<String>(
+      context,
+      value,
+    );
+  }
+
+  @override
+  void dispose() {
+    _scannerController.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Scan Delivery Pickup QR',
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+          ),
+        ),
+        actions: <Widget>[
+          IconButton(
+            tooltip: 'Torch',
+            onPressed: () {
+              _scannerController.toggleTorch();
+            },
+            icon: const Icon(
+              Icons.flashlight_on_rounded,
+            ),
+          ),
+        ],
+      ),
+      body: Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          MobileScanner(
+            controller: _scannerController,
+            onDetect: _onDetect,
+          ),
+          Center(
+            child: IgnorePointer(
+              child: Container(
+                width: 250,
+                height: 250,
+                decoration: BoxDecoration(
+                  border: Border.all(
+                    color: Colors.white,
+                    width: 4,
+                  ),
+                  borderRadius:
+                      BorderRadius.circular(20),
+                ),
+              ),
+            ),
+          ),
+          const Positioned(
+            left: 24,
+            right: 24,
+            bottom: 40,
+            child: Card(
+              color: Colors.black87,
+              child: Padding(
+                padding: EdgeInsets.all(14),
+                child: Text(
+                  'Ask the assigned delivery person to show the NRD Pickup QR and place it inside the frame.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.white,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+

@@ -1,7 +1,10 @@
+import 'dart:math';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 
 import 'tracking/delivery_person_tracking_page.dart';
 
@@ -271,6 +274,339 @@ class _DeliveryPersonDashboardPageState
     }
 
     return null;
+  }
+
+  // =========================================================
+  // SELLER / SHOP ID
+  // =========================================================
+
+  String _orderSellerId(
+    Map<String, dynamic> order,
+  ) {
+    final String direct =
+        order['pickupSellerId']?.toString().trim() ?? '';
+
+    if (direct.isNotEmpty) {
+      return direct;
+    }
+
+    final String topSeller =
+        order['sellerId']?.toString().trim() ?? '';
+
+    if (topSeller.isNotEmpty) {
+      return topSeller;
+    }
+
+    final dynamic sellerIds = order['sellerIds'];
+
+    if (sellerIds is List) {
+      for (final dynamic value in sellerIds) {
+        final String id = value?.toString().trim() ?? '';
+        if (id.isNotEmpty) {
+          return id;
+        }
+      }
+    }
+
+    final dynamic items = order['items'];
+
+    if (items is List) {
+      for (final dynamic item in items) {
+        if (item is Map) {
+          final String id =
+              item['sellerId']?.toString().trim() ?? '';
+          if (id.isNotEmpty) {
+            return id;
+          }
+        }
+      }
+    }
+
+    return '';
+  }
+
+  // =========================================================
+  // SELLER / SHOP LOCATION
+  // =========================================================
+
+  Future<Map<String, dynamic>> _sellerShopData(
+    Map<String, dynamic> order,
+  ) async {
+    double? latitude = _toDouble(
+      order['pickupSellerLat'] ??
+          order['sellerShopLat'] ??
+          order['shopLat'],
+    );
+
+    double? longitude = _toDouble(
+      order['pickupSellerLng'] ??
+          order['sellerShopLng'] ??
+          order['shopLng'],
+    );
+
+    String name =
+        order['pickupSellerName']?.toString().trim() ?? '';
+
+    String address =
+        order['pickupSellerAddress']?.toString().trim() ?? '';
+
+    if (latitude == null || longitude == null) {
+      final dynamic shopLocation = order['pickupSellerLocation'];
+
+      if (shopLocation is GeoPoint) {
+        latitude ??= shopLocation.latitude;
+        longitude ??= shopLocation.longitude;
+      }
+    }
+
+    if (latitude != null && longitude != null) {
+      return <String, dynamic>{
+        'name': name.isEmpty ? 'Seller Shop' : name,
+        'address': address,
+        'latitude': latitude,
+        'longitude': longitude,
+      };
+    }
+
+    final String sellerId = _orderSellerId(order);
+
+    if (sellerId.isEmpty) {
+      return <String, dynamic>{};
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> sellerSnapshot =
+          await FirebaseFirestore.instance
+              .collection('sellers')
+              .doc(sellerId)
+              .get();
+
+      final Map<String, dynamic> seller =
+          sellerSnapshot.data() ?? <String, dynamic>{};
+
+      name = seller['shopName']?.toString().trim() ?? name;
+      address =
+          seller['address']?.toString().trim() ??
+              seller['shopAddress']?.toString().trim() ??
+              address;
+
+      latitude ??= _toDouble(
+        seller['shopLat'] ??
+            seller['shopLatitude'] ??
+            seller['latitude'] ??
+            seller['lat'],
+      );
+
+      longitude ??= _toDouble(
+        seller['shopLng'] ??
+            seller['shopLongitude'] ??
+            seller['longitude'] ??
+            seller['lng'],
+      );
+
+      final dynamic shopLocation = seller['shopLocation'];
+
+      if (shopLocation is GeoPoint) {
+        latitude ??= shopLocation.latitude;
+        longitude ??= shopLocation.longitude;
+      }
+    } catch (_) {
+      return <String, dynamic>{};
+    }
+
+    if (latitude == null || longitude == null) {
+      return <String, dynamic>{
+        'name': name.isEmpty ? 'Seller Shop' : name,
+        'address': address,
+      };
+    }
+
+    return <String, dynamic>{
+      'name': name.isEmpty ? 'Seller Shop' : name,
+      'address': address,
+      'latitude': latitude,
+      'longitude': longitude,
+    };
+  }
+
+  Future<void> _openSellerDirections(
+    double latitude,
+    double longitude,
+  ) async {
+    final Uri uri = Uri.https(
+      'www.google.com',
+      '/maps/dir/',
+      <String, String>{
+        'api': '1',
+        'destination': '$latitude,$longitude',
+        'travelmode': 'driving',
+      },
+    );
+
+    try {
+      final bool opened = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!opened) {
+        _showMessage(
+          'Map could not be opened.',
+        );
+      }
+    } catch (_) {
+      _showMessage(
+        'Map could not be opened.',
+      );
+    }
+  }
+
+  Widget _sellerLocationCard(
+    Map<String, dynamic> order,
+  ) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _sellerShopData(order),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<Map<String, dynamic>> snapshot,
+      ) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(14),
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(12),
+              color: Colors.orange.withValues(alpha: 0.06),
+              border: Border.all(
+                color: Colors.orange.shade200,
+              ),
+            ),
+            child: const Row(
+              children: <Widget>[
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                  ),
+                ),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text('Loading Seller Shop Location...'),
+                ),
+              ],
+            ),
+          );
+        }
+
+        final Map<String, dynamic> data =
+            snapshot.data ?? <String, dynamic>{};
+
+        final String name =
+            data['name']?.toString().trim() ?? 'Seller Shop';
+        final String address =
+            data['address']?.toString().trim() ?? '';
+        final double? latitude = _toDouble(data['latitude']);
+        final double? longitude = _toDouble(data['longitude']);
+        final bool hasLocation =
+            latitude != null && longitude != null;
+
+        return Container(
+          width: double.infinity,
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(12),
+            color: Colors.orange.withValues(alpha: 0.06),
+            border: Border.all(
+              color: Colors.orange.shade200,
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: <Widget>[
+              const Row(
+                children: <Widget>[
+                  CircleAvatar(
+                    backgroundColor: Colors.orange,
+                    child: Icon(
+                      Icons.store,
+                      color: Colors.white,
+                    ),
+                  ),
+                  SizedBox(width: 10),
+                  Expanded(
+                    child: Text(
+                      'Seller Shop Pickup Location',
+                      style: TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 10),
+
+              Text(
+                name,
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                ),
+              ),
+
+              if (address.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 5),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    const Icon(
+                      Icons.location_on_outlined,
+                      size: 20,
+                    ),
+                    const SizedBox(width: 7),
+                    Expanded(child: Text(address)),
+                  ],
+                ),
+              ],
+
+              if (hasLocation) ...<Widget>[
+                const SizedBox(height: 7),
+                Text(
+                  'Latitude: ${latitude.toStringAsFixed(6)}',
+                ),
+                Text(
+                  'Longitude: ${longitude.toStringAsFixed(6)}',
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  height: 48,
+                  child: FilledButton.icon(
+                    onPressed: () {
+                      _openSellerDirections(
+                        latitude,
+                        longitude,
+                      );
+                    },
+                    icon: const Icon(Icons.navigation),
+                    label: const Text(
+                      'Track Seller Shop Location',
+                    ),
+                  ),
+                ),
+              ] else ...<Widget>[
+                const SizedBox(height: 8),
+                const Text(
+                  'Seller shop GPS location is not available.',
+                  style: TextStyle(color: Colors.orange),
+                ),
+              ],
+            ],
+          ),
+        );
+      },
+    );
   }
 
   // =========================================================
@@ -685,6 +1021,298 @@ class _DeliveryPersonDashboardPageState
   }
 
   // =========================================================
+  // SELLER HANDOVER / PICKUP VERIFICATION
+  // =========================================================
+
+  String _generatePickupCode() {
+    final Random random = Random.secure();
+    return (100000 + random.nextInt(900000)).toString();
+  }
+
+  String _generatePickupToken() {
+    const String alphabet =
+        'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    final Random random = Random.secure();
+
+    return List<String>.generate(
+      32,
+      (_) => alphabet[random.nextInt(alphabet.length)],
+    ).join();
+  }
+
+  Map<String, dynamic> _preparePickupVerificationData(
+    Map<String, dynamic> order,
+  ) {
+    final String orderId =
+        order['id']?.toString().trim() ?? '';
+
+    if (orderId.isEmpty) {
+      throw StateError('Order ID is missing.');
+    }
+
+    if (_deliveryPersonId.trim().isEmpty) {
+      throw StateError('Delivery person login is required.');
+    }
+
+    if (order['pickupConfirmed'] == true) {
+      throw StateError('Pickup is already confirmed.');
+    }
+
+    final String savedDriverId =
+        order['driverId']?.toString().trim() ?? '';
+
+    if (savedDriverId != _deliveryPersonId) {
+      throw StateError(
+        'This order is not assigned to the current delivery person.',
+      );
+    }
+
+    final String pickupCode = _generatePickupCode();
+    final String qrToken = _generatePickupToken();
+    final String qrPayload =
+        'NRD_PICKUP|$orderId|$_deliveryPersonId|$qrToken';
+    final String now = DateTime.now().toIso8601String();
+
+    return <String, dynamic>{
+      'orderId': orderId,
+      'driverId': _deliveryPersonId,
+      'pickupCode': pickupCode,
+      'qrPayload': qrPayload,
+      'isActive': true,
+      'createdAt': now,
+      'updatedAt': now,
+    };
+  }
+
+  Future<Map<String, dynamic>> _getOrCreatePickupVerification(
+    Map<String, dynamic> order,
+  ) async {
+    final String orderId =
+        order['id']?.toString().trim() ?? '';
+
+    if (orderId.isEmpty) {
+      throw StateError('Order ID is missing.');
+    }
+
+    if (_deliveryPersonId.trim().isEmpty) {
+      throw StateError('Delivery person login is required.');
+    }
+
+    if (order['pickupConfirmed'] == true) {
+      throw StateError('Pickup is already confirmed.');
+    }
+
+    final String savedDriverId =
+        order['driverId']?.toString().trim() ?? '';
+
+    if (savedDriverId != _deliveryPersonId) {
+      throw StateError(
+        'This order is not assigned to the current delivery person.',
+      );
+    }
+
+    final DocumentReference<Map<String, dynamic>> verificationRef =
+        FirebaseFirestore.instance
+            .collection('orders')
+            .doc(orderId)
+            .collection('pickup_private')
+            .doc('verification');
+
+    final DocumentSnapshot<Map<String, dynamic>> existing =
+        await verificationRef.get();
+
+    final Map<String, dynamic>? existingData = existing.data();
+
+    if (existing.exists && existingData != null) {
+      final String existingDriverId =
+          existingData['driverId']?.toString().trim() ?? '';
+      final String existingCode =
+          existingData['pickupCode']?.toString().trim() ?? '';
+      final String existingQr =
+          existingData['qrPayload']?.toString().trim() ?? '';
+      final bool isActive = existingData['isActive'] == true;
+
+      if (existingDriverId == _deliveryPersonId &&
+          RegExp(r'^\d{6}$').hasMatch(existingCode) &&
+          existingQr.startsWith('NRD_PICKUP|') &&
+          isActive) {
+        return existingData;
+      }
+    }
+
+    final Map<String, dynamic> verification =
+        _preparePickupVerificationData(order);
+
+    await verificationRef.set(
+      verification,
+      SetOptions(merge: false),
+    );
+
+    return verification;
+  }
+
+  Widget _pickupVerificationInline(
+    Map<String, dynamic> order,
+  ) {
+    return FutureBuilder<Map<String, dynamic>>(
+      future: _getOrCreatePickupVerification(order),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<Map<String, dynamic>> snapshot,
+      ) {
+        if (snapshot.connectionState == ConnectionState.waiting) {
+          return const Padding(
+            padding: EdgeInsets.symmetric(vertical: 14),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                SizedBox(
+                  width: 20,
+                  height: 20,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                  ),
+                ),
+                SizedBox(width: 10),
+                Flexible(
+                  child: Text(
+                    'Preparing pickup QR & code...',
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        if (snapshot.hasError || !snapshot.hasData) {
+          String message = snapshot.error
+                  ?.toString()
+                  .replaceFirst('Bad state: ', '')
+                  .replaceFirst('Exception: ', '') ??
+              'Could not prepare pickup QR & code.';
+
+          if (snapshot.error is FirebaseException &&
+              (snapshot.error! as FirebaseException).code ==
+                  'permission-denied') {
+            message =
+                'Pickup QR permission was denied. Deploy the latest Firestore rules and retry.';
+          }
+
+          return Column(
+            children: <Widget>[
+              const SizedBox(height: 8),
+              Text(
+                message,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: Colors.red,
+                  fontWeight: FontWeight.w700,
+                ),
+              ),
+              const SizedBox(height: 8),
+              OutlinedButton.icon(
+                onPressed: () {
+                  setState(() {});
+                },
+                icon: const Icon(Icons.refresh),
+                label: const Text('Retry'),
+              ),
+            ],
+          );
+        }
+
+        final Map<String, dynamic> verification = snapshot.data!;
+        final String pickupCode =
+            verification['pickupCode']?.toString().trim() ?? '';
+        final String qrPayload =
+            verification['qrPayload']?.toString().trim() ?? '';
+
+        if (pickupCode.isEmpty || qrPayload.isEmpty) {
+          return const Text(
+            'Pickup QR or code is not available.',
+            style: TextStyle(
+              color: Colors.red,
+              fontWeight: FontWeight.w700,
+            ),
+          );
+        }
+
+        return Column(
+          children: <Widget>[
+            const SizedBox(height: 12),
+            const Text(
+              'SHOW THIS TO THE SELLER',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.1,
+                color: Colors.deepPurple,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.white,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: QrImageView(
+                data: qrPayload,
+                version: QrVersions.auto,
+                size: 190,
+                backgroundColor: Colors.white,
+                errorCorrectionLevel: QrErrorCorrectLevel.M,
+              ),
+            ),
+            const SizedBox(height: 14),
+            const Text(
+              'PICKUP CODE',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 1.4,
+                color: Colors.orange,
+              ),
+            ),
+            const SizedBox(height: 6),
+            SelectableText(
+              pickupCode,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 32,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 7,
+              ),
+            ),
+            const SizedBox(height: 10),
+            const Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: <Widget>[
+                Icon(
+                  Icons.verified_rounded,
+                  color: Colors.green,
+                  size: 20,
+                ),
+                SizedBox(width: 7),
+                Flexible(
+                  child: Text(
+                    'Seller can scan the QR or enter the 6-digit code.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      color: Colors.green,
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  // =========================================================
   // ORDER CARD
   // =========================================================
 
@@ -732,6 +1360,15 @@ class _DeliveryPersonDashboardPageState
 
     final bool secureAssignment =
         savedDriverId.isNotEmpty;
+
+    final bool pickupConfirmed =
+        order['pickupConfirmed'] == true;
+
+    final String pickupConfirmedAt =
+        order['pickupConfirmedAt']
+                ?.toString()
+                .trim() ??
+            '';
 
     return Card(
       margin:
@@ -936,6 +1573,14 @@ class _DeliveryPersonDashboardPageState
               height: 14,
             ),
 
+            _sellerLocationCard(
+              order,
+            ),
+
+            const SizedBox(
+              height: 14,
+            ),
+
             _customerLocationCard(
               order,
             ),
@@ -955,6 +1600,75 @@ class _DeliveryPersonDashboardPageState
             if (payment.isNotEmpty)
               Text(
                 'Payment: $payment',
+              ),
+
+            const SizedBox(
+              height: 14,
+            ),
+
+            if (status != 'Delivered')
+              Container(
+                width: double.infinity,
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: pickupConfirmed
+                      ? Colors.green.withValues(alpha: 0.08)
+                      : Colors.orange.withValues(alpha: 0.08),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: pickupConfirmed
+                        ? Colors.green.withValues(alpha: 0.35)
+                        : Colors.orange.withValues(alpha: 0.35),
+                  ),
+                ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        Icon(
+                          pickupConfirmed
+                              ? Icons.inventory_2_rounded
+                              : Icons.qr_code_2_rounded,
+                          color: pickupConfirmed
+                              ? Colors.green
+                              : Colors.orange.shade800,
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: Text(
+                            pickupConfirmed
+                                ? 'Parcel Pickup Confirmed'
+                                : 'Seller Handover Verification',
+                            style: const TextStyle(
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      pickupConfirmed
+                          ? 'The seller confirmed that this parcel was handed to you.'
+                          : 'At the shop, show your pickup QR or 6-digit code to the seller.',
+                    ),
+                    if (pickupConfirmed &&
+                        pickupConfirmedAt.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 4),
+                      Text(
+                        'Confirmed: $pickupConfirmedAt',
+                        style: TextStyle(
+                          color: Colors.grey.shade700,
+                          fontSize: 12,
+                        ),
+                      ),
+                    ],
+                    if (!pickupConfirmed) ...<Widget>[
+                      _pickupVerificationInline(order),
+                    ],
+                  ],
+                ),
               ),
 
             const SizedBox(

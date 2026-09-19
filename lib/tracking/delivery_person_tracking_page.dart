@@ -5,7 +5,8 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:geolocator/geolocator.dart';
-import 'package:mobile_scanner/mobile_scanner.dart';
+import 'package:mobile_scanner/mobile_scanner.dart' as mobile_scanner;
+import 'package:url_launcher/url_launcher.dart';
 
 import '../order_data.dart';
 import '../services/platform_capabilities.dart';
@@ -35,6 +36,7 @@ class _DeliveryPersonTrackingPageState
   bool _isLoading = false;
   bool _isVerifyingOtp = false;
   bool _orderDelivered = false;
+  bool _pickupConfirmed = false;
 
   double? _latitude;
   double? _longitude;
@@ -44,11 +46,17 @@ class _DeliveryPersonTrackingPageState
 
   String _lastUpdated = '';
 
+  String _sellerName = 'Seller Shop';
+  String _sellerAddress = '';
+  double? _sellerLatitude;
+  double? _sellerLongitude;
+
   @override
   void initState() {
     super.initState();
 
     _prepareDeliveryConfirmation();
+    _loadSellerShopLocation();
   }
 
   // =========================================================
@@ -112,6 +120,8 @@ class _DeliveryPersonTrackingPageState
                   .trim() ??
               '';
 
+      _pickupConfirmed = data['pickupConfirmed'] == true;
+
       if (status == 'Delivered') {
         if (!mounted) {
           return;
@@ -155,6 +165,298 @@ class _DeliveryPersonTrackingPageState
       // OTP preparation failure should
       // not stop live GPS tracking.
     }
+  }
+
+  // =========================================================
+  // SELLER / SHOP LOCATION
+  // =========================================================
+
+  String _orderSellerId(
+    Map<String, dynamic> order,
+  ) {
+    final String direct =
+        order['pickupSellerId']?.toString().trim() ?? '';
+
+    if (direct.isNotEmpty) {
+      return direct;
+    }
+
+    final String topSeller =
+        order['sellerId']?.toString().trim() ?? '';
+
+    if (topSeller.isNotEmpty) {
+      return topSeller;
+    }
+
+    final dynamic sellerIds = order['sellerIds'];
+
+    if (sellerIds is List) {
+      for (final dynamic value in sellerIds) {
+        final String id = value?.toString().trim() ?? '';
+        if (id.isNotEmpty) {
+          return id;
+        }
+      }
+    }
+
+    final dynamic items = order['items'];
+
+    if (items is List) {
+      for (final dynamic item in items) {
+        if (item is Map) {
+          final String id =
+              item['sellerId']?.toString().trim() ?? '';
+          if (id.isNotEmpty) {
+            return id;
+          }
+        }
+      }
+    }
+
+    return '';
+  }
+
+  double? _toDouble(dynamic value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    if (value == null) {
+      return null;
+    }
+
+    return double.tryParse(value.toString().trim());
+  }
+
+  Future<void> _loadSellerShopLocation() async {
+    final String orderId = widget.orderId.trim();
+
+    if (orderId.isEmpty) {
+      return;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> orderSnapshot =
+          await FirebaseFirestore.instance
+              .collection('orders')
+              .doc(orderId)
+              .get();
+
+      if (!orderSnapshot.exists) {
+        return;
+      }
+
+      final Map<String, dynamic> order =
+          orderSnapshot.data() ?? <String, dynamic>{};
+
+      String name =
+          order['pickupSellerName']?.toString().trim() ?? '';
+      String address =
+          order['pickupSellerAddress']?.toString().trim() ?? '';
+
+      double? latitude = _toDouble(
+        order['pickupSellerLat'] ??
+            order['sellerShopLat'] ??
+            order['shopLat'],
+      );
+
+      double? longitude = _toDouble(
+        order['pickupSellerLng'] ??
+            order['sellerShopLng'] ??
+            order['shopLng'],
+      );
+
+      final dynamic savedLocation =
+          order['pickupSellerLocation'];
+
+      if (savedLocation is GeoPoint) {
+        latitude ??= savedLocation.latitude;
+        longitude ??= savedLocation.longitude;
+      }
+
+      // Fallback for older orders that were assigned before the shop
+      // destination fields were added.
+      if (latitude == null || longitude == null) {
+        final String sellerId = _orderSellerId(order);
+
+        if (sellerId.isNotEmpty) {
+          try {
+            final DocumentSnapshot<Map<String, dynamic>> sellerSnapshot =
+                await FirebaseFirestore.instance
+                    .collection('sellers')
+                    .doc(sellerId)
+                    .get();
+
+            final Map<String, dynamic> seller =
+                sellerSnapshot.data() ?? <String, dynamic>{};
+
+            name = seller['shopName']?.toString().trim() ?? name;
+            address =
+                seller['address']?.toString().trim() ??
+                    seller['shopAddress']?.toString().trim() ??
+                    address;
+
+            latitude ??= _toDouble(
+              seller['shopLat'] ??
+                  seller['shopLatitude'] ??
+                  seller['latitude'] ??
+                  seller['lat'],
+            );
+
+            longitude ??= _toDouble(
+              seller['shopLng'] ??
+                  seller['shopLongitude'] ??
+                  seller['longitude'] ??
+                  seller['lng'],
+            );
+
+            final dynamic shopLocation = seller['shopLocation'];
+
+            if (shopLocation is GeoPoint) {
+              latitude ??= shopLocation.latitude;
+              longitude ??= shopLocation.longitude;
+            }
+          } catch (_) {
+            // Keep the order page usable if the fallback profile read is
+            // unavailable. New assignments already store the destination.
+          }
+        }
+      }
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _pickupConfirmed = order['pickupConfirmed'] == true;
+        _sellerName = name.isEmpty ? 'Seller Shop' : name;
+        _sellerAddress = address;
+        _sellerLatitude = latitude;
+        _sellerLongitude = longitude;
+      });
+    } catch (_) {
+      // Seller location is supplementary; customer tracking remains usable.
+    }
+  }
+
+  Future<void> _openSellerDirections() async {
+    final double? latitude = _sellerLatitude;
+    final double? longitude = _sellerLongitude;
+
+    if (latitude == null || longitude == null) {
+      _showMessage(
+        'Seller shop GPS location is not available.',
+      );
+      return;
+    }
+
+    final Uri uri = Uri.https(
+      'www.google.com',
+      '/maps/dir/',
+      <String, String>{
+        'api': '1',
+        'destination': '$latitude,$longitude',
+        'travelmode': 'driving',
+      },
+    );
+
+    try {
+      final bool opened = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!opened) {
+        _showMessage('Map could not be opened.');
+      }
+    } catch (_) {
+      _showMessage('Map could not be opened.');
+    }
+  }
+
+  Widget _sellerLocationCard() {
+    final bool hasLocation =
+        _sellerLatitude != null && _sellerLongitude != null;
+
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const CircleAvatar(
+                  backgroundColor: Colors.orange,
+                  child: Icon(
+                    Icons.store,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                const Expanded(
+                  child: Text(
+                    'Seller Shop Pickup Location',
+                    style: TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 10),
+            Text(
+              _sellerName,
+              style: const TextStyle(
+                fontWeight: FontWeight.w800,
+              ),
+            ),
+            if (_sellerAddress.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 5),
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Icon(
+                    Icons.location_on_outlined,
+                    size: 20,
+                  ),
+                  const SizedBox(width: 7),
+                  Expanded(child: Text(_sellerAddress)),
+                ],
+              ),
+            ],
+            if (hasLocation) ...<Widget>[
+              const SizedBox(height: 7),
+              Text(
+                'Latitude: ${_sellerLatitude!.toStringAsFixed(6)}',
+              ),
+              Text(
+                'Longitude: ${_sellerLongitude!.toStringAsFixed(6)}',
+              ),
+              const SizedBox(height: 10),
+              SizedBox(
+                width: double.infinity,
+                height: 48,
+                child: FilledButton.icon(
+                  onPressed: _openSellerDirections,
+                  icon: const Icon(Icons.navigation),
+                  label: const Text(
+                    'Track Seller Shop Location',
+                  ),
+                ),
+              ),
+            ] else ...<Widget>[
+              const SizedBox(height: 8),
+              const Text(
+                'Seller shop GPS location is not available.',
+                style: TextStyle(color: Colors.orange),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
   }
 
   // =========================================================
@@ -239,7 +541,9 @@ class _DeliveryPersonTrackingPageState
 
     await updateTrackingStatus(
       orderId,
-      'Out for Delivery',
+      _pickupConfirmed
+          ? 'Out for Delivery'
+          : 'Going to Seller Shop',
     );
 
     if (!mounted) {
@@ -816,6 +1120,17 @@ class _DeliveryPersonTrackingPageState
         return;
       }
 
+      // Seller must confirm the parcel handover first.
+      if (order['pickupConfirmed'] != true) {
+        _showMessage(
+          'Seller has not confirmed parcel pickup yet. Show the Pickup QR or 6-digit code to the seller first.',
+        );
+
+        return;
+      }
+
+      _pickupConfirmed = true;
+
       // =====================================================
       // DRIVER MUST BE NEAR CUSTOMER
       // =====================================================
@@ -1275,6 +1590,12 @@ class _DeliveryPersonTrackingPageState
                 16,
               ),
               children: <Widget>[
+                _sellerLocationCard(),
+
+                const SizedBox(
+                  height: 12,
+                ),
+
                 _locationCard(),
 
                 const SizedBox(
@@ -1341,18 +1662,23 @@ class _DeliveryPersonTrackingPageState
                   child: FilledButton.icon(
                     onPressed:
                         _orderDelivered ||
-                                _isVerifyingOtp
+                                _isVerifyingOtp ||
+                                !_pickupConfirmed
                             ? null
                             : _scanQrAndDeliver,
                     icon: Icon(
-                      PlatformCapabilities.supportsQrCameraScanner
-                          ? Icons.qr_code_scanner
-                          : Icons.password,
+                      !_pickupConfirmed
+                          ? Icons.lock_outline
+                          : PlatformCapabilities.supportsQrCameraScanner
+                              ? Icons.qr_code_scanner
+                              : Icons.password,
                     ),
                     label: Text(
-                      PlatformCapabilities.supportsQrCameraScanner
-                          ? 'Scan Customer QR'
-                          : 'Enter Customer OTP',
+                      !_pickupConfirmed
+                          ? 'Pickup Confirmation Required'
+                          : PlatformCapabilities.supportsQrCameraScanner
+                              ? 'Scan Customer QR'
+                              : 'Enter Customer OTP',
                     ),
                   ),
                 ),
@@ -1372,7 +1698,8 @@ class _DeliveryPersonTrackingPageState
                       OutlinedButton.icon(
                     onPressed:
                         _orderDelivered ||
-                                _isVerifyingOtp
+                                _isVerifyingOtp ||
+                                !_pickupConfirmed
                             ? null
                             : () {
                                 _verifyOtpAndDeliver();
@@ -1437,27 +1764,27 @@ class _DeliveryPersonTrackingPageState
                         ),
 
                         Text(
-                          '1. Start Live Tracking.',
+                          '1. Start Live Tracking and go to the seller shop.',
                         ),
 
                         Text(
-                          '2. Travel to the customer delivery location.',
+                          '2. Show the seller your Pickup QR or 6-digit Pickup Code.',
                         ),
 
                         Text(
-                          '3. Ask the customer for their 6-digit Delivery OTP.',
+                          '3. Seller confirms the parcel handover.',
                         ),
 
                         Text(
-                          '4. Tap Confirm Delivery with OTP.',
+                          '4. Continue live tracking to the customer.',
                         ),
 
                         Text(
-                          '5. Enter the correct customer OTP.',
+                          '5. Ask the customer for their 6-digit Delivery OTP.',
                         ),
 
                         Text(
-                          '6. Only then will the order become Delivered.',
+                          '6. Confirm delivery only after the correct OTP is verified.',
                         ),
                       ],
                     ),
@@ -1494,13 +1821,13 @@ class _DeliveryQrScannerPage extends StatefulWidget {
 
 class _DeliveryQrScannerPageState
     extends State<_DeliveryQrScannerPage> {
-  final MobileScannerController _scannerController =
-      MobileScannerController();
+  final mobile_scanner.MobileScannerController _scannerController =
+      mobile_scanner.MobileScannerController();
 
   bool _resultReturned = false;
 
   void _handleDetection(
-    BarcodeCapture capture,
+    mobile_scanner.BarcodeCapture capture,
   ) {
     if (_resultReturned ||
         capture.barcodes.isEmpty) {
@@ -1549,7 +1876,7 @@ class _DeliveryQrScannerPageState
       body: Stack(
         fit: StackFit.expand,
         children: <Widget>[
-          MobileScanner(
+          mobile_scanner.MobileScanner(
             controller: _scannerController,
             onDetect: _handleDetection,
           ),
