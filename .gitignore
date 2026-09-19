@@ -58,3 +58,5 @@ app.*.map.json
 /assets/products/*.exe
 /assets/products/*.msi
 /assets/products/*.winmd
+
+/android/key.properties
