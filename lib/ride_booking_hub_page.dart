@@ -113,37 +113,6 @@ class RideBookingHubPage extends StatelessWidget {
           ),
         ),
         centerTitle: true,
-        actions: <Widget>[
-          IconButton(
-            tooltip: 'My Rides',
-            onPressed: () {
-              Navigator.push<void>(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) => const RideMyRidesPage(),
-                ),
-              );
-            },
-            icon: const Icon(
-              Icons.route_rounded,
-            ),
-          ),
-          IconButton(
-            tooltip: 'Ride Driver',
-            onPressed: () {
-              Navigator.push<void>(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) =>
-                      const RideDriverAuthPage(),
-                ),
-              );
-            },
-            icon: const Icon(
-              Icons.drive_eta_rounded,
-            ),
-          ),
-        ],
       ),
       body: SafeArea(
         child: LayoutBuilder(
@@ -172,62 +141,6 @@ class RideBookingHubPage extends StatelessWidget {
                   children: <Widget>[
                     _headerCard(),
                     const SizedBox(height: 14),
-                    Card(
-                      elevation: 1.2,
-                      child: InkWell(
-                        borderRadius:
-                            BorderRadius.circular(14),
-                        onTap: () {
-                          Navigator.push<void>(
-                            context,
-                            MaterialPageRoute<void>(
-                              builder: (_) =>
-                                  const RideDriverAuthPage(),
-                            ),
-                          );
-                        },
-                        child: const Padding(
-                          padding: EdgeInsets.all(14),
-                          child: Row(
-                            children: <Widget>[
-                              CircleAvatar(
-                                child: Icon(
-                                  Icons
-                                      .drive_eta_rounded,
-                                ),
-                              ),
-                              SizedBox(width: 12),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment:
-                                      CrossAxisAlignment
-                                          .start,
-                                  children: <Widget>[
-                                    Text(
-                                      'Ride Driver',
-                                      style: TextStyle(
-                                        fontSize: 16,
-                                        fontWeight:
-                                            FontWeight
-                                                .w900,
-                                      ),
-                                    ),
-                                    SizedBox(height: 3),
-                                    Text(
-                                      'Driver register, login and ride requests',
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              Icon(
-                                Icons
-                                    .chevron_right_rounded,
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    ),
                     const SizedBox(height: 18),
                     const Text(
                       'Choose a service',
@@ -358,6 +271,32 @@ class RideCategoryPage extends StatelessWidget {
             fontWeight: FontWeight.w800,
           ),
         ),
+        actions: <Widget>[
+          IconButton(
+            tooltip: 'My Rides',
+            onPressed: () {
+              Navigator.push<void>(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => const RideMyRidesPage(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.route_rounded),
+          ),
+          IconButton(
+            tooltip: 'Ride Driver',
+            onPressed: () {
+              Navigator.push<void>(
+                context,
+                MaterialPageRoute<void>(
+                  builder: (_) => const RideDriverAuthPage(),
+                ),
+              );
+            },
+            icon: const Icon(Icons.drive_eta_rounded),
+          ),
+        ],
       ),
       body: Center(
         child: ConstrainedBox(

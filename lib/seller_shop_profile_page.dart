@@ -247,12 +247,18 @@ class _SellerShopProfilePageState
       double? latitude =
           _toDouble(
         data['shopLat'],
-      );
+      ) ??
+              _toDouble(
+                data['shopLatitude'],
+              );
 
       double? longitude =
           _toDouble(
         data['shopLng'],
-      );
+      ) ??
+              _toDouble(
+                data['shopLongitude'],
+              );
 
       final dynamic geoPoint =
           data['shopLocation'];
@@ -983,6 +989,15 @@ class _SellerShopProfilePageState
           'shopLng':
               _shopLongitude,
 
+          // Legacy names are kept in sync because existing order/customer
+          // tracking pages still read them. They can be removed in a later
+          // migration after every screen uses shopLat/shopLng.
+          'shopLatitude':
+              _shopLatitude,
+
+          'shopLongitude':
+              _shopLongitude,
+
           'shopLocation':
               GeoPoint(
             _shopLatitude!,
@@ -1028,8 +1043,8 @@ class _SellerShopProfilePageState
 
           'logoPath': '',
 
-          'isActive': true,
-
+          // Do not write isActive here. Account activation/deactivation is
+          // controlled only by Admin and must survive profile edits.
           'updatedAt':
               FieldValue.serverTimestamp(),
         },

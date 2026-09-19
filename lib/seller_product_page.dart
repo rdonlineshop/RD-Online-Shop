@@ -661,6 +661,7 @@ class _SellerProductPageState extends State<SellerProductPage> {
                               child:
                                   DropdownButtonFormField<
                                       String>(
+                                isExpanded: true,
                                 initialValue:
                                     _selectedCategory,
                                 decoration:
@@ -709,6 +710,7 @@ class _SellerProductPageState extends State<SellerProductPage> {
                               child:
                                   DropdownButtonFormField<
                                       String>(
+                                isExpanded: true,
                                 initialValue:
                                     _stockFilter,
                                 decoration:

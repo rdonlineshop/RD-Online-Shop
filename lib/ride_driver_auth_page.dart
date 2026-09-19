@@ -10,7 +10,12 @@ import 'ride_driver_agreement_page.dart';
 import 'ride_driver_requests_page.dart';
 
 class RideDriverAuthPage extends StatefulWidget {
-  const RideDriverAuthPage({super.key});
+  const RideDriverAuthPage({
+    this.vehicleType,
+    super.key,
+  });
+
+  final String? vehicleType;
 
   @override
   State<RideDriverAuthPage> createState() =>
@@ -73,6 +78,12 @@ class _RideDriverAuthPageState
   void initState() {
     super.initState();
 
+    final String requestedVehicleType =
+        widget.vehicleType?.trim() ?? '';
+    if (_vehicleTypes.contains(requestedVehicleType)) {
+      _vehicleType = requestedVehicleType;
+    }
+
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _restoreSavedDriverSession();
     });
@@ -120,6 +131,15 @@ class _RideDriverAuthPageState
       // Another RD role may currently be signed in. Do not sign it out just
       // because the user opened the Ride Driver entry page.
       if (role != 'ride_driver') {
+        _finishSavedSessionCheck();
+        return;
+      }
+
+      final String savedVehicleType =
+          data['vehicleType']?.toString().trim() ?? '';
+      if (_hasRequestedVehicleType &&
+          savedVehicleType != _requestedVehicleType) {
+        await FirebaseAuth.instance.signOut();
         _finishSavedSessionCheck();
         return;
       }
@@ -723,6 +743,20 @@ class _RideDriverAuthPageState
       );
     }
 
+    final String accountVehicleType =
+        data['vehicleType']?.toString().trim() ?? '';
+    if (_hasRequestedVehicleType &&
+        accountVehicleType != _requestedVehicleType) {
+      await FirebaseAuth.instance.signOut();
+
+      throw StateError(
+        accountVehicleType.isEmpty
+            ? 'This driver account does not have a vehicle type.'
+            : 'This account is registered as $accountVehicleType Driver. '
+                'Open the $accountVehicleType Driver login.',
+      );
+    }
+
     await _openDriverAccount(
       user: user,
       data: data,
@@ -741,15 +775,25 @@ class _RideDriverAuthPageState
     });
   }
 
+  String get _requestedVehicleType =>
+      widget.vehicleType?.trim() ?? '';
+
+  bool get _hasRequestedVehicleType =>
+      _vehicleTypes.contains(_requestedVehicleType);
+
+  String get _driverLabel => _hasRequestedVehicleType
+      ? '$_requestedVehicleType Driver'
+      : 'Ride Driver';
+
   @override
   Widget build(BuildContext context) {
     if (_checkingSavedSession) {
       return Scaffold(
         backgroundColor: const Color(0xFFF7F8FA),
         appBar: AppBar(
-          title: const Text(
-            'Ride Driver',
-            style: TextStyle(
+          title: Text(
+            _driverLabel,
+            style: const TextStyle(
               fontWeight: FontWeight.w900,
             ),
           ),
@@ -799,9 +843,9 @@ class _RideDriverAuthPageState
       return Scaffold(
         backgroundColor: const Color(0xFFF7F8FA),
         appBar: AppBar(
-          title: const Text(
-            'Ride Driver Account',
-            style: TextStyle(
+          title: Text(
+            '$_driverLabel Account',
+            style: const TextStyle(
               fontWeight: FontWeight.w900,
             ),
           ),
@@ -918,8 +962,8 @@ class _RideDriverAuthPageState
       appBar: AppBar(
         title: Text(
           _isRegistering
-              ? 'Ride Driver Register'
-              : 'Ride Driver Login',
+              ? '$_driverLabel Register'
+              : '$_driverLabel Login',
           style: const TextStyle(
             fontWeight: FontWeight.w900,
           ),
@@ -954,7 +998,7 @@ class _RideDriverAuthPageState
                         const SizedBox(height: 14),
                         Text(
                           _isRegistering
-                              ? 'Become an RD Ride Driver'
+                              ? 'Become an RD $_driverLabel'
                               : 'Welcome Back',
                           textAlign: TextAlign.center,
                           style: const TextStyle(
@@ -1031,15 +1075,17 @@ class _RideDriverAuthPageState
                                   ),
                                 )
                                 .toList(),
-                            onChanged: (String? value) {
-                              if (value == null) {
-                                return;
-                              }
+                            onChanged: _hasRequestedVehicleType
+                                ? null
+                                : (String? value) {
+                                    if (value == null) {
+                                      return;
+                                    }
 
-                              setState(() {
-                                _vehicleType = value;
-                              });
-                            },
+                                    setState(() {
+                                      _vehicleType = value;
+                                    });
+                                  },
                           ),
                           const SizedBox(height: 12),
                           TextFormField(
@@ -1281,7 +1327,7 @@ class _RideDriverAuthPageState
                           child: Text(
                             _isRegistering
                                 ? 'Already registered? Login'
-                                : 'New Ride Driver? Register',
+                                : 'New $_driverLabel? Register',
                             style: const TextStyle(
                               fontWeight: FontWeight.w800,
                             ),

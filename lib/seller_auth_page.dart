@@ -304,9 +304,22 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
           // Admin must approve the seller before login.
           'isActive': false,
 
-// Seller shop live tracking location
+// Seller shop location. Keep both the canonical and legacy
+// coordinate fields during the launch transition so every existing
+// customer/seller page reads the same current position.
+'shopLat': _shopLatitude,
+'shopLng': _shopLongitude,
 'shopLatitude': _shopLatitude,
 'shopLongitude': _shopLongitude,
+if (_shopLatitude != null && _shopLongitude != null)
+  'shopLocation': GeoPoint(
+    _shopLatitude!,
+    _shopLongitude!,
+  ),
+'shopLocationSource':
+    _shopLatitude != null && _shopLongitude != null
+        ? 'registration_gps'
+        : '',
 'shopLocationUpdatedAt':
     FieldValue.serverTimestamp(),
 

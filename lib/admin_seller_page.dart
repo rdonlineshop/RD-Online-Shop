@@ -17,6 +17,31 @@ class AdminSellerPage extends StatelessWidget {
   CollectionReference<Map<String, dynamic>> get _sellers =>
       FirebaseFirestore.instance.collection('sellers');
 
+
+  Future<void> _showSellerRegistrationInfo(
+    BuildContext context,
+  ) async {
+    await showDialog<void>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('New Seller'),
+          content: const Text(
+            'For a launch-safe seller account, the seller must create the '
+            'account from Seller Login > Register. After registration, the '
+            'seller appears here and Admin can review and activate the account.',
+          ),
+          actions: <Widget>[
+            FilledButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('OK'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
   String _sellerPhoto(Map<String, dynamic> seller) {
     const List<String> possibleFields = <String>[
       'photoUrl',
@@ -572,19 +597,10 @@ class AdminSellerPage extends StatelessWidget {
         centerTitle: true,
         actions: <Widget>[
           TextButton.icon(
-            onPressed: () {
-              Navigator.push<void>(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) => const _SellerFormPage(
-                    cloudName: _cloudName,
-                    uploadPreset: _uploadPreset,
-                  ),
-                ),
-              );
-            },
-            icon: const Icon(Icons.add),
-            label: const Text('Add Seller'),
+            onPressed: () =>
+                _showSellerRegistrationInfo(context),
+            icon: const Icon(Icons.person_add_alt_1_rounded),
+            label: const Text('New Seller'),
           ),
           const SizedBox(width: 6),
         ],
@@ -637,21 +653,12 @@ class AdminSellerPage extends StatelessWidget {
                   ),
                   const SizedBox(height: 14),
                   FilledButton.icon(
-                    onPressed: () {
-                      Navigator.push<void>(
-                        context,
-                        MaterialPageRoute<void>(
-                          builder: (_) =>
-                              const _SellerFormPage(
-                            cloudName: _cloudName,
-                            uploadPreset:
-                                _uploadPreset,
-                          ),
-                        ),
-                      );
-                    },
-                    icon: const Icon(Icons.add),
-                    label: const Text('Add Seller'),
+                    onPressed: () =>
+                        _showSellerRegistrationInfo(context),
+                    icon: const Icon(
+                      Icons.person_add_alt_1_rounded,
+                    ),
+                    label: const Text('New Seller'),
                   ),
                 ],
               ),

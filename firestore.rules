@@ -1190,6 +1190,239 @@ service cloud.firestore {
           && resource.data.driverId == request.auth.uid;
       }
 
+      function validCustomerCancellationRequest() {
+        return customerOwnsOrder()
+          && request.resource.data.customerId == resource.data.customerId
+          && resource.data.get('cancelRequestStatus', '') == ''
+          && request.resource.data.cancelRequestStatus == 'Pending'
+          && request.resource.data.cancelRequestReason is string
+          && request.resource.data.cancelRequestReason.size() > 0
+          && request.resource.data.cancelRequestReason.size() <= 120
+          && request.resource.data.cancelRequestNote is string
+          && request.resource.data.cancelRequestNote.size() <= 500
+          && request.resource.data.cancelRequestedBy == 'customer'
+          && request.resource.data.customerRequestType == 'Cancellation'
+          && request.resource.data.customerRequestStatus == 'Pending'
+          && !(resource.data.get('status', '') in [
+            'Delivered',
+            'Cancelled',
+            'Returned',
+            'Shipped'
+          ])
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'cancelRequestStatus',
+            'cancelRequestReason',
+            'cancelRequestNote',
+            'cancelRequestedAt',
+            'cancelRequestedBy',
+            'customerRequestType',
+            'customerRequestStatus',
+            'customerRequestUpdatedAt',
+            'updatedAt'
+          ]);
+      }
+
+      function validCustomerReturnRequest() {
+        return customerOwnsOrder()
+          && request.resource.data.customerId == resource.data.customerId
+          && resource.data.get('returnRequestStatus', '') == ''
+          && resource.data.get('status', '') == 'Delivered'
+          && request.resource.data.returnRequestStatus == 'Pending'
+          && request.resource.data.returnRequestReason is string
+          && request.resource.data.returnRequestReason.size() > 0
+          && request.resource.data.returnRequestReason.size() <= 120
+          && request.resource.data.returnRequestNote is string
+          && request.resource.data.returnRequestNote.size() <= 500
+          && request.resource.data.returnRequestedBy == 'customer'
+          && request.resource.data.customerRequestType == 'Return'
+          && request.resource.data.customerRequestStatus == 'Pending'
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'returnRequestStatus',
+            'returnRequestReason',
+            'returnRequestNote',
+            'returnRequestedAt',
+            'returnRequestedBy',
+            'customerRequestType',
+            'customerRequestStatus',
+            'customerRequestUpdatedAt',
+            'updatedAt'
+          ]);
+      }
+
+      function validSellerCancellationReview() {
+        return sellerOwnsOrder()
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.sellerIds == resource.data.sellerIds
+          && resource.data.get('cancelRequestStatus', '') == 'Pending'
+          && request.resource.data.cancelReviewedBySellerId == request.auth.uid
+          && request.resource.data.cancelSellerNote is string
+          && request.resource.data.cancelSellerNote.size() <= 500
+          && request.resource.data.customerRequestType == 'Cancellation'
+          && request.resource.data.customerRequestStatus
+            == request.resource.data.cancelRequestStatus
+          && (
+            (
+              request.resource.data.cancelRequestStatus == 'Rejected'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'customerRequestType',
+                'customerRequestStatus',
+                'customerRequestUpdatedAt',
+                'cancelRequestStatus',
+                'cancelReviewedAt',
+                'cancelReviewedBySellerId',
+                'cancelSellerNote',
+                'updatedAt'
+              ])
+            )
+            ||
+            (
+              request.resource.data.cancelRequestStatus == 'Approved'
+              && request.resource.data.status == 'Cancelled'
+              && request.resource.data.trackingStatus == 'Cancelled'
+              && request.resource.data.trackingEnabled == false
+              && request.resource.data.cancelledBy == 'seller'
+              && request.resource.data.refundStatus in ['Pending', 'Not Required']
+              && request.resource.data.refundSource == 'Cancellation'
+              && request.resource.data.refundAmount == 0
+              && (
+                (request.resource.data.refundStatus == 'Pending'
+                  && request.resource.data.refundReason
+                    == 'Cancellation approved by seller')
+                ||
+                (request.resource.data.refundStatus == 'Not Required'
+                  && request.resource.data.refundReason
+                    == 'No completed prepaid payment found')
+              )
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'customerRequestType',
+                'customerRequestStatus',
+                'customerRequestUpdatedAt',
+                'cancelRequestStatus',
+                'cancelReviewedAt',
+                'cancelReviewedBySellerId',
+                'cancelSellerNote',
+                'status',
+                'trackingStatus',
+                'trackingEnabled',
+                'cancelledAt',
+                'cancelledBy',
+                'refundStatus',
+                'refundSource',
+                'refundReason',
+                'refundRequestedAt',
+                'refundAmount',
+                'updatedAt'
+              ])
+            )
+          );
+      }
+
+      function validSellerReturnReview() {
+        return sellerOwnsOrder()
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.sellerIds == resource.data.sellerIds
+          && resource.data.get('returnRequestStatus', '') == 'Pending'
+          && request.resource.data.returnReviewedBySellerId == request.auth.uid
+          && request.resource.data.returnSellerNote is string
+          && request.resource.data.returnSellerNote.size() <= 500
+          && request.resource.data.customerRequestType == 'Return'
+          && request.resource.data.customerRequestStatus
+            == request.resource.data.returnRequestStatus
+          && (
+            (
+              request.resource.data.returnRequestStatus == 'Rejected'
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'customerRequestType',
+                'customerRequestStatus',
+                'customerRequestUpdatedAt',
+                'returnRequestStatus',
+                'returnReviewedAt',
+                'returnReviewedBySellerId',
+                'returnSellerNote',
+                'updatedAt'
+              ])
+            )
+            ||
+            (
+              request.resource.data.returnRequestStatus == 'Approved'
+              && request.resource.data.returnStatus == 'Approved'
+              && request.resource.data.refundStatus == 'Pending'
+              && request.resource.data.refundSource == 'Return'
+              && request.resource.data.refundReason
+                == 'Return approved by seller'
+              && request.resource.data.refundAmount == 0
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'customerRequestType',
+                'customerRequestStatus',
+                'customerRequestUpdatedAt',
+                'returnRequestStatus',
+                'returnReviewedAt',
+                'returnReviewedBySellerId',
+                'returnSellerNote',
+                'returnStatus',
+                'returnApprovedAt',
+                'refundStatus',
+                'refundSource',
+                'refundReason',
+                'refundRequestedAt',
+                'refundAmount',
+                'updatedAt'
+              ])
+            )
+          );
+      }
+
+      function pickupPrivateExists() {
+        return exists(
+          /databases/$(database)/documents/orders/$(orderId)/pickup_private/verification
+        );
+      }
+
+      function pickupPrivateData() {
+        return get(
+          /databases/$(database)/documents/orders/$(orderId)/pickup_private/verification
+        ).data;
+      }
+
+      function pickupConfirmationExists() {
+        return exists(
+          /databases/$(database)/documents/orders/$(orderId)/pickup_confirmations/current
+        );
+      }
+
+      function pickupConfirmationData() {
+        return get(
+          /databases/$(database)/documents/orders/$(orderId)/pickup_confirmations/current
+        ).data;
+      }
+
+      function validSellerPickupConfirmation() {
+        return sellerOwnsOrder()
+          && resource.data.get('pickupConfirmed', false) != true
+          && resource.data.driverId is string
+          && resource.data.driverId.size() > 0
+          && pickupPrivateExists()
+          && pickupConfirmationExists()
+          && pickupPrivateData().isActive == true
+          && pickupPrivateData().driverId == resource.data.driverId
+          && pickupConfirmationData().sellerId == request.auth.uid
+          && pickupConfirmationData().driverId == resource.data.driverId
+          && pickupConfirmationData().method in ['code', 'qr']
+          && (
+            (
+              pickupConfirmationData().method == 'code'
+              && pickupConfirmationData().proof
+                == pickupPrivateData().pickupCode
+            )
+            ||
+            (
+              pickupConfirmationData().method == 'qr'
+              && pickupConfirmationData().proof
+                == pickupPrivateData().qrPayload
+            )
+          );
+      }
+
       // Keep Admin read isolated from customer/seller/driver checks.
       // Some older orders may not contain sellerIds/driverId; evaluating those
       // role checks in the same expression can deny an otherwise valid Admin
@@ -1299,6 +1532,41 @@ service cloud.firestore {
           'updatedAt'
         ]);
 
+      // Customer may submit one cancellation or return request using only
+      // the dedicated request fields.
+      allow update: if validCustomerCancellationRequest()
+        || validCustomerReturnRequest();
+
+      // Seller may review a pending customer request for an order they own.
+      // Refund amount stays at 0 here; Admin validates and selects the final
+      // amount before money is actually marked as refunded.
+      allow update: if validSellerCancellationReview()
+        || validSellerReturnReview();
+
+      allow update: if validSellerPickupConfirmation()
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.sellerIds == resource.data.sellerIds
+        && request.resource.data.driverId == resource.data.driverId
+        && request.resource.data.status == 'Shipped'
+        && request.resource.data.trackingStatus == 'Picked Up'
+        && request.resource.data.pickupConfirmed == true
+        && request.resource.data.pickupConfirmedBySellerId == request.auth.uid
+        && request.resource.data.pickupConfirmationDriverId
+          == resource.data.driverId
+        && request.resource.data.pickupConfirmationMethod
+          == pickupConfirmationData().method
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'trackingStatus',
+          'updatedAt',
+          'deliveryStartedAt',
+          'pickupConfirmed',
+          'pickupConfirmedAt',
+          'pickupConfirmedBySellerId',
+          'pickupConfirmationDriverId',
+          'pickupConfirmationMethod'
+        ]);
+
       allow update: if sellerOwnsOrder()
         && request.resource.data.customerId == resource.data.customerId
         && request.resource.data.sellerIds == resource.data.sellerIds
@@ -1317,7 +1585,16 @@ service cloud.firestore {
           'driverLat',
           'driverLng',
           'driverLocationUpdatedAt'
-        ]);
+        ])
+        && (
+          resource.data.get('driverId', '') == ''
+          || resource.data.get('pickupConfirmed', false) == true
+          || request.resource.data.get('status', '') != 'Shipped'
+        )
+        && (
+          request.resource.data.get('trackingStatus', '') != 'Picked Up'
+          || resource.data.get('pickupConfirmed', false) == true
+        );
 
       allow update: if driverOwnsOrder()
         && request.resource.data.customerId == resource.data.customerId
@@ -1349,6 +1626,145 @@ service cloud.firestore {
             && request.resource.data.deliveredByDriverId == request.auth.uid));
 
       allow delete: if isAdmin();
+
+      match /pickup_private/{documentId} {
+        function parentOrder() {
+          return get(
+            /databases/$(database)/documents/orders/$(orderId)
+          ).data;
+        }
+
+        function assignedDeliveryPerson() {
+          return isActiveDriver()
+            && parentOrder().driverId is string
+            && parentOrder().driverId == request.auth.uid;
+        }
+
+        allow read: if isAdmin()
+          || assignedDeliveryPerson();
+
+        function validPickupPrivateWrite() {
+          return documentId == 'verification'
+            && assignedDeliveryPerson()
+            && parentOrder().get('pickupConfirmed', false) != true
+            && request.resource.data.orderId == orderId
+            && request.resource.data.driverId == request.auth.uid
+            && request.resource.data.pickupCode is string
+            && request.resource.data.pickupCode.matches('^[0-9]{6}$')
+            && request.resource.data.qrPayload is string
+            && request.resource.data.qrPayload.size() >= 20
+            && request.resource.data.qrPayload.size() <= 300
+            && request.resource.data.qrPayload.matches('^NRD_PICKUP[|].+')
+            && request.resource.data.isActive == true
+            && request.resource.data.createdAt is string
+            && request.resource.data.updatedAt is string
+            && request.resource.data.keys().hasOnly([
+              'orderId',
+              'driverId',
+              'pickupCode',
+              'qrPayload',
+              'isActive',
+              'createdAt',
+              'updatedAt'
+            ]);
+        }
+
+        allow create: if validPickupPrivateWrite();
+
+        allow update: if validPickupPrivateWrite()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'orderId',
+            'driverId',
+            'pickupCode',
+            'qrPayload',
+            'isActive',
+            'createdAt',
+            'updatedAt'
+          ]);
+
+        allow delete: if isAdmin()
+          || assignedDeliveryPerson();
+      }
+
+      match /pickup_confirmations/{documentId} {
+        function parentOrder() {
+          return get(
+            /databases/$(database)/documents/orders/$(orderId)
+          ).data;
+        }
+
+        function sellerOwnsParentOrder() {
+          return isActiveSeller()
+            && parentOrder().sellerIds is list
+            && request.auth.uid in parentOrder().sellerIds;
+        }
+
+        function privateVerificationExists() {
+          return exists(
+            /databases/$(database)/documents/orders/$(orderId)/pickup_private/verification
+          );
+        }
+
+        function privateVerification() {
+          return get(
+            /databases/$(database)/documents/orders/$(orderId)/pickup_private/verification
+          ).data;
+        }
+
+        allow read: if isAdmin();
+
+        function validPickupConfirmationWrite() {
+          return documentId == 'current'
+            && sellerOwnsParentOrder()
+            && parentOrder().get('pickupConfirmed', false) != true
+            && parentOrder().driverId is string
+            && parentOrder().driverId.size() > 0
+            && privateVerificationExists()
+            && privateVerification().isActive == true
+            && privateVerification().driverId == parentOrder().driverId
+            && request.resource.data.orderId == orderId
+            && request.resource.data.sellerId == request.auth.uid
+            && request.resource.data.driverId == parentOrder().driverId
+            && request.resource.data.method in ['code', 'qr']
+            && request.resource.data.proof is string
+            && request.resource.data.confirmedAt is string
+            && request.resource.data.keys().hasOnly([
+              'orderId',
+              'sellerId',
+              'driverId',
+              'method',
+              'proof',
+              'confirmedAt'
+            ])
+            && (
+              (
+                request.resource.data.method == 'code'
+                && request.resource.data.proof
+                  == privateVerification().pickupCode
+              )
+              ||
+              (
+                request.resource.data.method == 'qr'
+                && request.resource.data.proof
+                  == privateVerification().qrPayload
+              )
+            );
+        }
+
+        allow create: if validPickupConfirmationWrite();
+
+        allow update: if validPickupConfirmationWrite()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'orderId',
+            'sellerId',
+            'driverId',
+            'method',
+            'proof',
+            'confirmedAt'
+          ]);
+
+        allow delete: if isAdmin();
+      }
     }
 
 
