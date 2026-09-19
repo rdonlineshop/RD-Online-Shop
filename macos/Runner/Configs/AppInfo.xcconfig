@@ -8,7 +8,7 @@
 PRODUCT_NAME = rd_online_shop_new
 
 // The application's bundle identifier
-PRODUCT_BUNDLE_IDENTIFIER = com.example.rdOnlineShopNew
+PRODUCT_BUNDLE_IDENTIFIER = com.rdnepal.app
 
 // The copyright displayed in application information
 PRODUCT_COPYRIGHT = Copyright © 2026 com.example. All rights reserved.

@@ -69,11 +69,11 @@ class DefaultFirebaseOptions {
 
   static const FirebaseOptions macos = FirebaseOptions(
     apiKey: 'AIzaSyBqSnm5SVJsSyuwm3zb_7PcreDKYH-viAE',
-    appId: '1:993981240325:ios:1f06d9539c18db5f42b86c',
+    appId: '1:993981240325:ios:054abc64000d6d3f42b86c',
     messagingSenderId: '993981240325',
     projectId: 'rd-online-shop-d7c72',
     storageBucket: 'rd-online-shop-d7c72.firebasestorage.app',
-    iosBundleId: 'com.example.rdOnlineShopNew',
+    iosBundleId: 'com.rdnepal.app',
   );
 
   static const FirebaseOptions windows = FirebaseOptions(
