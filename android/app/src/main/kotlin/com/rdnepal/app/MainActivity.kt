@@ -1,4 +1,4 @@
-package com.example.rd_online_shop_new
+package com.rdnepal.app
 
 import android.content.Intent
 import android.os.Bundle

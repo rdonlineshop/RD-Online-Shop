@@ -18,7 +18,7 @@ plugins {
 }
 
 android {
-    namespace = "com.example.rd_online_shop_new"
+    namespace = "com.rdnepal.app"
 
     // geocoding_android लाई Android API 34 वा माथि चाहिन्छ।
     compileSdk = 36
@@ -31,7 +31,7 @@ android {
     }
 
     defaultConfig {
-        applicationId = "com.example.rd_online_shop_new"
+        applicationId = "com.rdnepal.app"
         minSdk = flutter.minSdkVersion
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
