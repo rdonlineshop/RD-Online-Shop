@@ -1172,7 +1172,7 @@ class _HomePageState extends State<HomePage> {
     final bool desktop = _isDesktop(context);
 
     return Container(
-      height: desktop ? 118 : 150,
+      height: desktop ? 118 : 158,
       color: _pageBg,
       child: Stack(
         fit: StackFit.expand,
@@ -1190,21 +1190,21 @@ class _HomePageState extends State<HomePage> {
             ),
           ),
           Positioned(
-            left: desktop ? 28 : 12,
-            top: 8,
-            width: desktop ? 130 : 136,
-            height: desktop ? 70 : 78,
+            left: desktop ? 28 : 2,
+            top: desktop ? 8 : -18,
+            width: desktop ? 130 : 146,
+            height: desktop ? 70 : 136,
             child: ClipRRect(
-              borderRadius: BorderRadius.circular(28),
+              borderRadius: BorderRadius.circular(desktop ? 28 : 18),
               child: Image.asset(
                 'assets/images/rd_logo.png',
                 fit: BoxFit.contain,
-                alignment: Alignment.centerLeft,
+                alignment: Alignment.topLeft,
                 errorBuilder: (_, __, ___) {
                   return const Align(
                     alignment: Alignment.centerLeft,
                     child: Text(
-                      'RD ONLINE\nSHOPPING',
+                      'NRD ONLINE\nSHOP',
                       style: TextStyle(
                         color: Colors.white,
                         fontSize: 24,

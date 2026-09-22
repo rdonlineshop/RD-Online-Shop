@@ -56,7 +56,7 @@ class RDOnlineShop extends StatelessWidget {
       scaffoldMessengerKey:
           NotificationService.messengerKey,
       debugShowCheckedModeBanner: false,
-      title: 'RD Online Shop',
+      title: 'NRD Online Shop',
       theme: ThemeData(
         useMaterial3: true,
         colorSchemeSeed: Colors.red,
@@ -171,23 +171,94 @@ class _StartupLoadingPage extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return const Scaffold(
-      body: Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: <Widget>[
-            CircularProgressIndicator(),
-            SizedBox(height: 18),
-            Text(
-              'RD Online Shop',
-              style: TextStyle(
-                fontSize: 24,
-                fontWeight: FontWeight.bold,
+    final double logoSize =
+        MediaQuery.sizeOf(context).shortestSide < 500 ? 112 : 132;
+
+    return Scaffold(
+      body: DecoratedBox(
+        decoration: const BoxDecoration(
+          gradient: LinearGradient(
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+            colors: <Color>[
+              Color(0xFFF4F8FF),
+              Colors.white,
+              Color(0xFFFFF5F6),
+            ],
+          ),
+        ),
+        child: SafeArea(
+          child: Center(
+            child: SingleChildScrollView(
+              padding: const EdgeInsets.symmetric(
+                horizontal: 32,
+                vertical: 24,
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: <Widget>[
+                  Image.asset(
+                    'assets/icon/logo.png',
+                    width: logoSize,
+                    height: logoSize,
+                    fit: BoxFit.contain,
+                    errorBuilder: (
+                      BuildContext context,
+                      Object error,
+                      StackTrace? stackTrace,
+                    ) {
+                      return const SizedBox.shrink();
+                    },
+                  ),
+                  const SizedBox(height: 20),
+                  const Text(
+                    'NRD Online Shop',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 28,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: 0.3,
+                      color: Color(0xFF111827),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  Container(
+                    width: 88,
+                    height: 3,
+                    decoration: BoxDecoration(
+                      borderRadius: BorderRadius.circular(99),
+                      gradient: const LinearGradient(
+                        colors: <Color>[
+                          Color(0xFF0066FF),
+                          Color(0xFFE60012),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: 14),
+                  const Text(
+                    'From Nepal, Connecting to the World.',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w500,
+                      letterSpacing: 0.15,
+                      color: Color(0xFF5B6472),
+                    ),
+                  ),
+                  const SizedBox(height: 28),
+                  const SizedBox(
+                    width: 28,
+                    height: 28,
+                    child: CircularProgressIndicator(
+                      strokeWidth: 2.8,
+                      color: Color(0xFF0066FF),
+                    ),
+                  ),
+                ],
               ),
             ),
-            SizedBox(height: 8),
-            Text('Starting application...'),
-          ],
+          ),
         ),
       ),
     );
@@ -207,7 +278,7 @@ class _StartupErrorPage extends StatelessWidget {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('RD Online Shop'),
+        title: const Text('NRD Online Shop'),
       ),
       body: Center(
         child: ConstrainedBox(

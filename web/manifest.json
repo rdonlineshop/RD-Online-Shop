@@ -1,11 +1,11 @@
-{
-    "name": "RD Online Shop",
-    "short_name": "RD Online Shop",
+﻿{
+    "name": "NRD Online Shop",
+    "short_name": "NRD Online Shop",
     "start_url": ".",
     "display": "standalone",
     "background_color": "#0175C2",
     "theme_color": "#0175C2",
-    "description": "RD Online Shop - shopping, seller, delivery and ride services.",
+    "description": "NRD Online Shop - shopping, seller, delivery and ride services.",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [
@@ -42,3 +42,4 @@
         }
     }
 }
+
