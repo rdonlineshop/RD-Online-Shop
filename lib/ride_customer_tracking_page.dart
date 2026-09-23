@@ -907,12 +907,11 @@ class RideCustomerTrackingPage extends StatelessWidget {
           permission == LocationPermission.deniedForever) {
         return null;
       }
-
-       return Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-        ),
-      );
+return await Geolocator.getCurrentPosition(
+  locationSettings: const LocationSettings(
+    accuracy: LocationAccuracy.high,
+  ),
+);
     } catch (_) {
       return null;
     }

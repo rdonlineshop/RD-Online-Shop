@@ -44,8 +44,7 @@ flutter:
   uses-material-design: true
 
   assets:
-    - assets/images/rd_logo.png
-    - assets/images/rd_offer_banner.png
+    - assets/images/
     - assets/products/
     - assets/categories/
     - assets/sounds/

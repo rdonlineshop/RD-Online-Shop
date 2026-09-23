@@ -11,6 +11,7 @@ import 'customer_dashboard_page.dart';
 import 'data/cart_data.dart';
 import 'data/product_data.dart';
 import 'delivery_person_auth_page.dart';
+
 import 'order_data.dart';
 import 'customer_notifications_page.dart';
 import 'product_card.dart';
@@ -56,6 +57,23 @@ class _HomePageState extends State<HomePage> {
       TextEditingController();
 
   final stt.SpeechToText speech = stt.SpeechToText();
+
+  final PageController _bannerController = PageController();
+  Timer? _bannerTimer;
+  int _currentBannerIndex = 0;
+
+  final List<String> _homeBanners = <String>[
+    'assets/images/nrd_banner_1.png',
+    'assets/images/nrd_banner_2.png',
+    'assets/images/nrd_banner_3.png',
+    'assets/images/nrd_banner_4.png',
+    'assets/images/nrd_banner_5.png',
+    'assets/images/nrd_banner_6.png',
+    'assets/images/nrd_banner_7.png',
+    'assets/images/nrd_banner_8.png',
+    'assets/images/nrd_banner_9.png',
+    'assets/images/nrd_banner_10.png',
+  ];
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
       _productsSubscription;
@@ -370,6 +388,31 @@ class _HomePageState extends State<HomePage> {
     _loadCart();
     _listenToProducts();
     _listenToCustomerNotifications();
+    _startBannerAutoPlay();
+  }
+
+  void _startBannerAutoPlay() {
+    _bannerTimer?.cancel();
+
+    _bannerTimer = Timer.periodic(
+      const Duration(seconds: 5),
+      (_) {
+        if (!mounted ||
+            !_bannerController.hasClients ||
+            _homeBanners.isEmpty) {
+          return;
+        }
+
+        _currentBannerIndex =
+            (_currentBannerIndex + 1) % _homeBanners.length;
+
+        _bannerController.animateToPage(
+          _currentBannerIndex,
+          duration: const Duration(milliseconds: 500),
+          curve: Curves.easeInOut,
+        );
+      },
+    );
   }
 
   Future<void> _listenToCustomerNotifications() async {
@@ -1039,6 +1082,8 @@ class _HomePageState extends State<HomePage> {
     speech.stop();
     _productsSubscription?.cancel();
     _notificationOrdersSubscription?.cancel();
+    _bannerTimer?.cancel();
+    _bannerController.dispose();
 
     searchController
       ..removeListener(_refreshProducts)
@@ -1057,7 +1102,7 @@ class _HomePageState extends State<HomePage> {
 
   Widget _contentWidth(
     Widget child, {
-    double maxWidth = 1180,
+    double maxWidth = double.infinity,
   }) {
     return Center(
       child: ConstrainedBox(
@@ -1068,57 +1113,6 @@ class _HomePageState extends State<HomePage> {
   }
 
 
-  void _openAllCategories() {
-    showModalBottomSheet<void>(
-      context: context,
-      isScrollControlled: true,
-      showDragHandle: true,
-      builder: (BuildContext sheetContext) {
-        return SafeArea(
-          child: Padding(
-            padding: const EdgeInsets.fromLTRB(16, 0, 16, 20),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: <Widget>[
-                const Text(
-                  'All Categories',
-                  style: TextStyle(
-                    fontSize: 20,
-                    fontWeight: FontWeight.w800,
-                  ),
-                ),
-                const SizedBox(height: 12),
-                Flexible(
-                  child: SingleChildScrollView(
-                    child: Wrap(
-                      spacing: 8,
-                      runSpacing: 8,
-                      children: categories.map((String category) {
-                        final bool selected = selectedCategory == category;
-                        return ChoiceChip(
-                          selected: selected,
-                          label: Text(category),
-                          selectedColor: _rdRed.withValues(alpha: 0.14),
-                          side: BorderSide(
-                            color: selected ? _rdRed : Colors.grey.shade300,
-                          ),
-                          onSelected: (_) {
-                            setState(() => selectedCategory = category);
-                            Navigator.pop(sheetContext);
-                          },
-                        );
-                      }).toList(),
-                    ),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        );
-      },
-    );
-  }
 
   Widget _roundAction({
     required IconData icon,
@@ -1379,7 +1373,7 @@ class _HomePageState extends State<HomePage> {
   Widget _searchBox() {
     return _contentWidth(
       Padding(
-      padding: const EdgeInsets.fromLTRB(18, 8, 18, 12),
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
       child: Material(
         elevation: 5,
         shadowColor: Colors.black12,
@@ -1534,33 +1528,51 @@ class _HomePageState extends State<HomePage> {
     if (selectedCategory == 'All') {
       return _contentWidth(
         Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        child: ClipRRect(
-          borderRadius: BorderRadius.circular(24),
-          child: AspectRatio(
-            aspectRatio: desktop ? 5.0 : 3.0,
-            child: Image.asset(
-              'assets/images/rd_offer_banner.png',
-              width: double.infinity,
-              fit: BoxFit.cover,
-              errorBuilder: (_, __, ___) {
-                return Container(
-                  alignment: Alignment.center,
-                  color: _rdBlack,
-                  child: const Text(
-                    'SPECIAL OFFER • SHOP MORE, SAVE MORE',
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: Colors.white,
-                      fontWeight: FontWeight.w900,
-                      fontSize: 18,
-                    ),
-                  ),
-                );
-              },
+          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+          child: ClipRRect(
+            borderRadius: BorderRadius.circular(24),
+            child: SizedBox(
+              height: desktop ? 260 : 200,
+              child: PageView.builder(
+                controller: _bannerController,
+                itemCount: _homeBanners.length,
+                onPageChanged: (int index) {
+                  _currentBannerIndex = index;
+                },
+                itemBuilder: (BuildContext context, int index) {
+                  return Image.asset(
+                    _homeBanners[index],
+                    width: double.infinity,
+                    height: double.infinity,
+                    fit: BoxFit.cover,
+                    errorBuilder: (_, __, ___) {
+                      return Image.asset(
+                        'assets/images/rd_offer_banner.png',
+                        width: double.infinity,
+                        height: double.infinity,
+                        fit: BoxFit.cover,
+                        errorBuilder: (_, __, ___) {
+                          return Container(
+                            alignment: Alignment.center,
+                            color: _rdBlack,
+                            child: const Text(
+                              'NRD Online Shop',
+                              textAlign: TextAlign.center,
+                              style: TextStyle(
+                                color: Colors.white,
+                                fontWeight: FontWeight.w900,
+                                fontSize: 20,
+                              ),
+                            ),
+                          );
+                        },
+                      );
+                    },
+                  );
+                },
+              ),
             ),
           ),
-        ),
         ),
       );
     }
@@ -1571,131 +1583,131 @@ class _HomePageState extends State<HomePage> {
 
     return _contentWidth(
       Padding(
-      padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-      child: Container(
-        height: desktop ? 180 : 175,
-        decoration: BoxDecoration(
-          borderRadius: BorderRadius.circular(24),
-          gradient: LinearGradient(
-            colors: <Color>[
-              data.startColor,
-              data.endColor,
-            ],
-            begin: Alignment.centerLeft,
-            end: Alignment.centerRight,
-          ),
-          boxShadow: const <BoxShadow>[
-            BoxShadow(
-              color: Colors.black26,
-              blurRadius: 10,
-              offset: Offset(0, 4),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
+        child: Container(
+          height: desktop ? 180 : 175,
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(24),
+            gradient: LinearGradient(
+              colors: <Color>[
+                data.startColor,
+                data.endColor,
+              ],
+              begin: Alignment.centerLeft,
+              end: Alignment.centerRight,
             ),
-          ],
-        ),
-        clipBehavior: Clip.antiAlias,
-        child: Stack(
-          children: <Widget>[
-            Positioned(
-              right: -18,
-              top: -18,
-              child: Container(
-                width: 178,
-                height: 178,
-                decoration: BoxDecoration(
-                  color: Colors.white.withValues(alpha: 0.16),
-                  shape: BoxShape.circle,
-                ),
+            boxShadow: const <BoxShadow>[
+              BoxShadow(
+                color: Colors.black26,
+                blurRadius: 10,
+                offset: Offset(0, 4),
               ),
-            ),
-            Positioned(
-              right: 14,
-              top: 16,
-              bottom: 16,
-              width: 122,
-              child: Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.white,
-                  borderRadius: BorderRadius.circular(22),
-                  boxShadow: const <BoxShadow>[
-                    BoxShadow(
-                      color: Colors.black26,
-                      blurRadius: 8,
-                      offset: Offset(0, 3),
-                    ),
-                  ],
-                ),
-                child: ClipRRect(
-                  borderRadius: BorderRadius.circular(16),
-                  child: Image.asset(
-                    imagePath,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) {
-                      return Icon(
-                        data.primaryIcon,
-                        size: 58,
-                        color: data.startColor,
-                      );
-                    },
+            ],
+          ),
+          clipBehavior: Clip.antiAlias,
+          child: Stack(
+            children: <Widget>[
+              Positioned(
+                right: -18,
+                top: -18,
+                child: Container(
+                  width: 178,
+                  height: 178,
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.16),
+                    shape: BoxShape.circle,
                   ),
                 ),
               ),
-            ),
-            Positioned.fill(
-              right: 142,
-              child: Padding(
-                padding: const EdgeInsets.fromLTRB(18, 16, 8, 14),
-                child: Column(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      data.title,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 23,
-                        fontWeight: FontWeight.w900,
+              Positioned(
+                right: 14,
+                top: 16,
+                bottom: 16,
+                width: 122,
+                child: Container(
+                  padding: const EdgeInsets.all(8),
+                  decoration: BoxDecoration(
+                    color: Colors.white,
+                    borderRadius: BorderRadius.circular(22),
+                    boxShadow: const <BoxShadow>[
+                      BoxShadow(
+                        color: Colors.black26,
+                        blurRadius: 8,
+                        offset: Offset(0, 3),
                       ),
+                    ],
+                  ),
+                  child: ClipRRect(
+                    borderRadius: BorderRadius.circular(16),
+                    child: Image.asset(
+                      imagePath,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) {
+                        return Icon(
+                          data.primaryIcon,
+                          size: 58,
+                          color: data.startColor,
+                        );
+                      },
                     ),
-                    const SizedBox(height: 7),
-                    Text(
-                      data.subtitle,
-                      maxLines: 2,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        color: Colors.white,
-                        fontSize: 13,
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
-                    const SizedBox(height: 12),
-                    Container(
-                      padding: const EdgeInsets.symmetric(
-                        horizontal: 14,
-                        vertical: 8,
-                      ),
-                      decoration: BoxDecoration(
-                        color: _rdBlack,
-                        borderRadius: BorderRadius.circular(10),
-                      ),
-                      child: const Text(
-                        'SHOP NOW',
-                        style: TextStyle(
+                  ),
+                ),
+              ),
+              Positioned.fill(
+                right: 142,
+                child: Padding(
+                  padding: const EdgeInsets.fromLTRB(18, 16, 8, 14),
+                  child: Column(
+                    mainAxisAlignment: MainAxisAlignment.center,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
+                        data.title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
                           color: Colors.white,
-                          fontSize: 12,
+                          fontSize: 23,
                           fontWeight: FontWeight.w900,
                         ),
                       ),
-                    ),
-                  ],
+                      const SizedBox(height: 7),
+                      Text(
+                        data.subtitle,
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 13,
+                          fontWeight: FontWeight.w600,
+                        ),
+                      ),
+                      const SizedBox(height: 12),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 14,
+                          vertical: 8,
+                        ),
+                        decoration: BoxDecoration(
+                          color: _rdBlack,
+                          borderRadius: BorderRadius.circular(10),
+                        ),
+                        child: const Text(
+                          'SHOP NOW',
+                          style: TextStyle(
+                            color: Colors.white,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w900,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                 ),
               ),
-            ),
-          ],
+            ],
+          ),
         ),
-      ),
       ),
     );
   }
@@ -1873,12 +1885,7 @@ class _HomePageState extends State<HomePage> {
                   active: true,
                   iconColor: _rdRed,
                 ),
-                item(
-                  Icons.grid_view_rounded,
-                  'Categories',
-                  _openAllCategories,
-                  iconColor: const Color(0xFF2F3640),
-                ),
+
                 item(
                   Icons.directions_car_filled_rounded,
                   'RD Ride',
