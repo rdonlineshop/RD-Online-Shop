@@ -69,10 +69,6 @@ class _HomePageState extends State<HomePage> {
     'assets/images/nrd_banner_4.png',
     'assets/images/nrd_banner_5.png',
     'assets/images/nrd_banner_6.png',
-    'assets/images/nrd_banner_7.png',
-    'assets/images/nrd_banner_8.png',
-    'assets/images/nrd_banner_9.png',
-    'assets/images/nrd_banner_10.png',
   ];
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
@@ -369,8 +365,8 @@ class _HomePageState extends State<HomePage> {
 
       default:
         return const _BannerData(
-          title: 'RD ONLINE SHOP',
-          subtitle: 'Shop products from RD Online Shop',
+          title: 'NRD ONLINE SHOP',
+          subtitle: 'Shop products from NRD Online Shop',
           primaryIcon: Icons.shopping_bag,
           startColor: Color(0xFFD51F13),
           endColor: Color(0xFFFF5A36),
@@ -632,7 +628,7 @@ class _HomePageState extends State<HomePage> {
                     ? data['description']
                         .toString()
                         .trim()
-                    : 'Quality product available at RD Online Shop.';
+                    : 'Quality product available at NRD Online Shop.';
 
             final String sellerId =
                 data['sellerId']
@@ -1057,25 +1053,7 @@ class _HomePageState extends State<HomePage> {
     );
   }
 
-  int _gridColumns(double width) {
-    if (width >= 1400) {
-      return 6;
-    }
 
-    if (width >= 1100) {
-      return 5;
-    }
-
-    if (width >= 850) {
-      return 4;
-    }
-
-    if (width >= 600) {
-      return 3;
-    }
-
-    return 2;
-  }
 
   @override
   void dispose() {
@@ -1185,7 +1163,7 @@ class _HomePageState extends State<HomePage> {
           ),
           Positioned(
             left: desktop ? 28 : 2,
-            top: desktop ? 8 : -18,
+            top: desktop ? 8 : 0,
             width: desktop ? 130 : 146,
             height: desktop ? 70 : 136,
             child: ClipRRect(
@@ -1373,7 +1351,7 @@ class _HomePageState extends State<HomePage> {
   Widget _searchBox() {
     return _contentWidth(
       Padding(
-      padding: const EdgeInsets.fromLTRB(18, 0, 18, 4),
+      padding: const EdgeInsets.fromLTRB(18, 0, 18, 2),
       child: Material(
         elevation: 5,
         shadowColor: Colors.black12,
@@ -1477,7 +1455,7 @@ class _HomePageState extends State<HomePage> {
             const SizedBox(height: 7),
             Text(
               category,
-              maxLines: 1,
+              maxLines: 2,
               overflow: TextOverflow.ellipsis,
               textAlign: TextAlign.center,
               style: TextStyle(
@@ -1497,7 +1475,7 @@ class _HomePageState extends State<HomePage> {
 
     return _contentWidth(
       SizedBox(
-      height: 110,
+      height: 128,
       child: ScrollConfiguration(
         behavior: const MaterialScrollBehavior().copyWith(
           dragDevices: <PointerDeviceKind>{
@@ -1547,7 +1525,7 @@ class _HomePageState extends State<HomePage> {
                     fit: BoxFit.cover,
                     errorBuilder: (_, __, ___) {
                       return Image.asset(
-                        'assets/images/rd_offer_banner.png',
+                        'assets/images/nrd_banner_1.png',
                         width: double.infinity,
                         height: double.infinity,
                         fit: BoxFit.cover,
@@ -1860,11 +1838,11 @@ class _HomePageState extends State<HomePage> {
       alignment: Alignment.bottomCenter,
       heightFactor: 1,
       child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 900),
+        constraints: const BoxConstraints(maxWidth: double.infinity),
         child: SafeArea(
           top: false,
           child: Container(
-            margin: const EdgeInsets.fromLTRB(14, 0, 14, 10),
+            margin: const EdgeInsets.fromLTRB(14, 0, 14, 12),
             decoration: BoxDecoration(
               color: Colors.white,
               borderRadius: BorderRadius.circular(28),
@@ -1964,15 +1942,16 @@ class _HomePageState extends State<HomePage> {
             SliverToBoxAdapter(
               child: _contentWidth(
                 Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 0, 18, 10),
+                  padding: const EdgeInsets.fromLTRB(18, 6, 18, 12),
                   child: Row(
                     children: <Widget>[
                       const Expanded(
                         child: Text(
-                          'Best Selling Products',
+                          'All Products',
                           style: TextStyle(
-                            fontSize: 21,
+                            fontSize: 22,
                             fontWeight: FontWeight.w900,
+                            letterSpacing: 0.2,
                           ),
                         ),
                       ),
@@ -2004,60 +1983,119 @@ class _HomePageState extends State<HomePage> {
                 ),
               )
             else
-              SliverLayoutBuilder(
-                builder: (BuildContext context, constraints) {
-                  final double availableWidth = constraints.crossAxisExtent;
-                  final double contentWidth =
-                      availableWidth > 1180 ? 1180 : availableWidth;
-                  final double sidePadding =
-                      ((availableWidth - contentWidth) / 2) + 14;
-                  final int columns = _gridColumns(contentWidth);
+              SliverToBoxAdapter(
+                child: LayoutBuilder(
+                  builder: (BuildContext context, BoxConstraints constraints) {
+                    final bool desktop = _isDesktop(context);
+                    final double cardWidth = desktop ? 250 : 180;
+                    final int columns = desktop ? 6 : 3;
+                    const double gap = 14;
+                    const double horizontalPadding = 14;
 
-                  return SliverPadding(
-                    padding: EdgeInsets.fromLTRB(
-                      sidePadding,
-                      0,
-                      sidePadding,
-                      8,
-                    ),
-                    sliver: SliverGrid(
-                      gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
-                        crossAxisCount: columns,
-                        crossAxisSpacing: 12,
-                        mainAxisSpacing: 12,
-                        childAspectRatio: contentWidth >= 900 ? 0.78 : 0.66,
-                      ),
-                      delegate: SliverChildBuilderDelegate(
-                        (BuildContext context, int index) {
-                          final Map<String, dynamic> product = filteredProducts[index];
-                          final List<String> images = _collectProductImages(product);
-                          return ProductCard(
-                            compact: true,
-                            productId: product['id']?.toString() ?? '',
-                            sellerId: product['sellerId']?.toString() ?? '',
-                            name: product['name']?.toString() ?? 'Product',
-                            price: product['price']?.toString() ?? 'Rs. 0',
-                            icon: product['icon'] is IconData ? product['icon'] as IconData : Icons.shopping_bag,
-                            category: product['category']?.toString() ?? 'General',
-                            description: product['description']?.toString() ?? 'Quality product available at RD Online Shop.',
-                            imagePath: images.isNotEmpty ? images.first : null,
-                            imagePaths: images,
-                            colorOptions: _stringList(product['colorOptions']),
-                            sizeOptions: _stringList(product['sizeOptions']),
-                            originalPrice: product['originalPrice']?.toString(),
-                            discount: (product['discount'] as num?)?.toInt(),
-                            rating: (product['rating'] as num?)?.toDouble() ?? 0.0,
-                            inStock: product['inStock'] != false,
-                          );
+                    final double gridWidth =
+                        (columns * cardWidth) +
+                        ((columns - 1) * gap) +
+                        (horizontalPadding * 2);
+
+                    return ScrollConfiguration(
+                      behavior: const MaterialScrollBehavior().copyWith(
+                        dragDevices: <PointerDeviceKind>{
+                          PointerDeviceKind.touch,
+                          PointerDeviceKind.mouse,
+                          PointerDeviceKind.trackpad,
+                          PointerDeviceKind.stylus,
                         },
-                        childCount: filteredProducts.length,
                       ),
-                    ),
-                  );
-                },
+                      child: SingleChildScrollView(
+                        scrollDirection: Axis.horizontal,
+                        physics: const BouncingScrollPhysics(),
+                        child: SizedBox(
+                          width: gridWidth,
+                          child: GridView.builder(
+                            shrinkWrap: true,
+                            primary: false,
+                            physics:
+                                const NeverScrollableScrollPhysics(),
+                            padding: const EdgeInsets.fromLTRB(
+                              horizontalPadding,
+                              0,
+                              horizontalPadding,
+                              14,
+                            ),
+                            itemCount: filteredProducts.length,
+                            gridDelegate:
+                                SliverGridDelegateWithFixedCrossAxisCount(
+                              crossAxisCount: columns,
+                              crossAxisSpacing: gap,
+                              mainAxisSpacing: gap,
+                              childAspectRatio:
+                                  desktop ? 0.80 : 0.68,
+                            ),
+                            itemBuilder:
+                                (BuildContext context, int index) {
+                              final Map<String, dynamic> product =
+                                  filteredProducts[index];
+
+                              final List<String> images =
+                                  _collectProductImages(product);
+
+                              return ProductCard(
+                                compact: true,
+                                productId:
+                                    product['id']?.toString() ?? '',
+                                sellerId:
+                                    product['sellerId']?.toString() ?? '',
+                                name:
+                                    product['name']?.toString() ??
+                                        'Product',
+                                price:
+                                    product['price']?.toString() ??
+                                        'Rs. 0',
+                                icon: product['icon'] is IconData
+                                    ? product['icon'] as IconData
+                                    : Icons.shopping_bag,
+                                category:
+                                    product['category']?.toString() ??
+                                        'General',
+                                description:
+                                    product['description']?.toString() ??
+                                        'Quality product available at NRD Online Shop.',
+                                imagePath:
+                                    images.isNotEmpty
+                                        ? images.first
+                                        : null,
+                                imagePaths: images,
+                                colorOptions:
+                                    _stringList(
+                                      product['colorOptions'],
+                                    ),
+                                sizeOptions:
+                                    _stringList(
+                                      product['sizeOptions'],
+                                    ),
+                                originalPrice:
+                                    product['originalPrice']
+                                        ?.toString(),
+                                discount:
+                                    (product['discount'] as num?)
+                                        ?.toInt(),
+                                rating:
+                                    (product['rating'] as num?)
+                                            ?.toDouble() ??
+                                        0.0,
+                                inStock:
+                                    product['inStock'] != false,
+                              );
+                            },
+                          ),
+                        ),
+                      ),
+                    );
+                  },
+                ),
               ),
             SliverToBoxAdapter(child: _benefitStrip()),
-            const SliverToBoxAdapter(child: SizedBox(height: 8)),
+            const SliverToBoxAdapter(child: SizedBox(height: 110)),
           ],
         ),
       ),
