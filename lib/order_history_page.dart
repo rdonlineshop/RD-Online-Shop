@@ -1,11 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'order_data.dart';
-import 'order_details_page.dart';
 import 'tracking/order_tracking_page.dart';
 
 class OrderHistoryPage extends StatefulWidget {
@@ -18,51 +15,53 @@ class OrderHistoryPage extends StatefulWidget {
 
 class _OrderHistoryPageState
     extends State<OrderHistoryPage> {
-  String customerId = '';
-
-  bool isLoadingCustomer = true;
+  bool isLoading = true;
+  String currentCustomerId = '';
 
   @override
   void initState() {
     super.initState();
-
-    _loadCustomerId();
+    _loadOrders();
   }
 
   // =========================================================
-  // LOAD CUSTOMER ID
+  // LOAD ORDERS
   // =========================================================
 
-  Future<void> _loadCustomerId() async {
-    try {
-      final String id = await getOrCreateCustomerId();
+  Future<void> _loadOrders() async {
+    final String customerId =
+        await getOrCreateCustomerId();
 
-      if (!mounted) {
-        return;
-      }
+    await loadOrders();
 
-      setState(() {
-        customerId = id;
-        isLoadingCustomer = false;
-      });
-    } catch (error) {
-      if (!mounted) {
-        return;
-      }
-
-      setState(() {
-        customerId = '';
-        isLoadingCustomer = false;
-      });
-
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(
-            'Could not start customer session: $error',
-          ),
-        ),
-      );
+    if (!mounted) {
+      return;
     }
+
+    setState(() {
+      currentCustomerId = customerId;
+      isLoading = false;
+    });
+  }
+
+  List<Map<String, dynamic>>
+      _currentCustomerOrders() {
+    if (currentCustomerId.trim().isEmpty) {
+      return <Map<String, dynamic>>[];
+    }
+
+    return orderHistory.where(
+      (Map<String, dynamic> order) {
+        final String orderCustomerId =
+            order['customerId']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        return orderCustomerId ==
+            currentCustomerId;
+      },
+    ).toList();
   }
 
   // =========================================================
@@ -85,9 +84,7 @@ class _OrderHistoryPageState
         0;
   }
 
-  double? _toDouble(
-    dynamic value,
-  ) {
+  double? _toDouble(dynamic value) {
     if (value == null) {
       return null;
     }
@@ -115,34 +112,26 @@ class _OrderHistoryPageState
     Map<String, dynamic> order,
   ) {
     final double? latitude =
-        _toDouble(
-      order['customerLat'],
-    );
+        _toDouble(order['customerLat']);
 
     if (latitude != null) {
       return latitude;
     }
 
-    return _toDouble(
-      order['latitude'],
-    );
+    return _toDouble(order['latitude']);
   }
 
   double? _customerLongitude(
     Map<String, dynamic> order,
   ) {
     final double? longitude =
-        _toDouble(
-      order['customerLng'],
-    );
+        _toDouble(order['customerLng']);
 
     if (longitude != null) {
       return longitude;
     }
 
-    return _toDouble(
-      order['longitude'],
-    );
+    return _toDouble(order['longitude']);
   }
 
   String _customerAddress(
@@ -172,36 +161,6 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // CUSTOMER NAME
-  // =========================================================
-
-  String _customerName(
-    Map<String, dynamic> order,
-  ) {
-    final String customerName =
-        order['customerName']
-                ?.toString()
-                .trim() ??
-            '';
-
-    if (customerName.isNotEmpty) {
-      return customerName;
-    }
-
-    final String name =
-        order['name']
-                ?.toString()
-                .trim() ??
-            '';
-
-    if (name.isNotEmpty) {
-      return name;
-    }
-
-    return 'Customer';
-  }
-
-  // =========================================================
   // SELLER IDS
   // =========================================================
 
@@ -215,11 +174,9 @@ class _OrderHistoryPageState
         order['sellerIds'];
 
     if (savedIds is List) {
-      for (final dynamic value
-          in savedIds) {
+      for (final dynamic value in savedIds) {
         final String id =
-            value?.toString().trim() ??
-                '';
+            value?.toString().trim() ?? '';
 
         if (id.isNotEmpty) {
           ids.add(id);
@@ -227,21 +184,19 @@ class _OrderHistoryPageState
       }
     }
 
-    final dynamic items =
-        order['items'];
+    final dynamic items = order['items'];
 
     if (items is List) {
-      for (final dynamic item
-          in items) {
+      for (final dynamic item in items) {
         if (item is Map) {
-          final String sellerId =
+          final String id =
               item['sellerId']
                       ?.toString()
                       .trim() ??
                   '';
 
-          if (sellerId.isNotEmpty) {
-            ids.add(sellerId);
+          if (id.isNotEmpty) {
+            ids.add(id);
           }
         }
       }
@@ -261,7 +216,7 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // LOAD SELLERS
+  // LOAD SELLER INFORMATION
   // =========================================================
 
   Future<List<Map<String, dynamic>>>
@@ -281,8 +236,7 @@ class _OrderHistoryPageState
         final DocumentSnapshot<
                 Map<String, dynamic>>
             document =
-            await FirebaseFirestore
-                .instance
+            await FirebaseFirestore.instance
                 .collection('sellers')
                 .doc(sellerId)
                 .get();
@@ -302,7 +256,7 @@ class _OrderHistoryPageState
           },
         );
       } catch (_) {
-        // Continue with other sellers.
+        // Ignore one seller read failure.
       }
     }
 
@@ -310,21 +264,15 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // CLEAN PHONE
+  // PHONE
   // =========================================================
 
-  String _cleanPhone(
-    String phone,
-  ) {
+  String _cleanPhone(String phone) {
     return phone
         .trim()
         .replaceAll(' ', '')
         .replaceAll('-', '');
   }
-
-  // =========================================================
-  // CALL
-  // =========================================================
 
   Future<void> _callPhone(
     String phone,
@@ -409,20 +357,16 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // MAP
+  // OPEN MAP
   // =========================================================
 
   Future<void> _openMap(
     double latitude,
     double longitude,
   ) async {
-    final Uri uri = Uri.https(
-      'www.google.com',
-      '/maps/search/',
-      <String, String>{
-        'api': '1',
-        'query': '$latitude,$longitude',
-      },
+    final Uri uri = Uri.parse(
+      'https://www.google.com/maps/search/'
+      '?api=1&query=$latitude,$longitude',
     );
 
     try {
@@ -483,7 +427,7 @@ class _OrderHistoryPageState
             CrossAxisAlignment.start,
         children: <Widget>[
           SizedBox(
-            width: 105,
+            width: 100,
             child: Text(
               label,
               style: TextStyle(
@@ -537,33 +481,25 @@ class _OrderHistoryPageState
         date.toLocal();
 
     final String day =
-        local.day
-            .toString()
-            .padLeft(
+        local.day.toString().padLeft(
               2,
               '0',
             );
 
     final String month =
-        local.month
-            .toString()
-            .padLeft(
+        local.month.toString().padLeft(
               2,
               '0',
             );
 
     final String hour =
-        local.hour
-            .toString()
-            .padLeft(
+        local.hour.toString().padLeft(
               2,
               '0',
             );
 
     final String minute =
-        local.minute
-            .toString()
-            .padLeft(
+        local.minute.toString().padLeft(
               2,
               '0',
             );
@@ -573,7 +509,7 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // PRODUCT IMAGE
+  // PRODUCT IMAGE DIALOG
   // =========================================================
 
   void _showProductImage(
@@ -616,7 +552,7 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // PRODUCTS
+  // PRODUCT DETAILS
   // =========================================================
 
   Widget _productsSection(
@@ -733,34 +669,29 @@ class _OrderHistoryPageState
                           .start,
                   children: <Widget>[
                     GestureDetector(
-                      onTap:
-                          hasNetworkImage
-                              ? () {
-                                  _showProductImage(
-                                    image,
-                                  );
-                                }
-                              : null,
+                      onTap: hasNetworkImage
+                          ? () {
+                              _showProductImage(
+                                image,
+                              );
+                            }
+                          : null,
                       child: ClipRRect(
                         borderRadius:
                             BorderRadius
-                                .circular(
-                          10,
-                        ),
+                                .circular(10),
                         child: Container(
                           width: 78,
                           height: 78,
                           color: Colors
-                              .grey
-                              .shade100,
+                              .grey.shade100,
                           child:
                               hasNetworkImage
                                   ? Image.network(
                                       image,
-                                      fit:
-                                          BoxFit.cover,
-                                      errorBuilder:
-                                          (
+                                      fit: BoxFit
+                                          .cover,
+                                      errorBuilder: (
                                         BuildContext
                                             context,
                                         Object
@@ -771,7 +702,8 @@ class _OrderHistoryPageState
                                         return const Icon(
                                           Icons
                                               .image_not_supported,
-                                          size: 35,
+                                          size:
+                                              35,
                                         );
                                       },
                                     )
@@ -840,7 +772,7 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // SELLER SECTION
+  // SELLER CARD
   // =========================================================
 
   Widget _sellerSection(
@@ -849,9 +781,7 @@ class _OrderHistoryPageState
     return FutureBuilder<
         List<Map<String, dynamic>>>(
       future:
-          _loadSellerInformation(
-        order,
-      ),
+          _loadSellerInformation(order),
       builder: (
         BuildContext context,
         AsyncSnapshot<
@@ -910,11 +840,10 @@ class _OrderHistoryPageState
                   seller['shopName']
                           ?.toString()
                           .trim() ??
-                      seller[
-                                  'sellerShopName']
-                              ?.toString()
-                              .trim() ??
-                          'Seller Shop';
+                      seller['sellerShopName']
+                          ?.toString()
+                          .trim() ??
+                      'Seller Shop';
 
               final String ownerName =
                   seller['ownerName']
@@ -933,9 +862,9 @@ class _OrderHistoryPageState
                           ?.toString()
                           .trim() ??
                       seller['address']
-                              ?.toString()
-                              .trim() ??
-                          '';
+                          ?.toString()
+                          .trim() ??
+                      '';
 
               final double? latitude =
                   _toDouble(
@@ -965,8 +894,9 @@ class _OrderHistoryPageState
                       Row(
                         children:
                             <Widget>[
-                          const CircleAvatar(
-                            child: Icon(
+                          CircleAvatar(
+                            child:
+                                const Icon(
                               Icons.store,
                             ),
                           ),
@@ -993,7 +923,6 @@ class _OrderHistoryPageState
                                             .bold,
                                   ),
                                 ),
-
                                 if (ownerName
                                     .isNotEmpty)
                                   Text(
@@ -1023,13 +952,12 @@ class _OrderHistoryPageState
                                     .location_on_outlined,
                                 size: 18,
                               ),
-
                               const SizedBox(
                                 width: 5,
                               ),
-
                               Expanded(
-                                child: Text(
+                                child:
+                                    Text(
                                   address,
                                 ),
                               ),
@@ -1138,7 +1066,7 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // DELIVERY LOCATION
+  // CUSTOMER DELIVERY LOCATION
   // =========================================================
 
   Widget _customerLocationSection(
@@ -1245,7 +1173,7 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // DELIVERY PERSON
+  // DELIVERY PERSON STATUS
   // =========================================================
 
   Widget _deliveryPersonSection(
@@ -1264,14 +1192,10 @@ class _OrderHistoryPageState
             '';
 
     final double? driverLat =
-        _toDouble(
-      order['driverLat'],
-    );
+        _toDouble(order['driverLat']);
 
     final double? driverLng =
-        _toDouble(
-      order['driverLng'],
-    );
+        _toDouble(order['driverLng']);
 
     final String trackingStatus =
         order['trackingStatus']
@@ -1301,8 +1225,7 @@ class _OrderHistoryPageState
               children: <Widget>[
                 CircleAvatar(
                   backgroundColor:
-                      Colors.blue
-                          .withValues(
+                      Colors.blue.withValues(
                     alpha: 0.15,
                   ),
                   child: const Icon(
@@ -1311,9 +1234,7 @@ class _OrderHistoryPageState
                   ),
                 ),
 
-                const SizedBox(
-                  width: 10,
-                ),
+                const SizedBox(width: 10),
 
                 Expanded(
                   child: Column(
@@ -1332,7 +1253,6 @@ class _OrderHistoryPageState
                               FontWeight.bold,
                         ),
                       ),
-
                       Text(
                         trackingStatus,
                         style: TextStyle(
@@ -1362,9 +1282,7 @@ class _OrderHistoryPageState
               ),
 
             if (hasLiveLocation) ...<Widget>[
-              const SizedBox(
-                height: 10,
-              ),
+              const SizedBox(height: 10),
 
               const Row(
                 children: <Widget>[
@@ -1402,395 +1320,51 @@ class _OrderHistoryPageState
                     ),
                   ),
                 ),
-
-              const SizedBox(
-                height: 8,
-              ),
-
-              SizedBox(
-                width: double.infinity,
-                child:
-                    OutlinedButton.icon(
-                  onPressed: () {
-                    _openMap(
-                      driverLat,
-                      driverLng,
-                    );
-                  },
-                  icon: const Icon(
-                    Icons
-                        .delivery_dining,
-                  ),
-                  label: const Text(
-                    'Open Delivery Person Location',
-                  ),
-                ),
-              ),
             ],
 
-            if (driverPhone.isNotEmpty)
-              ...<Widget>[
-                const SizedBox(
-                  height: 10,
-                ),
+            if (driverPhone.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 10),
 
-                Row(
-                  children: <Widget>[
-                    Expanded(
-                      child:
-                          OutlinedButton.icon(
-                        onPressed: () {
-                          _callPhone(
-                            driverPhone,
-                          );
-                        },
-                        icon: const Icon(
-                          Icons.call,
-                        ),
-                        label: const Text(
-                          'Call Driver',
-                        ),
-                      ),
-                    ),
-
-                    const SizedBox(
-                      width: 8,
-                    ),
-
-                    Expanded(
-                      child:
-                          OutlinedButton.icon(
-                        onPressed: () {
-                          _sendSms(
-                            driverPhone,
-                          );
-                        },
-                        icon: const Icon(
-                          Icons.sms,
-                        ),
-                        label: const Text(
-                          'SMS',
-                        ),
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  // =========================================================
-  // SECURE DELIVERY OTP / CODE
-  // =========================================================
-
-  Widget _deliveryVerificationSection(
-    Map<String, dynamic> order,
-  ) {
-    final String deliveryOtp =
-        order['deliveryOtp']
-                ?.toString()
-                .trim() ??
-            '';
-
-    final bool verified =
-        order['deliveryOtpVerified'] ==
-            true;
-
-    final String status =
-        order['status']
-                ?.toString()
-                .trim() ??
-            'Pending';
-
-    final String method =
-        order['deliveryConfirmationMethod']
-                ?.toString()
-                .trim() ??
-            '';
-
-    final String normalizedStatus =
-        status.toLowerCase();
-
-    if (normalizedStatus == 'cancelled' ||
-        normalizedStatus == 'returned') {
-      return const SizedBox.shrink();
-    }
-
-    // Old orders without OTP should not show an empty card.
-    if (deliveryOtp.isEmpty &&
-        !verified &&
-        status != 'Delivered') {
-      return const SizedBox.shrink();
-    }
-
-    final bool delivered =
-        verified ||
-            status == 'Delivered';
-
-    return Card(
-      child: Padding(
-        padding:
-            const EdgeInsets.all(16),
-        child: Column(
-          crossAxisAlignment:
-              CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                CircleAvatar(
-                  backgroundColor:
-                      delivered
-                          ? Colors.green
-                              .withValues(
-                              alpha: 0.15,
-                            )
-                          : Colors.orange
-                              .withValues(
-                              alpha: 0.15,
-                            ),
-                  child: Icon(
-                    delivered
-                        ? Icons.verified
-                        : Icons.lock_outline,
-                    color: delivered
-                        ? Colors.green
-                        : Colors.orange,
-                  ),
-                ),
-
-                const SizedBox(
-                  width: 12,
-                ),
-
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment:
-                        CrossAxisAlignment
-                            .start,
-                    children: <Widget>[
-                      const Text(
-                        'Secure Delivery Code',
-                        style: TextStyle(
-                          fontSize: 17,
-                          fontWeight:
-                              FontWeight.bold,
-                        ),
-                      ),
-
-                      const SizedBox(
-                        height: 3,
-                      ),
-
-                      Text(
-                        delivered
-                            ? 'Delivery verified successfully'
-                            : 'Give this code only after receiving your order.',
-                        style: TextStyle(
-                          fontSize: 12,
-                          color: delivered
-                              ? Colors.green
-                              : Colors
-                                  .grey.shade700,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ],
-            ),
-
-            if (!delivered &&
-                deliveryOtp.isNotEmpty) ...<Widget>[
-              const SizedBox(
-                height: 16,
-              ),
-
-              Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.symmetric(
-                  vertical: 18,
-                  horizontal: 12,
-                ),
-                decoration: BoxDecoration(
-                  color:
-                      Colors.orange.withValues(
-                    alpha: 0.08,
-                  ),
-                  borderRadius:
-                      BorderRadius.circular(
-                    12,
-                  ),
-                  border: Border.all(
-                    color:
-                        Colors.orange.withValues(
-                      alpha: 0.35,
-                    ),
-                  ),
-                ),
-                child: Column(
-                  children: <Widget>[
-                    const Text(
-                      'SCAN TO CONFIRM DELIVERY',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight: FontWeight.bold,
-                        letterSpacing: 1.2,
-                        color: Colors.deepPurple,
-                      ),
-                    ),
-
-                    const SizedBox(
-                      height: 12,
-                    ),
-
-                    Container(
-                      padding: const EdgeInsets.all(10),
-                      decoration: BoxDecoration(
-                        color: Colors.white,
-                        borderRadius: BorderRadius.circular(12),
-                      ),
-                      child: QrImageView(
-                        data: deliveryOtp,
-                        version: QrVersions.auto,
-                        size: 190,
-                        backgroundColor: Colors.white,
-                        errorCorrectionLevel: QrErrorCorrectLevel.M,
-                      ),
-                    ),
-
-                    const SizedBox(
-                      height: 16,
-                    ),
-
-                    const Text(
-                      'DELIVERY CODE',
-                      style: TextStyle(
-                        fontSize: 12,
-                        fontWeight:
-                            FontWeight.bold,
-                        letterSpacing: 1.5,
-                        color: Colors.orange,
-                      ),
-                    ),
-
-                    const SizedBox(
-                      height: 8,
-                    ),
-
-                    SelectableText(
-                      deliveryOtp,
-                      textAlign:
-                          TextAlign.center,
-                      style:
-                          const TextStyle(
-                        fontSize: 32,
-                        fontWeight:
-                            FontWeight.bold,
-                        letterSpacing: 8,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-
-              const SizedBox(
-                height: 12,
-              ),
-
-              const Row(
-                crossAxisAlignment:
-                    CrossAxisAlignment.start,
+              Row(
                 children: <Widget>[
-                  Icon(
-                    Icons.security,
-                    size: 18,
-                    color: Colors.red,
-                  ),
-                  SizedBox(
-                    width: 7,
-                  ),
                   Expanded(
-                    child: Text(
-                      'Do not share this code by phone or SMS. Give it to the delivery person only after you physically receive your product.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors.red,
-                        fontWeight:
-                            FontWeight.w500,
+                    child:
+                        OutlinedButton.icon(
+                      onPressed: () {
+                        _callPhone(
+                          driverPhone,
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.call,
+                      ),
+                      label: const Text(
+                        'Call Driver',
+                      ),
+                    ),
+                  ),
+
+                  const SizedBox(width: 8),
+
+                  Expanded(
+                    child:
+                        OutlinedButton.icon(
+                      onPressed: () {
+                        _sendSms(
+                          driverPhone,
+                        );
+                      },
+                      icon: const Icon(
+                        Icons.sms,
+                      ),
+                      label: const Text(
+                        'SMS',
                       ),
                     ),
                   ),
                 ],
               ),
             ],
-
-            if (delivered) ...<Widget>[
-              const SizedBox(
-                height: 14,
-              ),
-
-              Container(
-                width: double.infinity,
-                padding:
-                    const EdgeInsets.all(
-                  14,
-                ),
-                decoration: BoxDecoration(
-                  color:
-                      Colors.green.withValues(
-                    alpha: 0.10,
-                  ),
-                  borderRadius:
-                      BorderRadius.circular(
-                    10,
-                  ),
-                ),
-                child: Row(
-                  children: <Widget>[
-                    const Icon(
-                      Icons.verified_user,
-                      color: Colors.green,
-                    ),
-
-                    const SizedBox(
-                      width: 10,
-                    ),
-
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment:
-                            CrossAxisAlignment
-                                .start,
-                        children: <Widget>[
-                          const Text(
-                            'Delivery Verified',
-                            style: TextStyle(
-                              color:
-                                  Colors.green,
-                              fontWeight:
-                                  FontWeight.bold,
-                            ),
-                          ),
-
-                          if (method.isNotEmpty)
-                            Text(
-                              'Confirmation: $method',
-                              style:
-                                  const TextStyle(
-                                fontSize: 12,
-                              ),
-                            ),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ],
           ],
         ),
       ),
@@ -1798,24 +1372,72 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // ORDER DETAILS
+  // DELETE
   // =========================================================
 
-  void _openOrderDetails(
+  Future<void> _confirmDelete(
     Map<String, dynamic> order,
-  ) {
-    Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => OrderDetailsPage(
-          order: Map<String, dynamic>.from(order),
-        ),
-      ),
+  ) async {
+    final bool? shouldDelete =
+        await showDialog<bool>(
+      context: context,
+      builder:
+          (BuildContext dialogContext) {
+        return AlertDialog(
+          title:
+              const Text('Remove order?'),
+          content: const Text(
+            'This order will be removed from local order history.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                  false,
+                );
+              },
+              child:
+                  const Text('Cancel'),
+            ),
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                  true,
+                );
+              },
+              child:
+                  const Text('Remove'),
+            ),
+          ],
+        );
+      },
     );
+
+    if (shouldDelete != true) {
+      return;
+    }
+
+    orderHistory.removeWhere(
+      (
+        Map<String, dynamic> item,
+      ) =>
+          item['id']?.toString() ==
+          order['id']?.toString(),
+    );
+
+    await saveOrders();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {});
   }
 
   // =========================================================
-  // TRACK ORDER
+  // OPEN TRACKING
   // =========================================================
 
   void _openTracking(
@@ -1875,1642 +1497,6 @@ class _OrderHistoryPageState
   }
 
   // =========================================================
-  // CUSTOMER CANCEL / RETURN / REFUND
-  // =========================================================
-
-  String _requestText(
-    Map<String, dynamic> order,
-    String key,
-  ) {
-    return order[key]
-            ?.toString()
-            .trim() ??
-        '';
-  }
-
-  Color _requestStatusColor(
-    String status,
-  ) {
-    switch (status.toLowerCase()) {
-      case 'pending':
-      case 'pending review':
-      case 'processing':
-        return Colors.orange;
-
-      case 'approved':
-      case 'accepted':
-      case 'refunded':
-      case 'completed':
-        return Colors.green;
-
-      case 'rejected':
-      case 'declined':
-        return Colors.red;
-
-      default:
-        return Colors.blueGrey;
-    }
-  }
-
-  bool _canRequestCancellation(
-    Map<String, dynamic> order,
-  ) {
-    final String status =
-        order['status']
-                ?.toString()
-                .trim() ??
-            '';
-
-    final String trackingStatus =
-        order['trackingStatus']
-                ?.toString()
-                .trim()
-                .toLowerCase() ??
-            '';
-
-    final String requestStatus =
-        _requestText(
-      order,
-      'cancelRequestStatus',
-    );
-
-    if (requestStatus.isNotEmpty) {
-      return false;
-    }
-
-    if (status == 'Delivered' ||
-        status == 'Cancelled' ||
-        status == 'Returned' ||
-        status == 'Shipped') {
-      return false;
-    }
-
-    if (trackingStatus.contains(
-          'picked up',
-        ) ||
-        trackingStatus.contains(
-          'out for delivery',
-        ) ||
-        trackingStatus.contains(
-          'delivered',
-        )) {
-      return false;
-    }
-
-    return true;
-  }
-
-  bool _canRequestReturn(
-    Map<String, dynamic> order,
-  ) {
-    final String status =
-        order['status']
-                ?.toString()
-                .trim() ??
-            '';
-
-    final String requestStatus =
-        _requestText(
-      order,
-      'returnRequestStatus',
-    );
-
-    return status == 'Delivered' &&
-        requestStatus.isEmpty;
-  }
-
-  Future<void> _showCustomerRequestDialog({
-    required Map<String, dynamic> order,
-    required bool isReturn,
-  }) async {
-    final String orderId =
-        order['id']
-                ?.toString()
-                .trim() ??
-            '';
-
-    if (orderId.isEmpty) {
-      _showMessage(
-        'Order ID is not available.',
-      );
-      return;
-    }
-
-    final List<String> reasons =
-        isReturn
-            ? <String>[
-                'Damaged product',
-                'Wrong product received',
-                'Product not as described',
-                'Product not working',
-                'Missing item / accessory',
-                'Changed my mind',
-                'Other',
-              ]
-            : <String>[
-                'Ordered by mistake',
-                'Changed my mind',
-                'Delivery is taking too long',
-                'Wrong address / details',
-                'Found another product',
-                'Other',
-              ];
-
-    String selectedReason =
-        reasons.first;
-
-    final TextEditingController
-        noteController =
-        TextEditingController();
-
-    bool isSubmitting = false;
-
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (
-        BuildContext dialogContext,
-      ) {
-        return StatefulBuilder(
-          builder: (
-            BuildContext context,
-            void Function(
-              void Function(),
-            ) setDialogState,
-          ) {
-            Future<void> submit() async {
-              if (isSubmitting) {
-                return;
-              }
-
-              setDialogState(() {
-                isSubmitting = true;
-              });
-
-              try {
-                final String now =
-                    DateTime.now()
-                        .toIso8601String();
-
-                final Map<String, dynamic>
-                    update =
-                    isReturn
-                        ? <String, dynamic>{
-                            'returnRequestStatus':
-                                'Pending',
-                            'returnRequestReason':
-                                selectedReason,
-                            'returnRequestNote':
-                                noteController.text
-                                    .trim(),
-                            'returnRequestedAt':
-                                now,
-                            'returnRequestedBy':
-                                'customer',
-                            'customerRequestType':
-                                'Return',
-                            'customerRequestStatus':
-                                'Pending',
-                            'customerRequestUpdatedAt':
-                                now,
-                          }
-                        : <String, dynamic>{
-                            'cancelRequestStatus':
-                                'Pending',
-                            'cancelRequestReason':
-                                selectedReason,
-                            'cancelRequestNote':
-                                noteController.text
-                                    .trim(),
-                            'cancelRequestedAt':
-                                now,
-                            'cancelRequestedBy':
-                                'customer',
-                            'customerRequestType':
-                                'Cancellation',
-                            'customerRequestStatus':
-                                'Pending',
-                            'customerRequestUpdatedAt':
-                                now,
-                          };
-
-                await updateOrderTrackingFields(
-                  orderId,
-                  update,
-                );
-
-                if (!mounted ||
-                    !dialogContext.mounted) {
-                  return;
-                }
-
-                Navigator.pop(
-                  dialogContext,
-                );
-
-                if (!mounted) {
-                  return;
-                }
-
-                _showMessage(
-                  isReturn
-                      ? 'Return request submitted successfully.'
-                      : 'Cancellation request submitted successfully.',
-                );
-              } catch (error) {
-                if (!mounted) {
-                  return;
-                }
-
-                _showMessage(
-                  'Could not submit request: $error',
-                );
-              } finally {
-                if (dialogContext.mounted) {
-                  setDialogState(() {
-                    isSubmitting = false;
-                  });
-                }
-              }
-            }
-
-            return AlertDialog(
-              title: Text(
-                isReturn
-                    ? 'Request Return'
-                    : 'Request Cancellation',
-              ),
-              content:
-                  SingleChildScrollView(
-                child: Column(
-                  mainAxisSize:
-                      MainAxisSize.min,
-                  crossAxisAlignment:
-                      CrossAxisAlignment.start,
-                  children: <Widget>[
-                    Text(
-                      isReturn
-                          ? 'Tell us why you want to return this delivered order.'
-                          : 'Tell us why you want to cancel this order.',
-                    ),
-
-                    const SizedBox(
-                      height: 16,
-                    ),
-
-                    DropdownButtonFormField<
-                        String>(
-                      initialValue:
-                          selectedReason,
-                      decoration:
-                          const InputDecoration(
-                        labelText: 'Reason',
-                        border:
-                            OutlineInputBorder(),
-                      ),
-                      items: reasons
-                          .map<
-                              DropdownMenuItem<
-                                  String>>(
-                            (
-                              String reason,
-                            ) =>
-                                DropdownMenuItem<
-                                    String>(
-                              value: reason,
-                              child:
-                                  Text(reason),
-                            ),
-                          )
-                          .toList(),
-                      onChanged:
-                          isSubmitting
-                              ? null
-                              : (
-                                  String?
-                                      value,
-                                ) {
-                                  if (value ==
-                                      null) {
-                                    return;
-                                  }
-
-                                  setDialogState(
-                                    () {
-                                      selectedReason =
-                                          value;
-                                    },
-                                  );
-                                },
-                    ),
-
-                    const SizedBox(
-                      height: 14,
-                    ),
-
-                    TextField(
-                      controller:
-                          noteController,
-                      enabled:
-                          !isSubmitting,
-                      minLines: 3,
-                      maxLines: 5,
-                      decoration:
-                          const InputDecoration(
-                        labelText:
-                            'Additional details (optional)',
-                        border:
-                            OutlineInputBorder(),
-                      ),
-                    ),
-
-                    const SizedBox(
-                      height: 12,
-                    ),
-
-                    Text(
-                      isReturn
-                          ? 'Your return request will be reviewed before any refund is processed.'
-                          : 'Seller/Admin approval may be required before the order is cancelled.',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: Colors
-                            .grey.shade700,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              actions: <Widget>[
-                TextButton(
-                  onPressed:
-                      isSubmitting
-                          ? null
-                          : () {
-                              Navigator.pop(
-                                dialogContext,
-                              );
-                            },
-                  child:
-                      const Text('Back'),
-                ),
-                FilledButton.icon(
-                  onPressed:
-                      isSubmitting
-                          ? null
-                          : submit,
-                  icon: isSubmitting
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child:
-                              CircularProgressIndicator(
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : Icon(
-                          isReturn
-                              ? Icons
-                                  .assignment_return_outlined
-                              : Icons
-                                  .cancel_outlined,
-                        ),
-                  label: Text(
-                    isSubmitting
-                        ? 'Submitting...'
-                        : 'Submit Request',
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-
-    noteController.dispose();
-  }
-
-  Widget _customerRequestSection(
-    Map<String, dynamic> order,
-  ) {
-    final String cancelStatus =
-        _requestText(
-      order,
-      'cancelRequestStatus',
-    );
-
-    final String cancelReason =
-        _requestText(
-      order,
-      'cancelRequestReason',
-    );
-
-    final String returnStatus =
-        _requestText(
-      order,
-      'returnRequestStatus',
-    );
-
-    final String returnReason =
-        _requestText(
-      order,
-      'returnRequestReason',
-    );
-
-    final String refundStatus =
-        _requestText(
-      order,
-      'refundStatus',
-    );
-
-    final String refundSource =
-        _requestText(
-      order,
-      'refundSource',
-    );
-
-    final String refundReason =
-        _requestText(
-      order,
-      'refundReason',
-    );
-
-    final String refundMethod =
-        _requestText(
-      order,
-      'refundMethod',
-    );
-
-    final String refundReference =
-        _requestText(
-      order,
-      'refundReference',
-    );
-
-    final double refundAmount =
-        _amount(
-      order,
-      'refundAmount',
-    );
-
-    final bool canCancel =
-        _canRequestCancellation(
-      order,
-    );
-
-    final bool canReturn =
-        _canRequestReturn(
-      order,
-    );
-
-    final bool hasRequest =
-        cancelStatus.isNotEmpty ||
-            returnStatus.isNotEmpty ||
-            refundStatus.isNotEmpty;
-
-    if (!canCancel &&
-        !canReturn &&
-        !hasRequest) {
-      return const SizedBox.shrink();
-    }
-
-    Widget requestRow(
-      String title,
-      String status, {
-      String reason = '',
-      String source = '',
-      String method = '',
-      String reference = '',
-      double amount = 0,
-    }) {
-      final Color color =
-          _requestStatusColor(
-        status,
-      );
-
-      return Container(
-        width: double.infinity,
-        margin:
-            const EdgeInsets.only(
-          bottom: 10,
-        ),
-        padding:
-            const EdgeInsets.all(
-          12,
-        ),
-        decoration:
-            BoxDecoration(
-          color: color.withValues(
-            alpha: 0.08,
-          ),
-          borderRadius:
-              BorderRadius.circular(
-            10,
-          ),
-          border: Border.all(
-            color: color.withValues(
-              alpha: 0.25,
-            ),
-          ),
-        ),
-        child: Column(
-          crossAxisAlignment:
-              CrossAxisAlignment.start,
-          children: <Widget>[
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: Text(
-                    title,
-                    style:
-                        const TextStyle(
-                      fontWeight:
-                          FontWeight.bold,
-                    ),
-                  ),
-                ),
-                Chip(
-                  label:
-                      Text(status),
-                  side:
-                      BorderSide.none,
-                  backgroundColor:
-                      color.withValues(
-                    alpha: 0.14,
-                  ),
-                ),
-              ],
-            ),
-
-            if (source.isNotEmpty)
-              Text(
-                'Source: $source',
-              ),
-
-            if (reason.isNotEmpty)
-              Text(
-                'Reason: $reason',
-              ),
-
-            if (amount > 0)
-              Text(
-                'Refund Amount: Rs. ${amount.toStringAsFixed(0)}',
-                style:
-                    const TextStyle(
-                  fontWeight:
-                      FontWeight.bold,
-                ),
-              ),
-
-            if (method.isNotEmpty)
-              Text(
-                'Refund Via: $method',
-              ),
-
-            if (reference.isNotEmpty)
-              Text(
-                'Transaction / Reference ID: $reference',
-              ),
-          ],
-        ),
-      );
-    }
-
-    return Card(
-      child: Padding(
-        padding:
-            const EdgeInsets.all(
-          14,
-        ),
-        child: Column(
-          crossAxisAlignment:
-              CrossAxisAlignment.start,
-          children: <Widget>[
-            const Row(
-              children: <Widget>[
-                Icon(
-                  Icons
-                      .support_agent_outlined,
-                ),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Cancel / Return / Refund',
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight:
-                          FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-
-            const SizedBox(
-              height: 12,
-            ),
-
-            if (cancelStatus
-                .isNotEmpty)
-              requestRow(
-                'Cancellation Request',
-                cancelStatus,
-                reason:
-                    cancelReason,
-              ),
-
-            if (returnStatus
-                .isNotEmpty)
-              requestRow(
-                'Return Request',
-                returnStatus,
-                reason:
-                    returnReason,
-              ),
-
-            if (refundStatus
-                .isNotEmpty)
-              requestRow(
-                'Refund',
-                refundStatus,
-                source:
-                    refundSource,
-                reason:
-                    refundReason,
-                amount:
-                    refundAmount,
-                method:
-                    refundMethod,
-                reference:
-                    refundReference,
-              ),
-
-            if (canCancel)
-              SizedBox(
-                width:
-                    double.infinity,
-                height: 50,
-                child:
-                    OutlinedButton.icon(
-                  onPressed: () {
-                    _showCustomerRequestDialog(
-                      order: order,
-                      isReturn: false,
-                    );
-                  },
-                  icon: const Icon(
-                    Icons.cancel_outlined,
-                    color: Colors.red,
-                  ),
-                  label: const Text(
-                    'Request Order Cancellation',
-                    style: TextStyle(
-                      color: Colors.red,
-                      fontWeight:
-                          FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-
-            if (canCancel &&
-                canReturn)
-              const SizedBox(
-                height: 10,
-              ),
-
-            if (canReturn)
-              SizedBox(
-                width:
-                    double.infinity,
-                height: 50,
-                child:
-                    OutlinedButton.icon(
-                  onPressed: () {
-                    _showCustomerRequestDialog(
-                      order: order,
-                      isReturn: true,
-                    );
-                  },
-                  icon: const Icon(
-                    Icons
-                        .assignment_return_outlined,
-                  ),
-                  label: const Text(
-                    'Request Product Return',
-                    style: TextStyle(
-                      fontWeight:
-                          FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ),
-
-            if (hasRequest) ...<Widget>[
-              const SizedBox(
-                height: 4,
-              ),
-              Text(
-                'Seller/Admin review status will appear here automatically.',
-                style: TextStyle(
-                  fontSize: 12,
-                  color: Colors
-                      .grey.shade700,
-                ),
-              ),
-            ],
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _liveCustomerRequestSection(
-    Map<String, dynamic> order,
-  ) {
-    final String orderId =
-        order['id']
-                ?.toString()
-                .trim() ??
-            '';
-
-    if (orderId.isEmpty) {
-      return _customerRequestSection(
-        order,
-      );
-    }
-
-    return StreamBuilder<
-        DocumentSnapshot<
-            Map<String, dynamic>>>(
-      stream: FirebaseFirestore
-          .instance
-          .collection('orders')
-          .doc(orderId)
-          .snapshots(),
-      builder: (
-        BuildContext context,
-        AsyncSnapshot<
-                DocumentSnapshot<
-                    Map<String, dynamic>>>
-            snapshot,
-      ) {
-        final DocumentSnapshot<
-                Map<String, dynamic>>?
-            document =
-            snapshot.data;
-
-        if (document == null ||
-            !document.exists) {
-          return _customerRequestSection(
-            order,
-          );
-        }
-
-        final Map<String, dynamic>
-            cloudOrder =
-            document.data() ??
-                <String, dynamic>{};
-
-        final Map<String, dynamic>
-            mergedOrder =
-            <String, dynamic>{
-          ...order,
-          ...cloudOrder,
-          'id': document.id,
-        };
-
-        return _customerRequestSection(
-          mergedOrder,
-        );
-      },
-    );
-  }
-
-  // =========================================================
-  // ORDER CARD
-  // =========================================================
-
-  Widget _orderCard(
-    Map<String, dynamic> order,
-  ) {
-    final double discount =
-        _amount(
-      order,
-      'discount',
-    );
-
-    final double delivery =
-        _amount(
-      order,
-      'delivery',
-    );
-
-    final String status =
-        order['status']
-                ?.toString()
-                .trim() ??
-            'Pending';
-
-    final String trackingStatus =
-        order['trackingStatus']
-                ?.toString()
-                .trim() ??
-            'Order Placed';
-
-    final double? customerLat =
-        _customerLatitude(
-      order,
-    );
-
-    final double? customerLng =
-        _customerLongitude(
-      order,
-    );
-
-    final bool hasCustomerLocation =
-        customerLat != null &&
-            customerLng != null;
-
-    final String orderId =
-        order['id']
-                ?.toString()
-                .replaceFirst(
-                  'RD',
-                  '',
-                ) ??
-            '';
-
-    return Card(
-      margin:
-          const EdgeInsets.only(
-        bottom: 12,
-      ),
-      child: ExpansionTile(
-        leading: CircleAvatar(
-          backgroundColor:
-              _statusColor(
-                    status,
-                  )
-                  .withValues(
-            alpha: 0.15,
-          ),
-          child: Icon(
-            Icons.local_shipping,
-            color:
-                _statusColor(status),
-          ),
-        ),
-
-        title: InkWell(
-          onTap: () {
-            _openOrderDetails(order);
-          },
-          child: Padding(
-            padding: const EdgeInsets.symmetric(
-              vertical: 8,
-            ),
-            child: Text(
-              'Order #$orderId',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ),
-        ),
-
-        subtitle: Column(
-          crossAxisAlignment:
-              CrossAxisAlignment.start,
-          children: <Widget>[
-            Text(
-              'Final Total: Rs. '
-              '${_amount(order, 'amount').toStringAsFixed(0)}',
-              style:
-                  const TextStyle(
-                color: Colors.green,
-                fontWeight:
-                    FontWeight.bold,
-              ),
-            ),
-
-            const SizedBox(
-              height: 3,
-            ),
-
-            Text(
-              'Tracking: '
-              '$trackingStatus',
-              style: TextStyle(
-                fontSize: 12,
-                color: Colors
-                    .grey.shade700,
-              ),
-            ),
-          ],
-        ),
-
-        trailing: Chip(
-          label:
-              Text(status),
-          backgroundColor:
-              _statusColor(
-                    status,
-                  )
-                  .withValues(
-            alpha: 0.15,
-          ),
-        ),
-
-        childrenPadding:
-            const EdgeInsets.fromLTRB(
-          16,
-          0,
-          16,
-          14,
-        ),
-
-        children: <Widget>[
-          const Divider(),
-
-          _detailRow(
-            'Customer',
-            _customerName(
-              order,
-            ),
-          ),
-
-          _detailRow(
-            'Phone',
-            order['phone']
-                    ?.toString() ??
-                '-',
-          ),
-
-          _detailRow(
-            'Order Date',
-            _orderDate(
-              order,
-            ),
-          ),
-
-          _detailRow(
-            'Area',
-            order['deliveryArea']
-                    ?.toString() ??
-                '-',
-          ),
-
-          _detailRow(
-            'Address',
-            _customerAddress(
-              order,
-            ),
-          ),
-
-          _detailRow(
-            'Payment',
-            order['payment']
-                    ?.toString() ??
-                '-',
-          ),
-
-          _detailRow(
-            'Payment Status',
-            order['paymentStatus']
-                    ?.toString()
-                    .trim()
-                    .isNotEmpty ==
-                true
-                ? order['paymentStatus']
-                    .toString()
-                    .trim()
-                : 'Not available',
-            valueColor:
-                order['paymentStatus']
-                            ?.toString()
-                            .trim()
-                            .toLowerCase() ==
-                        'paid'
-                    ? Colors.green
-                    : null,
-          ),
-
-          _detailRow(
-            'Payment Destination',
-            order['paymentReceiverName']
-                        ?.toString()
-                        .trim()
-                        .isNotEmpty ==
-                    true
-                ? order['paymentReceiverName']
-                    .toString()
-                    .trim()
-                : 'Not available',
-          ),
-
-          _detailRow(
-            'Transaction / Ref ID',
-            order['paymentReferenceId']
-                        ?.toString()
-                        .trim()
-                        .isNotEmpty ==
-                    true
-                ? order['paymentReferenceId']
-                    .toString()
-                    .trim()
-                : (order['paymentTransactionCode']
-                            ?.toString()
-                            .trim()
-                            .isNotEmpty ==
-                        true
-                    ? order['paymentTransactionCode']
-                        .toString()
-                        .trim()
-                    : 'Not available'),
-          ),
-
-          const Divider(),
-
-          // ==============================================
-          // PRODUCTS
-          // ==============================================
-
-          _productsSection(
-            order,
-          ),
-
-          const SizedBox(
-            height: 10,
-          ),
-
-          // ==============================================
-          // SELLER
-          // ==============================================
-
-          _sellerSection(
-            order,
-          ),
-
-          const SizedBox(
-            height: 10,
-          ),
-
-          // ==============================================
-          // CUSTOMER DELIVERY LOCATION
-          // ==============================================
-
-          _customerLocationSection(
-            order,
-          ),
-
-          const SizedBox(
-            height: 10,
-          ),
-
-          // ==============================================
-          // DELIVERY PERSON
-          // ==============================================
-
-          _deliveryPersonSection(
-            order,
-          ),
-
-          const SizedBox(
-            height: 10,
-          ),
-
-          // ==============================================
-          // SECURE DELIVERY OTP
-          // ==============================================
-
-          _deliveryVerificationSection(
-            order,
-          ),
-
-          const SizedBox(
-            height: 10,
-          ),
-
-          _liveCustomerRequestSection(
-            order,
-          ),
-
-          const SizedBox(
-            height: 10,
-          ),
-
-          const Divider(),
-
-          _detailRow(
-            'Subtotal',
-            'Rs. ${_amount(order, 'subtotal').toStringAsFixed(0)}',
-          ),
-
-          if (discount > 0)
-            _detailRow(
-              'Discount',
-              '- Rs. '
-              '${discount.toStringAsFixed(0)}',
-              valueColor:
-                  Colors.red,
-            ),
-
-          _detailRow(
-            'Delivery',
-            delivery == 0
-                ? 'Free'
-                : 'Rs. ${delivery.toStringAsFixed(0)}',
-            valueColor:
-                delivery == 0
-                    ? Colors.green
-                    : null,
-          ),
-
-          const Divider(),
-
-          _detailRow(
-            'Final Total',
-            'Rs. ${_amount(order, 'amount').toStringAsFixed(0)}',
-            valueColor:
-                Colors.green,
-          ),
-
-          const SizedBox(
-            height: 12,
-          ),
-
-          // ==============================================
-          // VIEW ORDER DETAILS
-          // ==============================================
-
-          SizedBox(
-            width: double.infinity,
-            height: 52,
-            child: OutlinedButton.icon(
-              onPressed: () {
-                _openOrderDetails(order);
-              },
-              icon: const Icon(
-                Icons.receipt_long,
-              ),
-              label: const Text(
-                'View Order Details',
-                style: TextStyle(
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-
-          const SizedBox(
-            height: 10,
-          ),
-
-          // ==============================================
-          // TRACK ORDER
-          // ==============================================
-
-          SizedBox(
-            width: double.infinity,
-            height: 54,
-            child:
-                ElevatedButton.icon(
-              onPressed: () {
-                _openTracking(
-                  order,
-                );
-              },
-              icon: const Icon(
-                Icons
-                    .location_searching,
-              ),
-              label: const Text(
-                'Track Order',
-                style: TextStyle(
-                  fontWeight:
-                      FontWeight.bold,
-                ),
-              ),
-            ),
-          ),
-
-          const SizedBox(
-            height: 8,
-          ),
-
-          Row(
-            children: <Widget>[
-              Icon(
-                hasCustomerLocation
-                    ? Icons
-                        .check_circle
-                    : Icons
-                        .warning_amber,
-                size: 17,
-                color:
-                    hasCustomerLocation
-                        ? Colors.green
-                        : Colors.orange,
-              ),
-
-              const SizedBox(
-                width: 6,
-              ),
-
-              Expanded(
-                child: Text(
-                  hasCustomerLocation
-                      ? 'Customer map location available'
-                      : 'Map coordinates are not available for this order',
-                  style: TextStyle(
-                    fontSize: 12,
-                    color: Colors
-                        .grey.shade700,
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  // =========================================================
-  // LINK DEVICES TO THE SAME CUSTOMER ID
-  // =========================================================
-
-  Future<void> _showCreateDeviceLinkCodeDialog() async {
-    bool isCreating = false;
-    String linkCode = '';
-    String errorMessage = '';
-
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
-        return StatefulBuilder(
-          builder: (
-            BuildContext context,
-            void Function(void Function()) setDialogState,
-          ) {
-            Future<void> createCode() async {
-              if (isCreating) {
-                return;
-              }
-
-              setDialogState(() {
-                isCreating = true;
-                errorMessage = '';
-              });
-
-              try {
-                final String code = await createCustomerDeviceLinkCode();
-
-                if (!dialogContext.mounted) {
-                  return;
-                }
-
-                setDialogState(() {
-                  linkCode = code;
-                });
-              } catch (error) {
-                if (!dialogContext.mounted) {
-                  return;
-                }
-
-                setDialogState(() {
-                  errorMessage = 'Could not create link code: $error';
-                });
-              } finally {
-                if (dialogContext.mounted) {
-                  setDialogState(() {
-                    isCreating = false;
-                  });
-                }
-              }
-            }
-
-            return AlertDialog(
-              title: const Text('Create Device Link Code'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    const Text(
-                      'Use this on the device that already shows your correct My Orders.',
-                    ),
-                    const SizedBox(height: 12),
-                    const Text(
-                      'The code works once and expires in 10 minutes.',
-                      style: TextStyle(fontSize: 12),
-                    ),
-                    if (linkCode.isNotEmpty) ...<Widget>[
-                      const SizedBox(height: 18),
-                      Container(
-                        width: double.infinity,
-                        padding: const EdgeInsets.all(16),
-                        decoration: BoxDecoration(
-                          borderRadius: BorderRadius.circular(12),
-                          border: Border.all(
-                            color: Theme.of(context).colorScheme.primary,
-                          ),
-                        ),
-                        child: SelectableText(
-                          linkCode,
-                          textAlign: TextAlign.center,
-                          style: const TextStyle(
-                            fontSize: 24,
-                            fontWeight: FontWeight.bold,
-                            letterSpacing: 2,
-                          ),
-                        ),
-                      ),
-                    ],
-                    if (errorMessage.isNotEmpty) ...<Widget>[
-                      const SizedBox(height: 12),
-                      Text(
-                        errorMessage,
-                        style: const TextStyle(color: Colors.red),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: <Widget>[
-                TextButton(
-                  onPressed: isCreating
-                      ? null
-                      : () {
-                          Navigator.pop(dialogContext);
-                        },
-                  child: const Text('Close'),
-                ),
-                if (linkCode.isNotEmpty)
-                  TextButton.icon(
-                    onPressed: () async {
-                      await Clipboard.setData(
-                        ClipboardData(text: linkCode),
-                      );
-
-                      if (!mounted) {
-                        return;
-                      }
-
-                      _showMessage('Link code copied.');
-                    },
-                    icon: const Icon(Icons.copy),
-                    label: const Text('Copy Code'),
-                  ),
-                FilledButton.icon(
-                  onPressed: isCreating ? null : createCode,
-                  icon: isCreating
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : const Icon(Icons.link),
-                  label: Text(
-                    isCreating
-                        ? 'Creating...'
-                        : linkCode.isEmpty
-                            ? 'Create Code'
-                            : 'New Code',
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _showEnterDeviceLinkCodeDialog() async {
-    String enteredCode = '';
-    bool isLinking = false;
-    String errorMessage = '';
-
-    await showDialog<void>(
-      context: context,
-      barrierDismissible: false,
-      builder: (BuildContext dialogContext) {
-        return StatefulBuilder(
-          builder: (
-            BuildContext context,
-            void Function(void Function()) setDialogState,
-          ) {
-            Future<void> linkDevice() async {
-              if (isLinking) {
-                return;
-              }
-
-              if (enteredCode.trim().isEmpty) {
-                setDialogState(() {
-                  errorMessage = 'Please enter the link code.';
-                });
-                return;
-              }
-
-              setDialogState(() {
-                isLinking = true;
-                errorMessage = '';
-              });
-
-              try {
-                final String linkedCustomerId =
-                    await linkThisDeviceToCustomer(enteredCode);
-
-                if (!mounted || !dialogContext.mounted) {
-                  return;
-                }
-
-                setState(() {
-                  customerId = linkedCustomerId;
-                  isLoadingCustomer = false;
-                });
-
-                Navigator.pop(dialogContext);
-                _showMessage(
-                  'This device is now linked. My Orders will stay on both devices.',
-                );
-              } catch (error) {
-                if (!dialogContext.mounted) {
-                  return;
-                }
-
-                setDialogState(() {
-                  errorMessage = 'Could not link this device: $error';
-                });
-              } finally {
-                if (dialogContext.mounted) {
-                  setDialogState(() {
-                    isLinking = false;
-                  });
-                }
-              }
-            }
-
-            return AlertDialog(
-              title: const Text('Link This Device'),
-              content: SingleChildScrollView(
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: <Widget>[
-                    const Text(
-                      'Enter the one-time code created on the device that already has your correct My Orders.',
-                    ),
-                    const SizedBox(height: 16),
-                    TextField(
-                      enabled: !isLinking,
-                      autofocus: true,
-                      textCapitalization: TextCapitalization.characters,
-                      onChanged: (String value) {
-                        enteredCode = value;
-                      },
-                      onSubmitted: (_) {
-                        linkDevice();
-                      },
-                      decoration: const InputDecoration(
-                        labelText: 'Device Link Code',
-                        hintText: 'ABCD-EFGH-JKLM',
-                        prefixIcon: Icon(Icons.devices),
-                        border: OutlineInputBorder(),
-                      ),
-                    ),
-                    if (errorMessage.isNotEmpty) ...<Widget>[
-                      const SizedBox(height: 12),
-                      Text(
-                        errorMessage,
-                        style: const TextStyle(color: Colors.red),
-                      ),
-                    ],
-                  ],
-                ),
-              ),
-              actions: <Widget>[
-                TextButton(
-                  onPressed: isLinking
-                      ? null
-                      : () {
-                          Navigator.pop(dialogContext);
-                        },
-                  child: const Text('Cancel'),
-                ),
-                FilledButton.icon(
-                  onPressed: isLinking ? null : linkDevice,
-                  icon: isLinking
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                          ),
-                        )
-                      : const Icon(Icons.link),
-                  label: Text(
-                    isLinking ? 'Linking...' : 'Link This Device',
-                  ),
-                ),
-              ],
-            );
-          },
-        );
-      },
-    );
-  }
-
-  Future<void> _showDeviceLinkOptions() async {
-    await showDialog<void>(
-      context: context,
-      builder: (BuildContext dialogContext) {
-        return AlertDialog(
-          title: const Text('Link My Devices'),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              ListTile(
-                leading: const Icon(Icons.phone_android),
-                title: const Text('Create Link Code'),
-                subtitle: const Text(
-                  'Use on the device that already has your correct orders.',
-                ),
-                onTap: () {
-                  Navigator.pop(dialogContext);
-                  _showCreateDeviceLinkCodeDialog();
-                },
-              ),
-              const Divider(),
-              ListTile(
-                leading: const Icon(Icons.laptop_windows),
-                title: const Text('Enter Link Code'),
-                subtitle: const Text(
-                  'Use on the new device you want to connect.',
-                ),
-                onTap: () {
-                  Navigator.pop(dialogContext);
-                  _showEnterDeviceLinkCodeDialog();
-                },
-              ),
-            ],
-          ),
-        );
-      },
-    );
-  }
-
-  // =========================================================
-  // EMPTY PAGE
-  // =========================================================
-
-  Widget _emptyOrders() {
-    return const Center(
-      child: Column(
-        mainAxisAlignment:
-            MainAxisAlignment.center,
-        children: <Widget>[
-          Icon(
-            Icons
-                .receipt_long_outlined,
-            size: 80,
-            color: Colors.grey,
-          ),
-
-          SizedBox(
-            height: 15,
-          ),
-
-          Text(
-            'No orders yet',
-            style: TextStyle(
-              fontSize: 20,
-              fontWeight:
-                  FontWeight.bold,
-            ),
-          ),
-
-          SizedBox(
-            height: 6,
-          ),
-
-          Text(
-            'Your placed orders will appear here.',
-          ),
-        ],
-      ),
-    );
-  }
-
-  // =========================================================
   // BUILD
   // =========================================================
 
@@ -3518,151 +1504,444 @@ class _OrderHistoryPageState
   Widget build(
     BuildContext context,
   ) {
+    final List<Map<String, dynamic>>
+        customerOrders =
+        _currentCustomerOrders();
+
     return Scaffold(
       appBar: AppBar(
         title: const Text(
           'My Orders',
           style: TextStyle(
-            fontWeight:
-                FontWeight.bold,
+            fontWeight: FontWeight.bold,
           ),
         ),
         centerTitle: true,
       ),
 
-      floatingActionButton: FloatingActionButton.extended(
-        onPressed: _showDeviceLinkOptions,
-        icon: const Icon(Icons.devices),
-        label: const Text(
-          'Link Devices',
-        ),
-      ),
-
-      body: isLoadingCustomer
+      body: isLoading
           ? const Center(
               child:
                   CircularProgressIndicator(),
             )
-          : customerId.isEmpty
+          : customerOrders.isEmpty
               ? const Center(
-                  child: Text(
-                    'Customer account could not be loaded.',
+                  child: Column(
+                    mainAxisAlignment:
+                        MainAxisAlignment
+                            .center,
+                    children: <Widget>[
+                      Icon(
+                        Icons
+                            .receipt_long_outlined,
+                        size: 80,
+                        color: Colors.grey,
+                      ),
+                      SizedBox(
+                        height: 15,
+                      ),
+                      Text(
+                        'No orders yet',
+                        style: TextStyle(
+                          fontSize: 20,
+                          fontWeight:
+                              FontWeight.bold,
+                        ),
+                      ),
+                      SizedBox(
+                        height: 6,
+                      ),
+                      Text(
+                        'Your placed orders will appear here.',
+                      ),
+                    ],
                   ),
                 )
-              : StreamBuilder<
-                  List<Map<String, dynamic>>>(
-                  stream:
-                      customerOrdersStream(
-                    customerId,
-                  ),
-                  builder: (
-                    BuildContext context,
-                    AsyncSnapshot<
-                            List<
-                                Map<String,
-                                    dynamic>>>
-                        snapshot,
-                  ) {
-                    if (snapshot
-                            .connectionState ==
-                        ConnectionState
-                            .waiting) {
-                      return const Center(
-                        child:
-                            CircularProgressIndicator(),
-                      );
-                    }
+              : RefreshIndicator(
+                  onRefresh: _loadOrders,
+                  child: ListView.builder(
+                    padding:
+                        const EdgeInsets.all(
+                      12,
+                    ),
+                    itemCount:
+                        customerOrders.length,
+                    itemBuilder: (
+                      BuildContext context,
+                      int index,
+                    ) {
+                      final Map<String,
+                              dynamic>
+                          order =
+                          customerOrders[
+                              index];
 
-                    if (snapshot.hasError) {
-                      return Center(
-                        child: Padding(
-                          padding:
-                              const EdgeInsets
-                                  .all(20),
-                          child: Column(
-                            mainAxisAlignment:
-                                MainAxisAlignment
-                                    .center,
+                      final double discount =
+                          _amount(
+                        order,
+                        'discount',
+                      );
+
+                      final double delivery =
+                          _amount(
+                        order,
+                        'delivery',
+                      );
+
+                      final String status =
+                          (order['status'] ??
+                                  'Pending')
+                              .toString();
+
+                      final String
+                          trackingStatus =
+                          (order[
+                                      'trackingStatus'] ??
+                                  'Order Placed')
+                              .toString();
+
+                      final double?
+                          customerLat =
+                          _customerLatitude(
+                        order,
+                      );
+
+                      final double?
+                          customerLng =
+                          _customerLongitude(
+                        order,
+                      );
+
+                      final bool
+                          hasCustomerLocation =
+                          customerLat !=
+                                  null &&
+                              customerLng !=
+                                  null;
+
+                      return Card(
+                        margin:
+                            const EdgeInsets
+                                .only(
+                          bottom: 12,
+                        ),
+                        child:
+                            ExpansionTile(
+                          leading:
+                              CircleAvatar(
+                            backgroundColor:
+                                _statusColor(
+                                      status,
+                                    )
+                                    .withValues(
+                              alpha: 0.15,
+                            ),
+                            child: Icon(
+                              Icons
+                                  .local_shipping,
+                              color:
+                                  _statusColor(
+                                status,
+                              ),
+                            ),
+                          ),
+
+                          title: Text(
+                            'Order #${order['id']?.toString() ?? ''}',
+                            maxLines: 1,
+                            overflow:
+                                TextOverflow
+                                    .ellipsis,
+                            style:
+                                const TextStyle(
+                              fontWeight:
+                                  FontWeight
+                                      .bold,
+                            ),
+                          ),
+
+                          subtitle: Column(
+                            crossAxisAlignment:
+                                CrossAxisAlignment
+                                    .start,
                             children:
                                 <Widget>[
-                              const Icon(
-                                Icons
-                                    .error_outline,
-                                size: 60,
-                                color:
-                                    Colors.red,
-                              ),
-
-                              const SizedBox(
-                                height: 10,
-                              ),
-
-                              const Text(
-                                'Could not load your orders.',
+                              Text(
+                                'Final Total: Rs. '
+                                '${_amount(order, 'amount').toStringAsFixed(0)}',
                                 style:
-                                    TextStyle(
-                                  fontSize:
-                                      17,
+                                    const TextStyle(
+                                  color:
+                                      Colors.green,
                                   fontWeight:
                                       FontWeight
                                           .bold,
                                 ),
                               ),
-
                               const SizedBox(
-                                height: 6,
+                                height: 3,
                               ),
-
                               Text(
-                                snapshot.error
-                                    .toString(),
-                                textAlign:
-                                    TextAlign
-                                        .center,
+                                'Tracking: '
+                                '$trackingStatus',
+                                style:
+                                    TextStyle(
+                                  fontSize: 12,
+                                  color: Colors
+                                      .grey
+                                      .shade700,
+                                ),
                               ),
                             ],
                           ),
+
+                          trailing: Chip(
+                            label:
+                                Text(status),
+                            backgroundColor:
+                                _statusColor(
+                                      status,
+                                    )
+                                    .withValues(
+                              alpha: 0.15,
+                            ),
+                          ),
+
+                          childrenPadding:
+                              const EdgeInsets
+                                  .fromLTRB(
+                            16,
+                            0,
+                            16,
+                            14,
+                          ),
+
+                          children:
+                              <Widget>[
+                            const Divider(),
+
+                            _detailRow(
+                              'Customer',
+                              order['name']
+                                      ?.toString() ??
+                                  '-',
+                            ),
+
+                            _detailRow(
+                              'Phone',
+                              order['phone']
+                                      ?.toString() ??
+                                  '-',
+                            ),
+
+                            _detailRow(
+                              'Order Date',
+                              _orderDate(
+                                order,
+                              ),
+                            ),
+
+                            _detailRow(
+                              'Area',
+                              order['deliveryArea']
+                                      ?.toString() ??
+                                  '-',
+                            ),
+
+                            _detailRow(
+                              'Address',
+                              _customerAddress(
+                                order,
+                              ),
+                            ),
+
+                            _detailRow(
+                              'Payment',
+                              order['payment']
+                                      ?.toString() ??
+                                  '-',
+                            ),
+
+                            const Divider(),
+
+                            _productsSection(
+                              order,
+                            ),
+
+                            const SizedBox(
+                              height: 10,
+                            ),
+
+                            _sellerSection(
+                              order,
+                            ),
+
+                            const SizedBox(
+                              height: 10,
+                            ),
+
+                            _customerLocationSection(
+                              order,
+                            ),
+
+                            const SizedBox(
+                              height: 10,
+                            ),
+
+                            _deliveryPersonSection(
+                              order,
+                            ),
+
+                            const SizedBox(
+                              height: 10,
+                            ),
+
+                            const Divider(),
+
+                            _detailRow(
+                              'Subtotal',
+                              'Rs. ${_amount(order, 'subtotal').toStringAsFixed(0)}',
+                            ),
+
+                            if (discount > 0)
+                              _detailRow(
+                                'Discount',
+                                '- Rs. '
+                                '${discount.toStringAsFixed(0)}',
+                                valueColor:
+                                    Colors.red,
+                              ),
+
+                            _detailRow(
+                              'Delivery',
+                              delivery == 0
+                                  ? 'Free'
+                                  : 'Rs. ${delivery.toStringAsFixed(0)}',
+                              valueColor:
+                                  delivery == 0
+                                      ? Colors
+                                          .green
+                                      : null,
+                            ),
+
+                            const Divider(),
+
+                            _detailRow(
+                              'Final Total',
+                              'Rs. ${_amount(order, 'amount').toStringAsFixed(0)}',
+                              valueColor:
+                                  Colors.green,
+                            ),
+
+                            const SizedBox(
+                              height: 12,
+                            ),
+
+                            SizedBox(
+                              width:
+                                  double.infinity,
+                              height: 54,
+                              child:
+                                  ElevatedButton
+                                      .icon(
+                                onPressed: () {
+                                  _openTracking(
+                                    order,
+                                  );
+                                },
+                                icon:
+                                    const Icon(
+                                  Icons
+                                      .location_searching,
+                                ),
+                                label:
+                                    const Text(
+                                  'Track Order',
+                                  style:
+                                      TextStyle(
+                                    fontWeight:
+                                        FontWeight
+                                            .bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+
+                            const SizedBox(
+                              height: 8,
+                            ),
+
+                            Row(
+                              children:
+                                  <Widget>[
+                                Icon(
+                                  hasCustomerLocation
+                                      ? Icons
+                                          .check_circle
+                                      : Icons
+                                          .warning_amber,
+                                  size: 17,
+                                  color: hasCustomerLocation
+                                      ? Colors
+                                          .green
+                                      : Colors
+                                          .orange,
+                                ),
+                                const SizedBox(
+                                  width: 6,
+                                ),
+                                Expanded(
+                                  child: Text(
+                                    hasCustomerLocation
+                                        ? 'Customer map location available'
+                                        : 'Map coordinates are not available for this order',
+                                    style:
+                                        TextStyle(
+                                      fontSize:
+                                          12,
+                                      color: Colors
+                                          .grey
+                                          .shade700,
+                                    ),
+                                  ),
+                                ),
+                              ],
+                            ),
+
+                            Align(
+                              alignment:
+                                  Alignment
+                                      .centerRight,
+                              child:
+                                  TextButton.icon(
+                                onPressed: () {
+                                  _confirmDelete(
+                                    order,
+                                  );
+                                },
+                                icon:
+                                    const Icon(
+                                  Icons
+                                      .delete_outline,
+                                  color:
+                                      Colors.red,
+                                ),
+                                label:
+                                    const Text(
+                                  'Remove',
+                                  style:
+                                      TextStyle(
+                                    color:
+                                        Colors.red,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       );
-                    }
-
-                    final List<
-                            Map<String,
-                                dynamic>>
-                        orders =
-                        snapshot.data ??
-                            <Map<String,
-                                dynamic>>[];
-
-                    if (orders.isEmpty) {
-                      return _emptyOrders();
-                    }
-
-                    return RefreshIndicator(
-                      onRefresh: () async {
-                        setState(() {});
-                      },
-                      child:
-                          ListView.builder(
-                        physics:
-                            const AlwaysScrollableScrollPhysics(),
-                        padding:
-                            const EdgeInsets
-                                .all(12),
-                        itemCount:
-                            orders.length,
-                        itemBuilder: (
-                          BuildContext
-                              context,
-                          int index,
-                        ) {
-                          return _orderCard(
-                            orders[index],
-                          );
-                        },
-                      ),
-                    );
-                  },
+                    },
+                  ),
                 ),
     );
   }

@@ -1080,27 +1080,23 @@ class _ProductDetailsPageState
       body: SingleChildScrollView(
         padding:
             const EdgeInsets.all(20),
-        child: Center(
-          child: ConstrainedBox(
-            constraints:
-                const BoxConstraints(
-              maxWidth: 900,
-            ),
-            child: Column(
+        child: Column(
               crossAxisAlignment:
                   CrossAxisAlignment.start,
               children: <Widget>[
-                Center(
-                  child: Stack(
-                    clipBehavior:
-                        Clip.none,
+                Stack(
+                  clipBehavior:
+                      Clip.none,
                     children: <Widget>[
                       GestureDetector(
                         onTap:
                             _openFullScreen,
                         child: Container(
-                          width: 280,
-                          height: 280,
+                          width: double.infinity,
+                          height:
+                              MediaQuery.sizeOf(context).width >= 900
+                                  ? 420
+                                  : 320,
                           decoration:
                               BoxDecoration(
                             color: Colors.blue
@@ -1231,8 +1227,7 @@ class _ProductDetailsPageState
                             ),
                           ),
                         ),
-                    ],
-                  ),
+                  ],
                 ),
 
                 if (_photos.length >
@@ -1725,9 +1720,7 @@ class _ProductDetailsPageState
                     ),
                   ),
                 ),
-              ],
-            ),
-          ),
+          ],
         ),
       ),
     );

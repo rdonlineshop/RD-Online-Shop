@@ -991,7 +991,7 @@ class _CheckoutPageState
     }
 
     final String orderId =
-        'RD${DateTime.now().millisecondsSinceEpoch}';
+        'NRD${DateTime.now().millisecondsSinceEpoch}';
 
     EsewaResult? esewaResult;
 

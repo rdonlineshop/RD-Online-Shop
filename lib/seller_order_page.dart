@@ -3514,7 +3514,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                 ),
               ),
             if (paymentMethod.isNotEmpty)
-              Text('NRD Paid Via: $paymentMethod'),
+              Text('RD Paid Via: $paymentMethod'),
             if (referenceId.isNotEmpty)
               SelectableText(
                 'Transaction / Reference ID: $referenceId',
@@ -3552,7 +3552,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      'NRD Adjustment: '
+                      'RD Adjustment: '
                       '${adjustmentStatus.isEmpty ? 'Pending' : adjustmentStatus}',
                       style: TextStyle(
                         color: adjustmentResolved
@@ -3584,7 +3584,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                       ),
                     if (adjustmentNote.isNotEmpty)
                       Text(
-                        'NRD Note: $adjustmentNote',
+                        'RD Note: $adjustmentNote',
                       ),
                     if (adjustmentResolved) ...<Widget>[
                       const SizedBox(height: 6),
@@ -4228,6 +4228,7 @@ class _SellerPickupQrScannerPageState
         children: <Widget>[
           MobileScanner(
             controller: _scannerController,
+            fit: BoxFit.cover,
             onDetect: _onDetect,
           ),
           Center(

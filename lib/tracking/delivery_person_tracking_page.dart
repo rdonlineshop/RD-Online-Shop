@@ -1568,14 +1568,9 @@ class _DeliveryPersonTrackingPageState
           centerTitle: true,
         ),
 
-        body: Center(
-          child: ConstrainedBox(
-            constraints:
-                const BoxConstraints(
-              maxWidth: 700,
-            ),
-
-            child: ListView(
+        // Full responsive width:
+        // mobile uses the phone width; Windows/Web use the available window width.
+        body: ListView(
               padding:
                   const EdgeInsets.all(
                 16,
@@ -1781,9 +1776,7 @@ class _DeliveryPersonTrackingPageState
                     ),
                   ),
                 ),
-              ],
-            ),
-          ),
+          ],
         ),
       ),
     );
@@ -1877,6 +1870,7 @@ class _DeliveryQrScannerPageState
         children: <Widget>[
           mobile_scanner.MobileScanner(
             controller: _scannerController,
+            fit: BoxFit.cover,
             onDetect: _handleDetection,
           ),
           Center(
