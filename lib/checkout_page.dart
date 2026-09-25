@@ -1,6 +1,7 @@
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
@@ -630,6 +631,63 @@ class _CheckoutPageState
   }
 
   // =========================================================
+  // CUSTOMER CHECKOUT SESSION
+  // =========================================================
+
+  Future<void> _ensureCustomerCheckoutSession() async {
+    final FirebaseAuth auth = FirebaseAuth.instance;
+    final User? currentUser = auth.currentUser;
+
+    // No Firebase session yet -> start/restore the normal guest
+    // customer session used by Order Data.
+    if (currentUser == null) {
+      await switchToGuestCustomerSession(
+        preferredCustomerId:
+            await getSavedCustomerId(),
+      );
+      return;
+    }
+
+    // Anonymous users are already customer/guest sessions.
+    if (currentUser.isAnonymous) {
+      await getOrCreateCustomerId();
+      return;
+    }
+
+    // A registered customer may checkout without switching accounts.
+    final DocumentSnapshot<Map<String, dynamic>> customerSnapshot =
+        await FirebaseFirestore.instance
+            .collection('customers')
+            .doc(currentUser.uid)
+            .get();
+
+    final Map<String, dynamic> customer =
+        customerSnapshot.data() ?? <String, dynamic>{};
+
+    final bool isRegisteredCustomer =
+        customerSnapshot.exists &&
+            customer['role']?.toString().trim() == 'customer' &&
+            customer['isActive'] == true;
+
+    if (isRegisteredCustomer) {
+      await activateRegisteredCustomerSession(
+        currentUser,
+      );
+      return;
+    }
+
+    // Seller/Admin/Delivery/Ride-driver sessions cannot create a customer
+    // order under the current Firestore rules. Checkout is a customer action,
+    // so switch cleanly to the preserved guest customer identity first.
+    final String? savedCustomerId =
+        await getSavedCustomerId();
+
+    await switchToGuestCustomerSession(
+      preferredCustomerId: savedCustomerId,
+    );
+  }
+
+  // =========================================================
   // PAYMENT ROUTING
   // =========================================================
 
@@ -919,11 +977,13 @@ class _CheckoutPageState
       return;
     }
 
-    if (selectedPayment == 'International Payment') {
+    if (selectedPayment != 'Cash on Delivery' &&
+        selectedPayment != 'eSewa') {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(
+        SnackBar(
           content: Text(
-            'International Payment is prepared for future integration but is not active yet.',
+            '$selectedPayment online payment is not active yet. '
+            'No order has been placed.',
           ),
         ),
       );
@@ -1056,11 +1116,44 @@ class _CheckoutPageState
     // CUSTOMER UNIQUE ID
     // =======================================================
 
+    try {
+      await _ensureCustomerCheckoutSession();
+    } on FirebaseAuthException catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error.code == 'operation-not-allowed'
+                ? 'Customer guest login is not enabled in Firebase Authentication. Enable Anonymous sign-in before placing guest orders.'
+                : 'Could not start customer checkout session: ${error.message ?? error.code}',
+          ),
+        ),
+      );
+      return;
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not start customer checkout session: $error',
+          ),
+        ),
+      );
+      return;
+    }
+
     final String customerId =
         await getOrCreateCustomerId();
 
-    await addOrder(
-      <String, dynamic>{
+    try {
+      await addOrder(
+        <String, dynamic>{
         'id': orderId,
 
         // =====================================================
@@ -1314,8 +1407,37 @@ class _CheckoutPageState
 
         'deliveredAt':
             null,
-      },
-    );
+        },
+      );
+    } on FirebaseException catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            error.code == 'permission-denied'
+                ? 'Order could not be saved because the customer session was not authorized. Please try Place Order again.'
+                : 'Could not save order: ${error.message ?? error.code}',
+          ),
+        ),
+      );
+      return;
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not place order: $error',
+          ),
+        ),
+      );
+      return;
+    }
 
     await clearCart();
 
@@ -2299,6 +2421,72 @@ class _CheckoutPageState
               ),
             ],
 
+            if (selectedPayment !=
+                'Cash on Delivery') ...<Widget>[
+              const SizedBox(
+                height: 10,
+              ),
+              Container(
+                width:
+                    double.infinity,
+                padding:
+                    const EdgeInsets.all(
+                  12,
+                ),
+                decoration:
+                    BoxDecoration(
+                  color:
+                      selectedPayment == 'eSewa'
+                          ? Colors.blue.shade50
+                          : Colors.orange.shade50,
+                  borderRadius:
+                      BorderRadius.circular(
+                    10,
+                  ),
+                  border:
+                      Border.all(
+                    color:
+                        selectedPayment == 'eSewa'
+                            ? Colors.blue.shade200
+                            : Colors.orange.shade200,
+                  ),
+                ),
+                child:
+                    Row(
+                  crossAxisAlignment:
+                      CrossAxisAlignment.start,
+                  children:
+                      <Widget>[
+                    Icon(
+                      selectedPayment == 'eSewa'
+                          ? Icons.payment_rounded
+                          : Icons.info_outline_rounded,
+                      color:
+                          selectedPayment == 'eSewa'
+                              ? Colors.blue
+                              : Colors.orange,
+                    ),
+                    const SizedBox(
+                      width: 8,
+                    ),
+                    Expanded(
+                      child:
+                          Text(
+                        selectedPayment == 'eSewa'
+                            ? 'Online payment selected. Complete the payment first. Your order will be created only after successful payment.'
+                            : '$selectedPayment is prepared for future online payment integration. No order will be created until this payment method is active.',
+                        style:
+                            const TextStyle(
+                          fontWeight:
+                              FontWeight.w600,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+
             const SizedBox(
               height:
                   16,
@@ -2393,11 +2581,16 @@ class _CheckoutPageState
                               strokeWidth: 2,
                             ),
                           )
-                        : const Text(
-                            'Place Order',
-                            style: TextStyle(
+                        : Text(
+                            selectedPayment ==
+                                    'Cash on Delivery'
+                                ? 'Place Order'
+                                : 'Pay Online',
+                            style:
+                                const TextStyle(
                               fontSize: 18,
-                              fontWeight: FontWeight.bold,
+                              fontWeight:
+                                  FontWeight.bold,
                             ),
                           ),
               ),

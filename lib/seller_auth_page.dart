@@ -1,8 +1,10 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:geocoding/geocoding.dart';
 import 'package:geolocator/geolocator.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'seller_dashboard_page.dart';
 import 'services/platform_capabilities.dart';
@@ -36,6 +38,27 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
 
   final TextEditingController _passwordController =
       TextEditingController();
+
+  final TextEditingController _businessRegistrationController =
+      TextEditingController();
+
+  final TextEditingController _panNumberController =
+      TextEditingController();
+
+  final TextEditingController _vatNumberController =
+      TextEditingController();
+
+  bool _legalDeclarationAccepted = false;
+
+  final ImagePicker _documentPicker = ImagePicker();
+
+  XFile? _businessRegistrationDocument;
+  XFile? _panDocument;
+  XFile? _vatDocument;
+  XFile? _ownerIdDocument;
+  final List<XFile> _otherLegalDocuments = <XFile>[];
+
+  bool _isPickingDocument = false;
 
   bool _isRegistering = false;
   bool _isLoading = false;
@@ -132,6 +155,240 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
         content: Text(message),
       ),
     );
+  }
+
+
+  String _documentExtension(String fileName) {
+    final int dot = fileName.lastIndexOf('.');
+    if (dot < 0) {
+      return '.jpg';
+    }
+
+    final String extension =
+        fileName.substring(dot).toLowerCase();
+
+    const Set<String> supported = <String>{
+      '.jpg',
+      '.jpeg',
+      '.png',
+      '.webp',
+      '.heic',
+      '.heif',
+    };
+
+    return supported.contains(extension)
+        ? extension
+        : '.jpg';
+  }
+
+  String _documentContentType(String fileName) {
+    final String lower = fileName.toLowerCase();
+
+    if (lower.endsWith('.png')) {
+      return 'image/png';
+    }
+
+    if (lower.endsWith('.webp')) {
+      return 'image/webp';
+    }
+
+    if (lower.endsWith('.heic') ||
+        lower.endsWith('.heif')) {
+      return 'image/heic';
+    }
+
+    return 'image/jpeg';
+  }
+
+  Future<XFile?> _pickDocumentImage() async {
+    if (_isPickingDocument) {
+      return null;
+    }
+
+    setState(() {
+      _isPickingDocument = true;
+    });
+
+    try {
+      return await _documentPicker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 88,
+        maxWidth: 2400,
+      );
+    } catch (error) {
+      _message(
+        'Could not select document image. '
+        '${error.toString().replaceFirst('Exception: ', '')}',
+      );
+      return null;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _isPickingDocument = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _pickRequiredDocument(
+    String documentType,
+  ) async {
+    final XFile? file = await _pickDocumentImage();
+
+    if (file == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      switch (documentType) {
+        case 'registration':
+          _businessRegistrationDocument = file;
+          break;
+        case 'pan':
+          _panDocument = file;
+          break;
+        case 'vat':
+          _vatDocument = file;
+          break;
+        case 'owner_id':
+          _ownerIdDocument = file;
+          break;
+      }
+    });
+  }
+
+  Future<void> _addOtherLegalDocument() async {
+    if (_otherLegalDocuments.length >= 3) {
+      _message(
+        'You can add up to 3 other legal documents.',
+      );
+      return;
+    }
+
+    final XFile? file = await _pickDocumentImage();
+
+    if (file == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _otherLegalDocuments.add(file);
+    });
+  }
+
+  Widget _legalDocumentPicker({
+    required String title,
+    required String helper,
+    required XFile? file,
+    required VoidCallback onPick,
+    bool requiredDocument = false,
+    VoidCallback? onRemove,
+  }) {
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: ListTile(
+        contentPadding: const EdgeInsets.symmetric(
+          horizontal: 14,
+          vertical: 8,
+        ),
+        leading: Icon(
+          file == null
+              ? Icons.upload_file_outlined
+              : Icons.check_circle,
+          color: file == null
+              ? Colors.orange
+              : Colors.green,
+        ),
+        title: Text(
+          requiredDocument ? '$title *' : title,
+          style: const TextStyle(
+            fontWeight: FontWeight.w700,
+          ),
+        ),
+        subtitle: Text(
+          file == null
+              ? helper
+              : 'Selected: ${file.name}',
+        ),
+        trailing: file == null
+            ? TextButton(
+                onPressed:
+                    _isPickingDocument || _isLoading
+                        ? null
+                        : onPick,
+                child: const Text('Choose'),
+              )
+            : IconButton(
+                tooltip: 'Remove',
+                onPressed:
+                    _isLoading ? null : onRemove,
+                icon: const Icon(
+                  Icons.close_rounded,
+                ),
+              ),
+      ),
+    );
+  }
+
+  Future<String> _uploadLegalDocument({
+    required String sellerId,
+    required XFile file,
+    required String documentKey,
+  }) async {
+    final bytes = await file.readAsBytes();
+
+    const int maximumBytes = 10 * 1024 * 1024;
+
+    if (bytes.length > maximumBytes) {
+      throw Exception(
+        '${file.name} is larger than 10 MB.',
+      );
+    }
+
+    final String extension =
+        _documentExtension(file.name);
+
+    final String fileName =
+        '${documentKey}_${DateTime.now().microsecondsSinceEpoch}$extension';
+
+    final Reference reference = FirebaseStorage.instance
+        .ref()
+        .child(
+          'seller_legal_documents/$sellerId/$fileName',
+        );
+
+    await reference.putData(
+      bytes,
+      SettableMetadata(
+        contentType:
+            _documentContentType(file.name),
+        customMetadata: <String, String>{
+          'purpose':
+              'seller_legal_verification',
+          'sellerId': sellerId,
+          'documentKey': documentKey,
+          'originalFileName': file.name,
+        },
+      ),
+    );
+
+    return reference.fullPath;
+  }
+
+  Future<void> _deleteUploadedDocuments(
+    Iterable<String> paths,
+  ) async {
+    for (final String path in paths) {
+      if (path.trim().isEmpty) {
+        continue;
+      }
+
+      try {
+        await FirebaseStorage.instance
+            .ref(path)
+            .delete();
+      } catch (_) {}
+    }
   }
 
   Future<void> _useCurrentLocation() async {
@@ -246,6 +503,7 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
 
   Future<void> _registerSeller() async {
     User? createdUser;
+    final List<String> uploadedPaths = <String>[];
 
     try {
       final UserCredential credential =
@@ -267,6 +525,60 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
       await createdUser.updateDisplayName(
         _ownerNameController.text.trim(),
       );
+
+      final String registrationDocumentPath =
+          await _uploadLegalDocument(
+        sellerId: sellerId,
+        file: _businessRegistrationDocument!,
+        documentKey: 'business_registration',
+      );
+      uploadedPaths.add(registrationDocumentPath);
+
+      final String panDocumentPath =
+          await _uploadLegalDocument(
+        sellerId: sellerId,
+        file: _panDocument!,
+        documentKey: 'pan',
+      );
+      uploadedPaths.add(panDocumentPath);
+
+      String vatDocumentPath = '';
+
+      if (_vatDocument != null) {
+        vatDocumentPath =
+            await _uploadLegalDocument(
+          sellerId: sellerId,
+          file: _vatDocument!,
+          documentKey: 'vat',
+        );
+        uploadedPaths.add(vatDocumentPath);
+      }
+
+      final String ownerIdDocumentPath =
+          await _uploadLegalDocument(
+        sellerId: sellerId,
+        file: _ownerIdDocument!,
+        documentKey: 'owner_id',
+      );
+      uploadedPaths.add(ownerIdDocumentPath);
+
+      final List<String> otherDocumentPaths =
+          <String>[];
+
+      for (int index = 0;
+          index < _otherLegalDocuments.length;
+          index++) {
+        final String path =
+            await _uploadLegalDocument(
+          sellerId: sellerId,
+          file: _otherLegalDocuments[index],
+          documentKey:
+              'other_${index + 1}',
+        );
+
+        otherDocumentPaths.add(path);
+        uploadedPaths.add(path);
+      }
 
       await _sellers.doc(sellerId).set(
         <String, dynamic>{
@@ -291,8 +603,59 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
 
           'description': '',
 
+          // Government / legal business verification.
+          'businessRegistrationNumber':
+              _businessRegistrationController.text.trim(),
+          'panNumber':
+              _panNumberController.text.trim(),
+          'vatNumber':
+              _vatNumberController.text.trim(),
+          'legalDeclarationAccepted':
+              _legalDeclarationAccepted,
+          'legalVerificationStatus': 'pending',
+          'legalVerified': false,
+          'legalVerifiedAt': null,
+          'legalVerifiedBy': '',
+          'legalRejectionReason': '',
+          'adminReviewRequested': true,
+          'legalDocumentsUploaded': true,
+          'legalSubmittedAt':
+              FieldValue.serverTimestamp(),
+
+          // Private Firebase Storage paths.
+          // Do not save public download URLs for legal documents.
+          'businessRegistrationDocumentPath':
+              registrationDocumentPath,
+          'businessRegistrationDocumentName':
+              _businessRegistrationDocument!.name,
+          'panDocumentPath':
+              panDocumentPath,
+          'panDocumentName':
+              _panDocument!.name,
+          'vatDocumentPath':
+              vatDocumentPath,
+          'vatDocumentName':
+              _vatDocument?.name ?? '',
+          'ownerIdDocumentPath':
+              ownerIdDocumentPath,
+          'ownerIdDocumentName':
+              _ownerIdDocument!.name,
+          'otherLegalDocumentPaths':
+              otherDocumentPaths,
+          'otherLegalDocumentNames':
+              _otherLegalDocuments
+                  .map((XFile file) => file.name)
+                  .toList(),
+
+          // Legacy URL fields stay empty so sensitive legal
+          // documents are never exposed through public URLs.
+          'businessRegistrationDocumentUrl': '',
+          'panDocumentUrl': '',
+          'vatDocumentUrl': '',
+          'ownerIdDocumentUrl': '',
+          'otherLegalDocumentUrls': <String>[],
+
           // Seller photo fields.
-          // Shop Profile page will update these.
           'photoUrl': '',
           'shopPhotoUrl': '',
           'shopImageUrl': '',
@@ -304,30 +667,30 @@ class _SellerAuthPageState extends State<SellerAuthPage> {
           // Admin must approve the seller before login.
           'isActive': false,
 
-// Seller shop location. Keep both the canonical and legacy
-// coordinate fields during the launch transition so every existing
-// customer/seller page reads the same current position.
-'shopLat': _shopLatitude,
-'shopLng': _shopLongitude,
-'shopLatitude': _shopLatitude,
-'shopLongitude': _shopLongitude,
-if (_shopLatitude != null && _shopLongitude != null)
-  'shopLocation': GeoPoint(
-    _shopLatitude!,
-    _shopLongitude!,
-  ),
-'shopLocationSource':
-    _shopLatitude != null && _shopLongitude != null
-        ? 'registration_gps'
-        : '',
-'shopLocationUpdatedAt':
-    FieldValue.serverTimestamp(),
+          // Seller shop location.
+          'shopLat': _shopLatitude,
+          'shopLng': _shopLongitude,
+          'shopLatitude': _shopLatitude,
+          'shopLongitude': _shopLongitude,
+          if (_shopLatitude != null &&
+              _shopLongitude != null)
+            'shopLocation': GeoPoint(
+              _shopLatitude!,
+              _shopLongitude!,
+            ),
+          'shopLocationSource':
+              _shopLatitude != null &&
+                      _shopLongitude != null
+                  ? 'registration_gps'
+                  : '',
+          'shopLocationUpdatedAt':
+              FieldValue.serverTimestamp(),
 
-'createdAt':
-    FieldValue.serverTimestamp(),
+          'createdAt':
+              FieldValue.serverTimestamp(),
 
-'updatedAt':
-    FieldValue.serverTimestamp(),
+          'updatedAt':
+              FieldValue.serverTimestamp(),
         },
       );
 
@@ -336,16 +699,21 @@ if (_shopLatitude != null && _shopLongitude != null)
       }
 
       _message(
-        'Seller account created. Your login is saved on this device until you logout.',
+        'Seller registration submitted. NRD Admin will review your legal documents. This page updates automatically after approval.',
       );
 
       Navigator.pushReplacement<void, void>(
         context,
         MaterialPageRoute<void>(
-          builder: (_) => const SellerDashboardPage(),
+          builder: (_) =>
+              const SellerDashboardPage(),
         ),
       );
     } catch (error) {
+      await _deleteUploadedDocuments(
+        uploadedPaths.reversed,
+      );
+
       if (createdUser != null) {
         try {
           await createdUser.delete();
@@ -424,6 +792,45 @@ if (_shopLatitude != null && _shopLongitude != null)
     }
 
     if (_formKey.currentState?.validate() != true) {
+      return;
+    }
+
+    if (_isRegistering && !_legalDeclarationAccepted) {
+      _message(
+        'Please confirm that the business is legally registered and the information is correct.',
+      );
+      return;
+    }
+
+    if (_isRegistering &&
+        _businessRegistrationDocument == null) {
+      _message(
+        'Please upload the Business / Shop Registration Certificate.',
+      );
+      return;
+    }
+
+    if (_isRegistering && _panDocument == null) {
+      _message(
+        'Please upload the PAN Certificate.',
+      );
+      return;
+    }
+
+    if (_isRegistering &&
+        _ownerIdDocument == null) {
+      _message(
+        'Please upload the Owner / Authorized Person ID.',
+      );
+      return;
+    }
+
+    if (_isRegistering &&
+        _vatNumberController.text.trim().isNotEmpty &&
+        _vatDocument == null) {
+      _message(
+        'VAT number was entered. Please upload the VAT Certificate.',
+      );
       return;
     }
 
@@ -537,6 +944,9 @@ if (_shopLatitude != null && _shopLongitude != null)
     _addressController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
+    _businessRegistrationController.dispose();
+    _panNumberController.dispose();
+    _vatNumberController.dispose();
 
     super.dispose();
   }
@@ -603,7 +1013,7 @@ if (_shopLatitude != null && _shopLongitude != null)
 
               Text(
                 _isRegistering
-                    ? 'Register your shop with RD Online Shop'
+                    ? 'Register your shop with NRD Online Shop'
                     : 'Enter your seller email and password',
                 textAlign: TextAlign.center,
                 style: TextStyle(
@@ -741,6 +1151,279 @@ if (_shopLatitude != null && _shopLongitude != null)
                           : 'Use Current Location',
                     ),
                   ),
+                ),
+
+                const SizedBox(height: 8),
+
+                const SizedBox(height: 18),
+
+                const Divider(),
+
+                const SizedBox(height: 8),
+
+                const Text(
+                  'Government / Legal Verification',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+
+                const SizedBox(height: 6),
+
+                Text(
+                  'Enter the legal registration details of the shop/business. '
+                  'Admin will review these details before activating the seller account.',
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    height: 1.35,
+                  ),
+                ),
+
+                const SizedBox(height: 14),
+
+                TextFormField(
+                  controller: _businessRegistrationController,
+                  textInputAction: TextInputAction.next,
+                  decoration: const InputDecoration(
+                    labelText: 'Registration Number',
+                    prefixIcon: Icon(Icons.verified_outlined),
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (String? value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Enter business/shop registration number.';
+                    }
+                    return null;
+                  },
+                ),
+
+                const SizedBox(height: 12),
+
+                TextFormField(
+                  controller: _panNumberController,
+                  textInputAction: TextInputAction.next,
+                  keyboardType: TextInputType.text,
+                  decoration: const InputDecoration(
+                    labelText: 'PAN Number',
+                    prefixIcon: Icon(Icons.badge_outlined),
+                    border: OutlineInputBorder(),
+                  ),
+                  validator: (String? value) {
+                    if (value == null || value.trim().isEmpty) {
+                      return 'Enter PAN number.';
+                    }
+                    return null;
+                  },
+                ),
+
+                const SizedBox(height: 12),
+
+                TextFormField(
+                  controller: _vatNumberController,
+                  textInputAction: TextInputAction.next,
+                  keyboardType: TextInputType.text,
+                  decoration: const InputDecoration(
+                    labelText: 'VAT Number (if applicable)',
+                    prefixIcon: Icon(Icons.receipt_long_outlined),
+                    border: OutlineInputBorder(),
+                    helperText: 'Leave blank if VAT registration is not applicable.',
+                  ),
+                ),
+
+
+                const SizedBox(height: 18),
+
+                const Text(
+                  'Government Document Upload',
+                  style: TextStyle(
+                    fontSize: 16,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+
+                const SizedBox(height: 5),
+
+                Text(
+                  'Upload clear photos/scans. Legal documents are stored privately and are only available to you and NRD Admin.',
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    height: 1.35,
+                  ),
+                ),
+
+                const SizedBox(height: 10),
+
+                _legalDocumentPicker(
+                  title: 'Registration Certificate',
+                  helper:
+                      'Required government/business registration certificate',
+                  file:
+                      _businessRegistrationDocument,
+                  requiredDocument: true,
+                  onPick: () {
+                    _pickRequiredDocument(
+                      'registration',
+                    );
+                  },
+                  onRemove: () {
+                    setState(() {
+                      _businessRegistrationDocument =
+                          null;
+                    });
+                  },
+                ),
+
+                _legalDocumentPicker(
+                  title: 'PAN Certificate',
+                  helper:
+                      'Required PAN registration certificate/card',
+                  file: _panDocument,
+                  requiredDocument: true,
+                  onPick: () {
+                    _pickRequiredDocument('pan');
+                  },
+                  onRemove: () {
+                    setState(() {
+                      _panDocument = null;
+                    });
+                  },
+                ),
+
+                _legalDocumentPicker(
+                  title: 'VAT Certificate',
+                  helper:
+                      'Required only when VAT Number is entered',
+                  file: _vatDocument,
+                  onPick: () {
+                    _pickRequiredDocument('vat');
+                  },
+                  onRemove: () {
+                    setState(() {
+                      _vatDocument = null;
+                    });
+                  },
+                ),
+
+                _legalDocumentPicker(
+                  title: 'Owner / Authorized Person ID',
+                  helper:
+                      'Required identity document of the owner/authorized person',
+                  file: _ownerIdDocument,
+                  requiredDocument: true,
+                  onPick: () {
+                    _pickRequiredDocument(
+                      'owner_id',
+                    );
+                  },
+                  onRemove: () {
+                    setState(() {
+                      _ownerIdDocument = null;
+                    });
+                  },
+                ),
+
+                Card(
+                  margin:
+                      const EdgeInsets.only(bottom: 10),
+                  child: Padding(
+                    padding: const EdgeInsets.all(14),
+                    child: Column(
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
+                      children: <Widget>[
+                        const Text(
+                          'Other Legal Documents',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                        const SizedBox(height: 4),
+                        const Text(
+                          'Optional — add up to 3 additional government/legal documents.',
+                        ),
+                        if (_otherLegalDocuments
+                            .isNotEmpty) ...<Widget>[
+                          const SizedBox(height: 8),
+                          ...List<Widget>.generate(
+                            _otherLegalDocuments.length,
+                            (int index) {
+                              return ListTile(
+                                dense: true,
+                                contentPadding:
+                                    EdgeInsets.zero,
+                                leading: const Icon(
+                                  Icons
+                                      .description_outlined,
+                                ),
+                                title: Text(
+                                  _otherLegalDocuments[
+                                          index]
+                                      .name,
+                                ),
+                                trailing: IconButton(
+                                  tooltip: 'Remove',
+                                  onPressed: _isLoading
+                                      ? null
+                                      : () {
+                                          setState(() {
+                                            _otherLegalDocuments
+                                                .removeAt(
+                                              index,
+                                            );
+                                          });
+                                        },
+                                  icon: const Icon(
+                                    Icons.close_rounded,
+                                  ),
+                                ),
+                              );
+                            },
+                          ),
+                        ],
+                        Align(
+                          alignment:
+                              Alignment.centerLeft,
+                          child: OutlinedButton.icon(
+                            onPressed:
+                                _isPickingDocument ||
+                                        _isLoading
+                                    ? null
+                                    : _addOtherLegalDocument,
+                            icon: const Icon(
+                              Icons.add_a_photo_outlined,
+                            ),
+                            label: const Text(
+                              'Add Other Document',
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+
+                const SizedBox(height: 8),
+                CheckboxListTile(
+                  value: _legalDeclarationAccepted,
+                  contentPadding: EdgeInsets.zero,
+                  controlAffinity: ListTileControlAffinity.leading,
+                  title: const Text(
+                    'I confirm this shop/business is legally registered and the information provided is correct.',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w700,
+                    ),
+                  ),
+                  subtitle: const Text(
+                    'NRD Admin will verify the registration details before seller activation.',
+                  ),
+                  onChanged: _isLoading
+                      ? null
+                      : (bool? value) {
+                          setState(() {
+                            _legalDeclarationAccepted = value == true;
+                          });
+                        },
                 ),
 
                 const SizedBox(height: 8),

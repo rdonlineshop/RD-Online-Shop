@@ -1843,11 +1843,11 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
   Future<void> _enterPickupCode(
     Map<String, dynamic> order,
   ) async {
-    final TextEditingController controller =
-        TextEditingController();
+    String enteredCode = '';
 
     final String? value = await showDialog<String>(
       context: context,
+      barrierDismissible: false,
       builder: (BuildContext dialogContext) {
         return AlertDialog(
           title: const Text(
@@ -1857,10 +1857,12 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
             ),
           ),
           content: TextField(
-            controller: controller,
             keyboardType: TextInputType.number,
             maxLength: 6,
             autofocus: true,
+            onChanged: (String value) {
+              enteredCode = value.trim();
+            },
             decoration: const InputDecoration(
               labelText: '6-digit pickup code',
               hintText: '000000',
@@ -1878,7 +1880,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
               onPressed: () {
                 Navigator.pop(
                   dialogContext,
-                  controller.text.trim(),
+                  enteredCode,
                 );
               },
               child: const Text('Confirm'),
@@ -1888,9 +1890,17 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
       },
     );
 
-    controller.dispose();
-
     if (value == null || !mounted) {
+      return;
+    }
+
+    // Let the dialog route finish its reverse transition before the
+    // underlying seller order list is updated/rebuilt.
+    await Future<void>.delayed(
+      const Duration(milliseconds: 300),
+    );
+
+    if (!mounted) {
       return;
     }
 
@@ -1927,6 +1937,16 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     if (value == null ||
         value.trim().isEmpty ||
         !mounted) {
+      return;
+    }
+
+    // Let the scanner route finish disposing its camera/inherited widgets
+    // before rebuilding the seller order page.
+    await Future<void>.delayed(
+      const Duration(milliseconds: 300),
+    );
+
+    if (!mounted) {
       return;
     }
 
@@ -3458,7 +3478,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                 const SizedBox(width: 8),
                 const Expanded(
                   child: Text(
-                    'RD Seller Settlement',
+                    'NRD Seller Settlement',
                     style: TextStyle(
                       fontSize: 16,
                       fontWeight: FontWeight.bold,
@@ -3494,7 +3514,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                 ),
               ),
             if (paymentMethod.isNotEmpty)
-              Text('RD Paid Via: $paymentMethod'),
+              Text('NRD Paid Via: $paymentMethod'),
             if (referenceId.isNotEmpty)
               SelectableText(
                 'Transaction / Reference ID: $referenceId',
@@ -3532,7 +3552,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(
-                      'RD Adjustment: '
+                      'NRD Adjustment: '
                       '${adjustmentStatus.isEmpty ? 'Pending' : adjustmentStatus}',
                       style: TextStyle(
                         color: adjustmentResolved
@@ -3564,7 +3584,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                       ),
                     if (adjustmentNote.isNotEmpty)
                       Text(
-                        'RD Note: $adjustmentNote',
+                        'NRD Note: $adjustmentNote',
                       ),
                     if (adjustmentResolved) ...<Widget>[
                       const SizedBox(height: 6),
@@ -3583,7 +3603,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
             if (settlement.isEmpty) ...<Widget>[
               const SizedBox(height: 4),
               const Text(
-                'RD has not completed this seller settlement yet.',
+                'NRD has not completed this seller settlement yet.',
                 style: TextStyle(
                   color: Colors.orange,
                 ),
@@ -4146,7 +4166,7 @@ class _SellerPickupQrScannerPageState
 
   bool _returned = false;
 
-  void _onDetect(BarcodeCapture capture) {
+  Future<void> _onDetect(BarcodeCapture capture) async {
     if (_returned || capture.barcodes.isEmpty) {
       return;
     }
@@ -4159,6 +4179,15 @@ class _SellerPickupQrScannerPageState
     }
 
     _returned = true;
+
+    // Stop the camera before popping the scanner route. This avoids the
+    // scanner continuing to dispatch inherited-widget/camera updates while
+    // the route is being disposed.
+    await _scannerController.stop();
+
+    if (!mounted) {
+      return;
+    }
 
     Navigator.pop<String>(
       context,

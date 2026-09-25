@@ -682,7 +682,7 @@ class _HotelPartnerFeePageState
                 ),
                 const SizedBox(height: 12),
                 GridView.count(
-                  crossAxisCount:
+                crossAxisCount:
                       MediaQuery.sizeOf(context)
                                   .width >=
                               760
@@ -1793,7 +1793,7 @@ class _HotelFeePaymentDialogState
               Text(
                 'Invoice: ${widget.invoiceDoc.id}',
                 style: TextStyle(
-                  color: Colors.grey.shade700,
+                  color:Colors.grey.shade700,
                   fontSize: 11,
                 ),
               ),

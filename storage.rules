@@ -1,0 +1,109 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && (
+          request.auth.uid == 'sy7uYYhHSDaukxkqeAKcSQ0L4rP2'
+          || (
+            firestore.exists(
+              /databases/(default)/documents/admins/$(request.auth.uid)
+            )
+            && firestore.get(
+              /databases/(default)/documents/admins/$(request.auth.uid)
+            ).data.isActive == true
+            && firestore.get(
+              /databases/(default)/documents/admins/$(request.auth.uid)
+            ).data.role in ['admin', 'superAdmin']
+          )
+        );
+    }
+
+    function sellerExists(sellerId) {
+      return firestore.exists(
+        /databases/(default)/documents/sellers/$(sellerId)
+      );
+    }
+
+    function isPathOwner(sellerId) {
+      return signedIn()
+        && request.auth.uid == sellerId;
+    }
+
+    function isSellerOwner(sellerId) {
+      return isPathOwner(sellerId)
+        && sellerExists(sellerId)
+        && firestore.get(
+          /databases/(default)/documents/sellers/$(sellerId)
+        ).data.role == 'seller';
+    }
+
+    function sellerCanManagePendingDocuments(sellerId) {
+      return isSellerOwner(sellerId)
+        && firestore.get(
+          /databases/(default)/documents/sellers/$(sellerId)
+        ).data.isActive == false
+        && firestore.get(
+          /databases/(default)/documents/sellers/$(sellerId)
+        ).data.legalVerificationStatus
+          in ['pending', 'rejected'];
+    }
+
+    function validLegalDocumentUpload(sellerId) {
+      return request.resource != null
+        && request.resource.size <= 10 * 1024 * 1024
+        && request.resource.contentType != null
+        && request.resource.contentType.matches('image/.*')
+        && request.resource.metadata.purpose
+          == 'seller_legal_verification'
+        && request.resource.metadata.sellerId
+          == sellerId;
+    }
+
+    // Private seller legal documents.
+    // A new authenticated seller may upload to only their own folder
+    // before the Firestore seller record is created. After the seller
+    // record exists, changes are allowed only while verification is
+    // pending/rejected and the seller is inactive.
+    match /seller_legal_documents/{sellerId}/{fileName} {
+      allow read: if isAdmin()
+        || isSellerOwner(sellerId);
+
+      allow create: if isAdmin()
+        || (
+          isPathOwner(sellerId)
+          && validLegalDocumentUpload(sellerId)
+          && (
+            !sellerExists(sellerId)
+            || sellerCanManagePendingDocuments(sellerId)
+          )
+        );
+
+      allow update: if isAdmin()
+        || (
+          sellerCanManagePendingDocuments(sellerId)
+          && validLegalDocumentUpload(sellerId)
+        );
+
+      allow delete: if isAdmin()
+        || (
+          isPathOwner(sellerId)
+          && (
+            !sellerExists(sellerId)
+            || sellerCanManagePendingDocuments(sellerId)
+          )
+        );
+    }
+
+    // Keep every other Firebase Storage path private unless a separate
+    // explicit rule is added later for another NRD module.
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

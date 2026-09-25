@@ -1880,10 +1880,17 @@ service cloud.firestore {
       }
 
       function sellerCanReadNotification() {
-        return isActiveSeller()
+        return signedIn()
+          && exists(
+            /databases/$(database)/documents/sellers/$(request.auth.uid)
+          )
+          && sellerData().role == 'seller'
           && resource.data.isActive == true
           && (
-            resource.data.audience in ['sellers', 'both']
+            (
+              sellerData().isActive == true
+              && resource.data.audience in ['sellers', 'both']
+            )
             || (
               resource.data.audience == 'seller'
               && resource.data.targetSellerId is string

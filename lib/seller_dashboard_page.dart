@@ -238,9 +238,11 @@ class SellerDashboardPage extends StatelessWidget {
                     color: Colors.white.withValues(alpha: 0.18),
                     borderRadius: BorderRadius.circular(20),
                   ),
-                  child: const Text(
-                    'Active Seller',
-                    style: TextStyle(
+                  child: Text(
+                    seller['legalVerified'] == true
+                        ? 'Verified Seller'
+                        : 'Active • Legal Pending',
+                    style: const TextStyle(
                       color: Colors.white,
                       fontWeight: FontWeight.bold,
                       fontSize: 12,
@@ -311,30 +313,108 @@ class SellerDashboardPage extends StatelessWidget {
     final String shopName =
         seller['shopName']?.toString() ?? 'Seller';
 
+    final String verificationStatus =
+        seller['legalVerificationStatus']?.toString().trim() ??
+            'pending';
+
+    final bool legalSubmitted =
+        seller['legalDeclarationAccepted'] == true;
+
+    final bool legalDocumentsUploaded =
+        seller['legalDocumentsUploaded'] == true;
+
+    final String rejectionReason =
+        seller['legalRejectionReason']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String businessRegistrationNumber =
+        seller['businessRegistrationNumber']?.toString().trim() ?? '';
+
+    final String panNumber =
+        seller['panNumber']?.toString().trim() ?? '';
+
     return Center(
-      child: Padding(
+      child: SingleChildScrollView(
         padding: const EdgeInsets.all(24),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[
-            const Icon(
-              Icons.block,
+            Icon(
+              verificationStatus == 'rejected'
+                  ? Icons.error_outline_rounded
+                  : Icons.hourglass_top_rounded,
               size: 75,
-              color: Colors.red,
+              color: verificationStatus == 'rejected'
+                  ? Colors.red
+                  : Colors.orange,
             ),
             const SizedBox(height: 16),
             Text(
-              '$shopName account is inactive.',
+              verificationStatus == 'rejected'
+                  ? '$shopName verification needs changes.'
+                  : '$shopName is waiting for Admin approval.',
               textAlign: TextAlign.center,
               style: const TextStyle(
                 fontSize: 19,
                 fontWeight: FontWeight.bold,
               ),
             ),
-            const SizedBox(height: 8),
+            const SizedBox(height: 10),
             const Text(
-              'Please contact RD Online Shop admin.',
+              'You do not need to login again. This page updates automatically when NRD Admin approves the seller account.',
               textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 18),
+            Container(
+              width: double.infinity,
+              padding: const EdgeInsets.all(14),
+              decoration: BoxDecoration(
+                color: Colors.orange.withValues(alpha: 0.08),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: Colors.orange.withValues(alpha: 0.25),
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  const Text(
+                    'Legal Verification',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Status: ${verificationStatus.toUpperCase()}',
+                  ),
+                  Text(
+                    'Legal declaration: ${legalSubmitted ? 'Submitted' : 'Not submitted'}',
+                  ),
+                  Text(
+                    'Documents: ${legalDocumentsUploaded ? 'Uploaded' : 'Not uploaded'}',
+                  ),
+                  if (verificationStatus == 'rejected' &&
+                      rejectionReason.isNotEmpty) ...<Widget>[
+                    const SizedBox(height: 8),
+                    Text(
+                      'Admin reason: $rejectionReason',
+                      style: const TextStyle(
+                        fontWeight: FontWeight.w700,
+                        color: Colors.red,
+                      ),
+                    ),
+                  ],
+                  if (businessRegistrationNumber.isNotEmpty)
+                    Text(
+                      'Registration No: $businessRegistrationNumber',
+                    ),
+                  if (panNumber.isNotEmpty)
+                    Text('PAN: $panNumber'),
+                ],
+              ),
             ),
             const SizedBox(height: 20),
             FilledButton.icon(
@@ -581,6 +661,45 @@ class SellerDashboardPage extends StatelessWidget {
                   _dashboardHeader(
                     seller,
                   ),
+                  if (seller['legalVerified'] != true) ...<Widget>[
+                    const SizedBox(height: 12),
+                    Container(
+                      width: double.infinity,
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: Colors.orange
+                            .withValues(alpha: 0.08),
+                        borderRadius:
+                            BorderRadius.circular(14),
+                        border: Border.all(
+                          color: Colors.orange
+                              .withValues(alpha: 0.25),
+                        ),
+                      ),
+                      child: const Row(
+                        crossAxisAlignment:
+                            CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Icon(
+                            Icons
+                                .verified_user_outlined,
+                            color: Colors.orange,
+                          ),
+                          SizedBox(width: 10),
+                          Expanded(
+                            child: Text(
+                              'Legal verification is pending. Your existing seller account remains active. NRD Admin will request the required legal documents when document verification is available.',
+                              style: TextStyle(
+                                fontWeight:
+                                    FontWeight.w700,
+                                height: 1.35,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   _sellerStats(
                     user.uid,

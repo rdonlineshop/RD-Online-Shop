@@ -884,8 +884,7 @@ class _DeliveryPersonTrackingPageState
   // =========================================================
 
   Future<String?> _askForOtp() async {
-    final TextEditingController controller =
-        TextEditingController();
+    String enteredOtp = '';
 
     final String? result =
         await showDialog<String>(
@@ -914,11 +913,13 @@ class _DeliveryPersonTrackingPageState
               ),
 
               TextField(
-                controller: controller,
                 autofocus: true,
                 keyboardType:
                     TextInputType.number,
                 maxLength: 6,
+                onChanged: (String value) {
+                  enteredOtp = value.trim();
+                },
                 decoration:
                     const InputDecoration(
                   labelText:
@@ -951,18 +952,15 @@ class _DeliveryPersonTrackingPageState
 
             FilledButton.icon(
               onPressed: () {
-                final String otp =
-                    controller.text.trim();
-
-                if (otp.length != 6 ||
-                    int.tryParse(otp) ==
+                if (enteredOtp.length != 6 ||
+                    int.tryParse(enteredOtp) ==
                         null) {
                   return;
                 }
 
                 Navigator.pop(
                   dialogContext,
-                  otp,
+                  enteredOtp,
                 );
               },
               icon: const Icon(
@@ -976,8 +974,6 @@ class _DeliveryPersonTrackingPageState
         );
       },
     );
-
-    controller.dispose();
 
     return result;
   }
@@ -1014,6 +1010,16 @@ class _DeliveryPersonTrackingPageState
     if (!mounted ||
         scannedOtp == null ||
         scannedOtp.trim().isEmpty) {
+      return;
+    }
+
+    // Give the scanner route time to finish disposing before changing the
+    // tracking page state/order status.
+    await Future<void>.delayed(
+      const Duration(milliseconds: 300),
+    );
+
+    if (!mounted) {
       return;
     }
 
@@ -1148,12 +1154,27 @@ class _DeliveryPersonTrackingPageState
       // ASK CUSTOMER OTP
       // =====================================================
 
+      final bool usedManualOtp =
+          scannedOtp == null;
+
       final String? enteredOtp =
           scannedOtp ??
               await _askForOtp();
 
       if (enteredOtp == null) {
         return;
+      }
+
+      if (usedManualOtp) {
+        // showDialog completes when pop starts. Wait for the reverse
+        // transition to finish before rebuilding this page.
+        await Future<void>.delayed(
+          const Duration(milliseconds: 300),
+        );
+
+        if (!mounted) {
+          return;
+        }
       }
 
       final DocumentSnapshot<
@@ -1275,39 +1296,9 @@ class _DeliveryPersonTrackingPageState
             'Delivery confirmed successfully.';
       });
 
-      await showDialog<void>(
-        context: context,
-        builder: (
-          BuildContext dialogContext,
-        ) {
-          return AlertDialog(
-            icon: const Icon(
-              Icons.verified,
-              color:
-                  Colors.green,
-              size: 50,
-            ),
-            title: const Text(
-              'Delivery Confirmed',
-            ),
-            content: const Text(
-              'Customer delivery verification succeeded. '
-              'This order is now marked as Delivered.',
-            ),
-            actions: <Widget>[
-              FilledButton(
-                onPressed: () {
-                  Navigator.pop(
-                    dialogContext,
-                  );
-                },
-                child: const Text(
-                  'OK',
-                ),
-              ),
-            ],
-          );
-        },
+      _showMessage(
+        'Delivery confirmed successfully. '
+        'This order is now marked as Delivered.',
       );
     } catch (error) {
       _showMessage(
@@ -1826,9 +1817,9 @@ class _DeliveryQrScannerPageState
 
   bool _resultReturned = false;
 
-  void _handleDetection(
+  Future<void> _handleDetection(
     mobile_scanner.BarcodeCapture capture,
-  ) {
+  ) async {
     if (_resultReturned ||
         capture.barcodes.isEmpty) {
       return;
@@ -1845,6 +1836,14 @@ class _DeliveryQrScannerPageState
     }
 
     _resultReturned = true;
+
+    // Stop the camera before the route starts popping so no additional
+    // scanner updates arrive while inherited widgets are being disposed.
+    await _scannerController.stop();
+
+    if (!mounted) {
+      return;
+    }
 
     Navigator.of(context).pop<String>(
       value,

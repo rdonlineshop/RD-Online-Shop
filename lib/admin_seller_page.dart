@@ -1,6 +1,8 @@
 import 'dart:convert';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
+import 'package:firebase_storage/firebase_storage.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
@@ -134,15 +136,604 @@ class AdminSellerPage extends StatelessWidget {
     }
   }
 
+  bool _isLegacySeller(
+    Map<String, dynamic> seller,
+  ) {
+    final String registrationNumber =
+        seller['businessRegistrationNumber']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String panNumber =
+        seller['panNumber']?.toString().trim() ??
+            '';
+
+    final String registrationPath =
+        seller['businessRegistrationDocumentPath']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String panPath =
+        seller['panDocumentPath']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String ownerIdPath =
+        seller['ownerIdDocumentPath']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final bool hasSubmissionMarker =
+        seller['legalSubmittedAt'] != null ||
+            seller['legalDeclarationAccepted'] == true ||
+            seller['legalDocumentsUploaded'] == true;
+
+    return !hasSubmissionMarker &&
+        registrationNumber.isEmpty &&
+        panNumber.isEmpty &&
+        registrationPath.isEmpty &&
+        panPath.isEmpty &&
+        ownerIdPath.isEmpty;
+  }
+
+  String _legalStatusLabel(
+    Map<String, dynamic> seller,
+  ) {
+    if (seller['legalVerified'] == true ||
+        seller['legalVerificationStatus'] == 'approved') {
+      return 'Verified';
+    }
+
+    if (seller['legalVerificationStatus'] == 'rejected') {
+      return 'Changes Required';
+    }
+
+    if (_isLegacySeller(seller)) {
+      return 'Legacy • Pending';
+    }
+
+    return 'Pending';
+  }
+
+  List<String> _missingLegalRequirements(
+    Map<String, dynamic> seller,
+  ) {
+    final List<String> missing = <String>[];
+
+    final String registrationNumber =
+        seller['businessRegistrationNumber']
+                ?.toString()
+                .trim() ??
+            '';
+    final String panNumber =
+        seller['panNumber']?.toString().trim() ??
+            '';
+    final String vatNumber =
+        seller['vatNumber']?.toString().trim() ??
+            '';
+
+    final String registrationPath =
+        seller['businessRegistrationDocumentPath']
+                ?.toString()
+                .trim() ??
+            '';
+    final String panPath =
+        seller['panDocumentPath']
+                ?.toString()
+                .trim() ??
+            '';
+    final String vatPath =
+        seller['vatDocumentPath']
+                ?.toString()
+                .trim() ??
+            '';
+    final String ownerIdPath =
+        seller['ownerIdDocumentPath']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (registrationNumber.isEmpty) {
+      missing.add('Registration Number');
+    }
+
+    if (panNumber.isEmpty) {
+      missing.add('PAN Number');
+    }
+
+    if (seller['legalDeclarationAccepted'] != true) {
+      missing.add('Legal Declaration');
+    }
+
+    if (registrationPath.isEmpty) {
+      missing.add('Registration Certificate');
+    }
+
+    if (panPath.isEmpty) {
+      missing.add('PAN Certificate');
+    }
+
+    if (ownerIdPath.isEmpty) {
+      missing.add('Owner / Authorized Person ID');
+    }
+
+    if (vatNumber.isNotEmpty &&
+        vatPath.isEmpty) {
+      missing.add('VAT Certificate');
+    }
+
+    return missing;
+  }
+
+  void _createSellerNotification({
+    required WriteBatch batch,
+    required String sellerId,
+    required String title,
+    required String message,
+    required String contentType,
+  }) async {
+    final DocumentReference<Map<String, dynamic>>
+        notificationRef = FirebaseFirestore.instance
+            .collection('admin_notifications')
+            .doc();
+
+    batch.set(
+      notificationRef,
+      <String, dynamic>{
+        'notificationId': notificationRef.id,
+        'title': title,
+        'message': message,
+        'audience': 'seller',
+        'contentType': contentType,
+        'targetCustomerId': '',
+        'targetSellerId': sellerId,
+        'mediaUrl': '',
+        'actionUrl': '',
+        'isActive': true,
+        'pushEnabled': true,
+        'createdByUid':
+            FirebaseAuth.instance.currentUser?.uid ?? '',
+        'createdAt':
+            FieldValue.serverTimestamp(),
+        'updatedAt':
+            FieldValue.serverTimestamp(),
+      },
+    );
+  }
+
+  Future<void> _approveSeller(
+    BuildContext context,
+    String sellerId,
+    Map<String, dynamic> seller, {
+    bool closeAfter = false,
+  }) async {
+    final List<String> missing =
+        _missingLegalRequirements(seller);
+
+    if (missing.isNotEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Cannot approve. Missing: ${missing.join(', ')}.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final String shopName =
+        seller['shopName']?.toString().trim() ??
+            'Seller';
+
+    final bool? confirmed =
+        await showDialog<bool>(
+      context: context,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return AlertDialog(
+          title: const Text(
+            'Verify & Activate Seller?',
+          ),
+          content: Text(
+            'Confirm that the legal information and uploaded documents for $shopName have been reviewed.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                  false,
+                );
+              },
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                  true,
+                );
+              },
+              icon: const Icon(
+                Icons.verified_rounded,
+              ),
+              label: const Text(
+                'Verify & Activate',
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    final String adminUid =
+        FirebaseAuth.instance.currentUser?.uid ??
+            '';
+
+    final WriteBatch batch =
+        FirebaseFirestore.instance.batch();
+
+    batch.update(
+      _sellers.doc(sellerId),
+      <String, dynamic>{
+        'isActive': true,
+        'legalVerificationStatus': 'approved',
+        'legalVerified': true,
+        'legalVerifiedAt':
+            FieldValue.serverTimestamp(),
+        'legalVerifiedBy': adminUid,
+        'legalRejectionReason': '',
+        'adminReviewRequested': false,
+        'reviewedAt':
+            FieldValue.serverTimestamp(),
+        'reviewedBy': adminUid,
+        'updatedAt':
+            FieldValue.serverTimestamp(),
+      },
+    );
+
+    _createSellerNotification(
+      batch: batch,
+      sellerId: sellerId,
+      title: 'Seller Account Approved',
+      message:
+          '$shopName has been approved by NRD Admin. Your Seller Dashboard is now active.',
+      contentType: 'seller_approval',
+    );
+
+    await batch.commit();
+
+    if (context.mounted) {
+      if (closeAfter) {
+        Navigator.maybePop(context);
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '$shopName verified and activated.',
+          ),
+        ),
+      );
+    }
+  }
+
+  Future<void> _rejectSeller(
+    BuildContext context,
+    String sellerId,
+    Map<String, dynamic> seller,
+  ) async {
+    final TextEditingController reasonController =
+        TextEditingController();
+
+    final String shopName =
+        seller['shopName']?.toString().trim() ??
+            'Seller';
+
+    final String? reason =
+        await showDialog<String>(
+      context: context,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return AlertDialog(
+          title: const Text(
+            'Reject / Request Changes',
+          ),
+          content: TextField(
+            controller: reasonController,
+            autofocus: true,
+            minLines: 3,
+            maxLines: 5,
+            decoration: const InputDecoration(
+              labelText:
+                  'Reason for seller',
+              hintText:
+                  'Example: PAN certificate is unclear. Please upload a clear copy.',
+              border:
+                  OutlineInputBorder(),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                );
+              },
+              child: const Text('Cancel'),
+            ),
+            FilledButton(
+              onPressed: () {
+                final String value =
+                    reasonController.text.trim();
+
+                if (value.isEmpty) {
+                  return;
+                }
+
+                Navigator.pop(
+                  dialogContext,
+                  value,
+                );
+              },
+              child: const Text(
+                'Send Reason',
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    reasonController.dispose();
+
+    if (reason == null ||
+        reason.trim().isEmpty) {
+      return;
+    }
+
+    final String adminUid =
+        FirebaseAuth.instance.currentUser?.uid ??
+            '';
+
+    final WriteBatch batch =
+        FirebaseFirestore.instance.batch();
+
+    batch.update(
+      _sellers.doc(sellerId),
+      <String, dynamic>{
+        'isActive': false,
+        'legalVerificationStatus': 'rejected',
+        'legalVerified': false,
+        'legalVerifiedAt': null,
+        'legalVerifiedBy': '',
+        'legalRejectionReason': reason.trim(),
+        'adminReviewRequested': false,
+        'reviewedAt':
+            FieldValue.serverTimestamp(),
+        'reviewedBy': adminUid,
+        'updatedAt':
+            FieldValue.serverTimestamp(),
+      },
+    );
+
+    _createSellerNotification(
+      batch: batch,
+      sellerId: sellerId,
+      title: 'Seller Verification Needs Changes',
+      message:
+          '$shopName requires changes before approval. Reason: ${reason.trim()}',
+      contentType: 'seller_verification_rejected',
+    );
+
+    await batch.commit();
+
+    if (context.mounted) {
+      Navigator.maybePop(context);
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Verification reason sent to $shopName.',
+          ),
+        ),
+      );
+    }
+  }
+
   Future<void> _setActive(
+    BuildContext context,
     String sellerId,
     bool value,
-  ) {
-    return _sellers.doc(sellerId).update(
+    Map<String, dynamic> seller,
+  ) async {
+    if (value) {
+      if (_isLegacySeller(seller)) {
+        await _sellers.doc(sellerId).update(
+          <String, dynamic>{
+            'isActive': true,
+            'legalVerificationStatus': 'pending',
+            'legalVerified': false,
+            'legalMigrationPending': true,
+            'adminReviewRequested': false,
+            'updatedAt':
+                FieldValue.serverTimestamp(),
+          },
+        );
+
+        if (context.mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Legacy seller reactivated. Legal verification remains pending.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      await _approveSeller(
+        context,
+        sellerId,
+        seller,
+      );
+      return;
+    }
+
+    await _sellers.doc(sellerId).update(
       <String, dynamic>{
-        'isActive': value,
-        'updatedAt': FieldValue.serverTimestamp(),
+        'isActive': false,
+        'updatedAt':
+            FieldValue.serverTimestamp(),
       },
+    );
+  }
+
+  void _showLegalDocument(
+    BuildContext context, {
+    required String title,
+    required String storagePath,
+  }) {
+    final String path = storagePath.trim();
+
+    if (path.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            '$title has not been uploaded.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    showDialog<void>(
+      context: context,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return AlertDialog(
+          title: Text(title),
+          content: SizedBox(
+            width: 650,
+            height: 520,
+            child: FutureBuilder(
+              future: FirebaseStorage.instance
+                  .ref(path)
+                  .getData(
+                    10 * 1024 * 1024,
+                  ),
+              builder: (
+                BuildContext context,
+                AsyncSnapshot<dynamic> snapshot,
+              ) {
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Text(
+                      'Could not open document.\n${snapshot.error}',
+                      textAlign:
+                          TextAlign.center,
+                    ),
+                  );
+                }
+
+                if (!snapshot.hasData) {
+                  return const Center(
+                    child:
+                        CircularProgressIndicator(),
+                  );
+                }
+
+                final dynamic bytes =
+                    snapshot.data;
+
+                return InteractiveViewer(
+                  minScale: 0.5,
+                  maxScale: 5,
+                  child: Center(
+                    child: Image.memory(
+                      bytes,
+                      fit: BoxFit.contain,
+                    ),
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                );
+              },
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _legalDocumentRow(
+    BuildContext context, {
+    required String label,
+    required String storagePath,
+    bool requiredDocument = false,
+  }) {
+    final bool uploaded =
+        storagePath.trim().isNotEmpty;
+
+    return ListTile(
+      contentPadding: EdgeInsets.zero,
+      leading: Icon(
+        uploaded
+            ? Icons.check_circle
+            : Icons.warning_amber_rounded,
+        color: uploaded
+            ? Colors.green
+            : Colors.orange,
+      ),
+      title: Text(
+        requiredDocument
+            ? '$label *'
+            : label,
+        style: const TextStyle(
+          fontWeight: FontWeight.w700,
+        ),
+      ),
+      subtitle: Text(
+        uploaded
+            ? 'Uploaded privately'
+            : 'Not uploaded',
+      ),
+      trailing: uploaded
+          ? OutlinedButton.icon(
+              onPressed: () {
+                _showLegalDocument(
+                  context,
+                  title: label,
+                  storagePath:
+                      storagePath,
+                );
+              },
+              icon: const Icon(
+                Icons.visibility_outlined,
+              ),
+              label: const Text('View'),
+            )
+          : null,
     );
   }
 
@@ -329,8 +920,67 @@ class AdminSellerPage extends StatelessWidget {
     final String description =
         seller['description']?.toString() ?? '';
 
+    final String businessRegistrationNumber =
+        seller['businessRegistrationNumber']?.toString() ?? '';
+
+    final String panNumber =
+        seller['panNumber']?.toString() ?? '';
+
+    final String vatNumber =
+        seller['vatNumber']?.toString() ?? '';
+
+    final String legalVerificationStatus =
+        seller['legalVerificationStatus']?.toString() ?? 'pending';
+
+    final bool legalDeclarationAccepted =
+        seller['legalDeclarationAccepted'] == true;
+
+    final String registrationDocumentPath =
+        seller['businessRegistrationDocumentPath']
+                ?.toString() ??
+            '';
+
+    final String panDocumentPath =
+        seller['panDocumentPath']
+                ?.toString() ??
+            '';
+
+    final String vatDocumentPath =
+        seller['vatDocumentPath']
+                ?.toString() ??
+            '';
+
+    final String ownerIdDocumentPath =
+        seller['ownerIdDocumentPath']
+                ?.toString() ??
+            '';
+
+    final List<String> otherLegalDocumentPaths =
+        (seller['otherLegalDocumentPaths'] is List)
+            ? (seller['otherLegalDocumentPaths']
+                    as List)
+                .map(
+                  (dynamic value) =>
+                      value.toString(),
+                )
+                .where(
+                  (String value) =>
+                      value.trim().isNotEmpty,
+                )
+                .toList()
+            : <String>[];
+
+    final String rejectionReason =
+        seller['legalRejectionReason']
+                ?.toString()
+                .trim() ??
+            '';
+
     final bool isActive =
         seller['isActive'] != false;
+
+    final bool isLegacySeller =
+        _isLegacySeller(seller);
 
     showModalBottomSheet<void>(
       context: context,
@@ -387,7 +1037,9 @@ class AdminSellerPage extends StatelessWidget {
                             ),
                             child: Text(
                               isActive
-                                  ? 'Active'
+                                  ? (isLegacySeller
+                                      ? 'Active • Legal Pending'
+                                      : 'Active')
                                   : 'Inactive',
                               style: TextStyle(
                                 color: isActive
@@ -428,9 +1080,217 @@ class AdminSellerPage extends StatelessWidget {
                   'Description',
                   description,
                 ),
+                const Divider(height: 28),
+                const Text(
+                  'Government / Legal Verification',
+                  style: TextStyle(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+                const SizedBox(height: 12),
+                if (isLegacySeller && isActive)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(
+                      bottom: 14,
+                    ),
+                    padding: const EdgeInsets.all(14),
+                    decoration: BoxDecoration(
+                      color: Colors.orange
+                          .withValues(alpha: 0.09),
+                      borderRadius:
+                          BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Colors.orange
+                            .withValues(alpha: 0.30),
+                      ),
+                    ),
+                    child: const Row(
+                      crossAxisAlignment:
+                          CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Icon(
+                          Icons.history_rounded,
+                          color: Colors.orange,
+                        ),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'Legacy seller: this account existed before NRD legal verification was introduced. Selling access remains active, while legal verification stays pending until the seller submits the required documents.',
+                            style: TextStyle(
+                              fontWeight:
+                                  FontWeight.w700,
+                              height: 1.35,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                _detail(
+                  Icons.verified_outlined,
+                  'Business Registration Number',
+                  businessRegistrationNumber,
+                ),
+                _detail(
+                  Icons.badge_outlined,
+                  'PAN Number',
+                  panNumber,
+                ),
+                _detail(
+                  Icons.receipt_long_outlined,
+                  'VAT Number',
+                  vatNumber,
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    legalDeclarationAccepted
+                        ? Icons.check_circle
+                        : Icons.warning_amber_rounded,
+                    color: legalDeclarationAccepted
+                        ? Colors.green
+                        : Colors.orange,
+                  ),
+                  title: const Text('Legal Declaration'),
+                  subtitle: Text(
+                    legalDeclarationAccepted
+                        ? 'Seller confirmed legal registration information'
+                        : 'Not confirmed',
+                  ),
+                ),
+                ListTile(
+                  contentPadding: EdgeInsets.zero,
+                  leading: Icon(
+                    legalVerificationStatus == 'approved'
+                        ? Icons.verified
+                        : Icons.pending_actions_rounded,
+                    color: legalVerificationStatus == 'approved'
+                        ? Colors.green
+                        : Colors.orange,
+                  ),
+                  title: const Text('Legal Verification Status'),
+                  subtitle: Text(
+                    _legalStatusLabel(seller),
+                  ),
+                ),
+                if (legalVerificationStatus == 'rejected' &&
+                    rejectionReason.isNotEmpty)
+                  Container(
+                    width: double.infinity,
+                    margin: const EdgeInsets.only(
+                      bottom: 12,
+                    ),
+                    padding: const EdgeInsets.all(12),
+                    decoration: BoxDecoration(
+                      color: Colors.red
+                          .withValues(alpha: 0.08),
+                      borderRadius:
+                          BorderRadius.circular(12),
+                      border: Border.all(
+                        color: Colors.red
+                            .withValues(alpha: 0.25),
+                      ),
+                    ),
+                    child: Text(
+                      'Rejection reason: $rejectionReason',
+                      style: const TextStyle(
+                        fontWeight:
+                            FontWeight.w700,
+                      ),
+                    ),
+                  ),
+                _legalDocumentRow(
+                  sheetContext,
+                  label:
+                      'Registration Certificate',
+                  storagePath:
+                      registrationDocumentPath,
+                  requiredDocument: true,
+                ),
+                _legalDocumentRow(
+                  sheetContext,
+                  label: 'PAN Certificate',
+                  storagePath: panDocumentPath,
+                  requiredDocument: true,
+                ),
+                _legalDocumentRow(
+                  sheetContext,
+                  label: 'VAT Certificate',
+                  storagePath: vatDocumentPath,
+                  requiredDocument:
+                      vatNumber.trim().isNotEmpty,
+                ),
+                _legalDocumentRow(
+                  sheetContext,
+                  label:
+                      'Owner / Authorized Person ID',
+                  storagePath:
+                      ownerIdDocumentPath,
+                  requiredDocument: true,
+                ),
+                ...List<Widget>.generate(
+                  otherLegalDocumentPaths.length,
+                  (int index) {
+                    return _legalDocumentRow(
+                      sheetContext,
+                      label:
+                          'Other Legal Document ${index + 1}',
+                      storagePath:
+                          otherLegalDocumentPaths[index],
+                    );
+                  },
+                ),
+                if (!isActive) ...<Widget>[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: OutlinedButton.icon(
+                          onPressed: () {
+                            _rejectSeller(
+                              sheetContext,
+                              sellerId,
+                              seller,
+                            );
+                          },
+                          icon: const Icon(
+                            Icons
+                                .edit_note_rounded,
+                          ),
+                          label: const Text(
+                            'Reject / Changes',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: FilledButton.icon(
+                          onPressed: () {
+                            _approveSeller(
+                              sheetContext,
+                              sellerId,
+                              seller,
+                              closeAfter: true,
+                            );
+                          },
+                          icon: const Icon(
+                            Icons
+                                .verified_rounded,
+                          ),
+                          label: const Text(
+                            'Verify & Activate',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                const Divider(height: 28),
                 _detail(
                   Icons.percent,
-                  'RD Commission',
+                  'NRD Commission',
                   '${seller['commissionPercent'] ?? 10}%',
                 ),
                 _detail(
@@ -665,13 +1525,80 @@ class AdminSellerPage extends StatelessWidget {
             );
           }
 
-          return ListView.builder(
-            padding: const EdgeInsets.all(12),
-            itemCount: sellers.length,
-            itemBuilder: (
-              BuildContext context,
-              int index,
+          final int pendingCount = sellers.where(
+            (
+              QueryDocumentSnapshot<Map<String, dynamic>> document,
             ) {
+              final Map<String, dynamic> seller = document.data();
+              final bool isActive =
+                  seller['isActive'] != false;
+
+              return seller['adminReviewRequested'] == true ||
+                  (!isActive &&
+                      seller['legalVerificationStatus'] == 'pending' &&
+                      !_isLegacySeller(seller));
+            },
+          ).length;
+
+          sellers.sort(
+            (
+              QueryDocumentSnapshot<Map<String, dynamic>> first,
+              QueryDocumentSnapshot<Map<String, dynamic>> second,
+            ) {
+              final bool firstPending =
+                  first.data()['isActive'] == false ||
+                  first.data()['adminReviewRequested'] == true;
+              final bool secondPending =
+                  second.data()['isActive'] == false ||
+                  second.data()['adminReviewRequested'] == true;
+
+              if (firstPending == secondPending) {
+                return 0;
+              }
+              return firstPending ? -1 : 1;
+            },
+          );
+
+          return Column(
+            children: <Widget>[
+              if (pendingCount > 0)
+                Container(
+                  width: double.infinity,
+                  margin: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: Colors.orange.withValues(alpha: 0.10),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: Colors.orange.withValues(alpha: 0.35),
+                    ),
+                  ),
+                  child: Row(
+                    children: <Widget>[
+                      const Icon(
+                        Icons.notifications_active_rounded,
+                        color: Colors.orange,
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          '$pendingCount seller verification request${pendingCount == 1 ? '' : 's'} waiting for Admin review.',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              Expanded(
+                child: ListView.builder(
+                  padding: const EdgeInsets.all(12),
+                  itemCount: sellers.length,
+                  itemBuilder: (
+                    BuildContext context,
+                    int index,
+                  ) {
               final QueryDocumentSnapshot<
                       Map<String, dynamic>>
                   document = sellers[index];
@@ -725,22 +1652,29 @@ class AdminSellerPage extends StatelessWidget {
                         const EdgeInsets.only(top: 4),
                     child: Text(
                       '$ownerName'
-                      '${phone.isEmpty ? '' : '\n$phone'}',
+                      '${phone.isEmpty ? '' : '\n$phone'}'
+                      '\nLegal: ${_legalStatusLabel(seller)}'
+                      '${seller['adminReviewRequested'] == true ? ' • REVIEW' : ''}',
                     ),
                   ),
-                  isThreeLine: phone.isNotEmpty,
+                  isThreeLine: true,
                   trailing: Switch(
                     value: isActive,
                     onChanged: (bool value) {
                       _setActive(
+                        context,
                         document.id,
                         value,
+                        seller,
                       );
                     },
                   ),
                 ),
               );
-            },
+                  },
+                ),
+              ),
+            ],
           );
         },
       ),
