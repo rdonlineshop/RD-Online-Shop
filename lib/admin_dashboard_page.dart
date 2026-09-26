@@ -28,6 +28,7 @@ import 'admin_ride_history_page.dart';
 import 'admin_ride_sos_page.dart';
 import 'admin_ride_fare_settings_page.dart';
 import 'admin_seller_page.dart';
+import 'admin_krishi_dashboard_page.dart';
 import 'flight_ticket_booking_page.dart';
 import 'universal_test_access_page.dart';
 
@@ -483,6 +484,18 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                 onTap: () =>
                     _openOnlineShopDashboard(
                   context,
+                ),
+              ),
+              _dashboardCard(
+                icon: Icons.agriculture_rounded,
+                title: 'Krishi Dashboard',
+                onTap: () =>
+                    Navigator.push<void>(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        const AdminKrishiDashboardPage(),
+                  ),
                 ),
               ),
               _dashboardCard(

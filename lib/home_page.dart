@@ -18,6 +18,7 @@ import 'product_card.dart';
 import 'profile_page.dart';
 import 'ride_booking_hub_page.dart';
 import 'stay_venue_booking_hub_page.dart';
+import 'krishi_marketplace_page.dart';
 import 'ticket_booking_hub_page.dart';
 import 'seller_auth_page.dart';
 import 'wishlist_page.dart';
@@ -875,6 +876,31 @@ class _HomePageState extends State<HomePage> {
 
         final bool stock =
             product['inStock'] != false;
+
+        // Krishi products have their own dedicated marketplace.
+        // Keep them out of the normal NRD Online Shop product list.
+        final String marketplace =
+            product['marketplace']
+                    ?.toString()
+                    .trim()
+                    .toLowerCase() ??
+                '';
+
+        final String productType =
+            product['productType']
+                    ?.toString()
+                    .trim()
+                    .toLowerCase() ??
+                '';
+
+        final bool isKrishiProduct =
+            marketplace == 'krishi' ||
+                productType == 'krishi' ||
+                productType == 'agriculture';
+
+        if (isKrishiProduct) {
+          return false;
+        }
 
         final bool matchesSearch =
             search.isEmpty ||
@@ -1862,6 +1888,21 @@ class _HomePageState extends State<HomePage> {
                   () {},
                   active: true,
                   iconColor: _rdRed,
+                ),
+
+                item(
+                  Icons.agriculture_rounded,
+                  'Krishi',
+                  () {
+                    Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            const KrishiMarketplacePage(),
+                      ),
+                    );
+                  },
+                  iconColor: const Color(0xFF2E7D32),
                 ),
 
                 item(
