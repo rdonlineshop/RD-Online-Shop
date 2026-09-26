@@ -1,6 +1,10 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 import 'delivery_person_dashboard_page.dart';
 
@@ -14,6 +18,9 @@ class DeliveryPersonAuthPage extends StatefulWidget {
 
 class _DeliveryPersonAuthPageState
     extends State<DeliveryPersonAuthPage> {
+  static const String _cloudName = 'p83ttfym';
+  static const String _uploadPreset = 'rd_online_shop_products';
+
   final GlobalKey<FormState> _formKey =
       GlobalKey<FormState>();
 
@@ -21,6 +28,15 @@ class _DeliveryPersonAuthPageState
       TextEditingController();
 
   final TextEditingController _phoneController =
+      TextEditingController();
+
+  final TextEditingController _vehicleNumberController =
+      TextEditingController();
+
+  final TextEditingController _licenseNumberController =
+      TextEditingController();
+
+  final TextEditingController _licenseExpiryController =
       TextEditingController();
 
   final TextEditingController _emailController =
@@ -33,6 +49,12 @@ class _DeliveryPersonAuthPageState
   bool _isLoading = false;
   bool _obscurePassword = true;
   bool _checkingSavedSession = true;
+  bool _uploadingProfilePhoto = false;
+  bool _uploadingLicense = false;
+
+  String _profilePhotoUrl = '';
+  String _licenseFrontUrl = '';
+  String _licenseBackUrl = '';
 
   Map<String, dynamic>? _rememberedDeliveryData;
 
@@ -248,6 +270,315 @@ class _DeliveryPersonAuthPageState
   }
 
   // =========================================================
+  // DELIVERY DOCUMENT UPLOADS
+  // =========================================================
+
+  Future<String> _uploadImage(
+    XFile image, {
+    required String label,
+  }) async {
+    final Uri uri = Uri.parse(
+      'https://api.cloudinary.com/v1_1/'
+      '$_cloudName/image/upload',
+    );
+
+    final http.MultipartRequest request =
+        http.MultipartRequest(
+      'POST',
+      uri,
+    );
+
+    request.fields['upload_preset'] =
+        _uploadPreset;
+
+    request.files.add(
+      await http.MultipartFile.fromPath(
+        'file',
+        image.path,
+      ),
+    );
+
+    final http.StreamedResponse response =
+        await request.send();
+
+    final String body =
+        await response.stream.bytesToString();
+
+    if (response.statusCode < 200 ||
+        response.statusCode >= 300) {
+      throw Exception(
+        '$label upload failed: $body',
+      );
+    }
+
+    final dynamic decoded = jsonDecode(body);
+
+    if (decoded is! Map<String, dynamic>) {
+      throw Exception(
+        'Invalid $label upload response.',
+      );
+    }
+
+    final String url =
+        decoded['secure_url']?.toString().trim() ?? '';
+
+    if (url.isEmpty) {
+      throw Exception(
+        '$label image URL was not received.',
+      );
+    }
+
+    return url;
+  }
+
+  Future<void> _pickProfilePhoto() async {
+    if (_uploadingProfilePhoto ||
+        _uploadingLicense ||
+        _isLoading) {
+      return;
+    }
+
+    final XFile? image =
+        await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+
+    if (image == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _uploadingProfilePhoto = true;
+    });
+
+    try {
+      final String url = await _uploadImage(
+        image,
+        label: 'Profile photo',
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _profilePhotoUrl = url;
+      });
+
+      _showMessage(
+        'Profile photo uploaded.',
+      );
+    } catch (error) {
+      _showMessage(
+        'Profile photo upload failed: $error',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploadingProfilePhoto = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _pickLicenseImage({
+    required bool front,
+  }) async {
+    if (_uploadingLicense ||
+        _uploadingProfilePhoto ||
+        _isLoading) {
+      return;
+    }
+
+    final XFile? image =
+        await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+
+    if (image == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _uploadingLicense = true;
+    });
+
+    try {
+      final String url = await _uploadImage(
+        image,
+        label: front
+            ? 'Driving licence front'
+            : 'Driving licence back',
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        if (front) {
+          _licenseFrontUrl = url;
+        } else {
+          _licenseBackUrl = url;
+        }
+      });
+
+      _showMessage(
+        front
+            ? 'Driving licence front uploaded.'
+            : 'Driving licence back uploaded.',
+      );
+    } catch (error) {
+      _showMessage(
+        'Licence upload failed: $error',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploadingLicense = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _selectLicenseExpiry() async {
+    if (_isLoading) {
+      return;
+    }
+
+    final DateTime now = DateTime.now();
+    final DateTime initialDate = DateTime(
+      now.year,
+      now.month,
+      now.day,
+    ).add(const Duration(days: 1));
+
+    final DateTime? selected = await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: initialDate,
+      lastDate: DateTime(now.year + 20, 12, 31),
+    );
+
+    if (selected == null || !mounted) {
+      return;
+    }
+
+    final String month =
+        selected.month.toString().padLeft(2, '0');
+    final String day =
+        selected.day.toString().padLeft(2, '0');
+
+    setState(() {
+      _licenseExpiryController.text =
+          '${selected.year}-$month-$day';
+    });
+  }
+
+  Widget _imageUploadCard({
+    required String title,
+    required String url,
+    required IconData icon,
+    required bool uploading,
+    required VoidCallback onTap,
+  }) {
+    final bool hasImage = url.trim().isNotEmpty;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(12),
+        child: Row(
+          children: <Widget>[
+            ClipRRect(
+              borderRadius: BorderRadius.circular(10),
+              child: SizedBox(
+                width: 72,
+                height: 72,
+                child: hasImage
+                    ? Image.network(
+                        url,
+                        fit: BoxFit.cover,
+                        errorBuilder: (
+                          BuildContext context,
+                          Object error,
+                          StackTrace? stackTrace,
+                        ) {
+                          return Container(
+                            color: Colors.grey.shade200,
+                            alignment: Alignment.center,
+                            child: const Icon(
+                              Icons.broken_image_outlined,
+                            ),
+                          );
+                        },
+                      )
+                    : Container(
+                        color: Colors.grey.shade100,
+                        alignment: Alignment.center,
+                        child: Icon(
+                          icon,
+                          size: 32,
+                          color: Colors.grey.shade700,
+                        ),
+                      ),
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(
+                    title,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  Text(
+                    hasImage
+                        ? 'Uploaded'
+                        : 'Required for verification',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: hasImage
+                          ? Colors.green.shade700
+                          : Colors.grey.shade700,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            OutlinedButton.icon(
+              onPressed: uploading || _isLoading
+                  ? null
+                  : onTap,
+              icon: uploading
+                  ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                      ),
+                    )
+                  : const Icon(
+                      Icons.upload_rounded,
+                    ),
+              label: Text(
+                hasImage ? 'Change' : 'Upload',
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // =========================================================
   // REGISTER
   // =========================================================
 
@@ -260,7 +591,24 @@ class _DeliveryPersonAuthPageState
       return;
     }
 
-    if (_isLoading) {
+    if (_isLoading ||
+        _uploadingProfilePhoto ||
+        _uploadingLicense) {
+      return;
+    }
+
+    if (_profilePhotoUrl.isEmpty) {
+      _showMessage(
+        'Please upload a profile photo.',
+      );
+      return;
+    }
+
+    if (_licenseFrontUrl.isEmpty ||
+        _licenseBackUrl.isEmpty) {
+      _showMessage(
+        'Please upload both front and back of the driving licence.',
+      );
       return;
     }
 
@@ -273,6 +621,15 @@ class _DeliveryPersonAuthPageState
 
     final String phone =
         _phoneController.text.trim();
+
+    final String vehicleNumber =
+        _vehicleNumberController.text.trim();
+
+    final String licenseNumber =
+        _licenseNumberController.text.trim();
+
+    final String licenseExpiry =
+        _licenseExpiryController.text.trim();
 
     final String email =
         _emailController.text.trim();
@@ -312,11 +669,24 @@ class _DeliveryPersonAuthPageState
           'email': email,
           'role': 'delivery_person',
 
-          // Later Admin can control these.
+          // Delivery person identity / vehicle / licence.
+          'photoUrl': _profilePhotoUrl,
+          'vehicleNumber': vehicleNumber,
+          'drivingLicenseNumber': licenseNumber,
+          'drivingLicenseExpiry': licenseExpiry,
+          'drivingLicenseFrontUrl': _licenseFrontUrl,
+          'drivingLicenseBackUrl': _licenseBackUrl,
+          'drivingLicenseVerified': false,
+          'drivingLicenseVerifiedAt': null,
+
+          // Admin approval / account state.
           'isActive': true,
           'isApproved': false,
+          'approvalStatus': 'pending',
+          'approvedAt': null,
+          'approvedBy': '',
 
-          'isOnline': true,
+          'isOnline': false,
           'currentOrderId': '',
 
           // Delivery person's own latest GPS.
@@ -337,7 +707,7 @@ class _DeliveryPersonAuthPageState
       }
 
       _showMessage(
-        'Account created. Your Delivery Person account is saved on this device while waiting for Admin approval.',
+        'Account created. Your profile and driving licence were submitted. Admin approval and licence verification are required before delivery work.',
       );
 
       setState(() {
@@ -564,6 +934,12 @@ class _DeliveryPersonAuthPageState
       if (!_isRegistering) {
         _nameController.clear();
         _phoneController.clear();
+        _vehicleNumberController.clear();
+        _licenseNumberController.clear();
+        _licenseExpiryController.clear();
+        _profilePhotoUrl = '';
+        _licenseFrontUrl = '';
+        _licenseBackUrl = '';
       }
     });
   }
@@ -895,6 +1271,154 @@ class _DeliveryPersonAuthPageState
                     const SizedBox(
                       height: 14,
                     ),
+
+                    TextFormField(
+                      controller:
+                          _vehicleNumberController,
+                      textCapitalization:
+                          TextCapitalization.characters,
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Vehicle Number',
+                        hintText:
+                            'Example: BA 00 PA 0000',
+                        prefixIcon: Icon(
+                          Icons.two_wheeler_rounded,
+                        ),
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      validator:
+                          (String? value) {
+                        if (value == null ||
+                            value.trim().isEmpty) {
+                          return 'Please enter vehicle number';
+                        }
+
+                        return null;
+                      },
+                    ),
+
+                    const SizedBox(
+                      height: 14,
+                    ),
+
+                    TextFormField(
+                      controller:
+                          _licenseNumberController,
+                      textCapitalization:
+                          TextCapitalization.characters,
+                      decoration:
+                          const InputDecoration(
+                        labelText:
+                            'Driving Licence Number',
+                        hintText:
+                            'Enter licence number',
+                        prefixIcon: Icon(
+                          Icons.badge_outlined,
+                        ),
+                        border:
+                            OutlineInputBorder(),
+                      ),
+                      validator:
+                          (String? value) {
+                        if (value == null ||
+                            value.trim().isEmpty) {
+                          return 'Please enter driving licence number';
+                        }
+
+                        return null;
+                      },
+                    ),
+
+                    const SizedBox(
+                      height: 14,
+                    ),
+
+                    TextFormField(
+                      controller:
+                          _licenseExpiryController,
+                      readOnly: true,
+                      onTap: _selectLicenseExpiry,
+                      decoration: InputDecoration(
+                        labelText:
+                            'Licence Expiry Date',
+                        hintText:
+                            'YYYY-MM-DD',
+                        prefixIcon: const Icon(
+                          Icons.event_available_outlined,
+                        ),
+                        border:
+                            const OutlineInputBorder(),
+                        suffixIcon: IconButton(
+                          tooltip:
+                              'Select expiry date',
+                          onPressed:
+                              _selectLicenseExpiry,
+                          icon: const Icon(
+                            Icons.calendar_month_rounded,
+                          ),
+                        ),
+                      ),
+                      validator:
+                          (String? value) {
+                        if (value == null ||
+                            value.trim().isEmpty) {
+                          return 'Please select licence expiry date';
+                        }
+
+                        return null;
+                      },
+                    ),
+
+                    const SizedBox(
+                      height: 14,
+                    ),
+
+                    _imageUploadCard(
+                      title: 'Profile Photo',
+                      url: _profilePhotoUrl,
+                      icon: Icons.person_outline_rounded,
+                      uploading: _uploadingProfilePhoto,
+                      onTap: _pickProfilePhoto,
+                    ),
+
+                    const SizedBox(
+                      height: 14,
+                    ),
+
+                    _imageUploadCard(
+                      title: 'Driving Licence Front',
+                      url: _licenseFrontUrl,
+                      icon: Icons.credit_card_rounded,
+                      uploading: _uploadingLicense,
+                      onTap: () {
+                        _pickLicenseImage(
+                          front: true,
+                        );
+                      },
+                    ),
+
+                    const SizedBox(
+                      height: 14,
+                    ),
+
+                    _imageUploadCard(
+                      title: 'Driving Licence Back',
+                      url: _licenseBackUrl,
+                      icon: Icons.credit_card_rounded,
+                      uploading: _uploadingLicense,
+                      onTap: () {
+                        _pickLicenseImage(
+                          front: false,
+                        );
+                      },
+                    ),
+
+                    const SizedBox(
+                      height: 14,
+                    ),
                   ],
 
                   // ===========================================
@@ -1026,7 +1550,9 @@ class _DeliveryPersonAuthPageState
                     child:
                         FilledButton.icon(
                       onPressed:
-                          _isLoading
+                          _isLoading ||
+                                  _uploadingProfilePhoto ||
+                                  _uploadingLicense
                               ? null
                               : _submit,
                       icon: _isLoading
@@ -1065,7 +1591,9 @@ class _DeliveryPersonAuthPageState
 
                   TextButton(
                     onPressed:
-                        _isLoading
+                        _isLoading ||
+                                _uploadingProfilePhoto ||
+                                _uploadingLicense
                             ? null
                             : _switchMode,
                     child: Text(
@@ -1107,6 +1635,9 @@ class _DeliveryPersonAuthPageState
   void dispose() {
     _nameController.dispose();
     _phoneController.dispose();
+    _vehicleNumberController.dispose();
+    _licenseNumberController.dispose();
+    _licenseExpiryController.dispose();
     _emailController.dispose();
     _passwordController.dispose();
 

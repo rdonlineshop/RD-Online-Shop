@@ -1,8 +1,11 @@
+import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
 import 'package:qr_flutter/qr_flutter.dart';
 
@@ -21,10 +24,15 @@ class DeliveryPersonDashboardPage extends StatefulWidget {
 class _DeliveryPersonDashboardPageState
     extends State<DeliveryPersonDashboardPage> {
   bool _isLoading = true;
+  bool _isOnline = false;
+  bool _updatingAvailability = false;
 
   String _deliveryPersonName = '';
   String _deliveryPersonPhone = '';
   String _deliveryPersonId = '';
+
+  Map<String, dynamic> _deliveryPersonData =
+      <String, dynamic>{};
 
   @override
   void initState() {
@@ -72,6 +80,12 @@ class _DeliveryPersonDashboardPageState
 
         _deliveryPersonPhone =
             data['phone']?.toString().trim() ?? '';
+
+        _deliveryPersonData =
+            Map<String, dynamic>.from(data);
+
+        _isOnline =
+            data['isOnline'] == true;
 
         _isLoading = false;
       });
@@ -1705,6 +1719,143 @@ class _DeliveryPersonDashboardPageState
   }
 
   // =========================================================
+  // ONLINE / OFFLINE
+  // =========================================================
+
+  Future<void> _setOnlineStatus(
+    bool value,
+  ) async {
+    if (_updatingAvailability ||
+        _deliveryPersonId.trim().isEmpty) {
+      return;
+    }
+
+    setState(() {
+      _updatingAvailability = true;
+    });
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('delivery_persons')
+          .doc(_deliveryPersonId)
+          .set(
+        <String, dynamic>{
+          'isOnline': value,
+          'updatedAt':
+              DateTime.now().toIso8601String(),
+        },
+        SetOptions(
+          merge: true,
+        ),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _isOnline = value;
+        _deliveryPersonData =
+            <String, dynamic>{
+          ..._deliveryPersonData,
+          'isOnline': value,
+        };
+      });
+
+      _showMessage(
+        value
+            ? 'You are now Online and available for delivery work.'
+            : 'You are now Offline.',
+      );
+    } catch (error) {
+      _showMessage(
+        'Could not update Online / Offline status: $error',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _updatingAvailability = false;
+        });
+      }
+    }
+  }
+
+  // =========================================================
+  // EDIT PROFILE
+  // =========================================================
+
+  Future<void> _openEditProfile() async {
+    if (_deliveryPersonId.trim().isEmpty ||
+        _isLoading) {
+      return;
+    }
+
+    final bool? requiresReapproval =
+        await Navigator.push<bool>(
+      context,
+      MaterialPageRoute<bool>(
+        builder: (_) =>
+            DeliveryPersonEditProfilePage(
+          deliveryPersonId:
+              _deliveryPersonId,
+          initialData:
+              Map<String, dynamic>.from(
+            _deliveryPersonData,
+          ),
+        ),
+      ),
+    );
+
+    if (!mounted ||
+        requiresReapproval == null) {
+      return;
+    }
+
+    await _loadDeliveryPerson();
+
+    if (!mounted) {
+      return;
+    }
+
+    if (requiresReapproval) {
+      await showDialog<void>(
+        context: context,
+        builder: (
+          BuildContext dialogContext,
+        ) {
+          return AlertDialog(
+            title: const Text(
+              'Admin Verification Required',
+            ),
+            content: const Text(
+              'Your vehicle or driving licence details were changed. '
+              'For security, the account has been moved back to Pending Approval. '
+              'Admin must verify the updated documents before delivery work can continue.',
+            ),
+            actions: <Widget>[
+              FilledButton(
+                onPressed: () =>
+                    Navigator.pop(
+                  dialogContext,
+                ),
+                child: const Text('OK'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (mounted) {
+        await _logout();
+      }
+    } else {
+      _showMessage(
+        'Delivery Person profile updated.',
+      );
+    }
+  }
+
+  // =========================================================
   // LOGOUT
   // =========================================================
 
@@ -1768,6 +1919,16 @@ class _DeliveryPersonDashboardPageState
         ),
         centerTitle: true,
         actions: <Widget>[
+          IconButton(
+            tooltip: 'Edit Profile',
+            onPressed:
+                _isLoading
+                    ? null
+                    : _openEditProfile,
+            icon: const Icon(
+              Icons.edit_rounded,
+            ),
+          ),
           IconButton(
             tooltip: 'Logout',
             onPressed:
@@ -1879,10 +2040,42 @@ class _DeliveryPersonDashboardPageState
                               ),
                             ),
 
-                            const Chip(
-                              label: Text(
-                                'Online',
-                              ),
+                            Column(
+                              mainAxisSize:
+                                  MainAxisSize.min,
+                              children:
+                                  <Widget>[
+                                Switch(
+                                  value:
+                                      _isOnline,
+                                  onChanged:
+                                      _updatingAvailability
+                                          ? null
+                                          : _setOnlineStatus,
+                                ),
+                                Text(
+                                  _updatingAvailability
+                                      ? 'Updating...'
+                                      : _isOnline
+                                          ? 'Online'
+                                          : 'Offline',
+                                  style:
+                                      TextStyle(
+                                    fontSize:
+                                        12,
+                                    fontWeight:
+                                        FontWeight
+                                            .w800,
+                                    color:
+                                        _isOnline
+                                            ? Colors
+                                                .green
+                                            : Colors
+                                                .grey
+                                                .shade700,
+                                  ),
+                                ),
+                              ],
                             ),
                           ],
                         ),
@@ -2006,3 +2199,749 @@ class _DeliveryPersonDashboardPageState
     );
   }
 }
+
+class DeliveryPersonEditProfilePage extends StatefulWidget {
+  const DeliveryPersonEditProfilePage({
+    required this.deliveryPersonId,
+    required this.initialData,
+    super.key,
+  });
+
+  final String deliveryPersonId;
+  final Map<String, dynamic> initialData;
+
+  @override
+  State<DeliveryPersonEditProfilePage> createState() =>
+      _DeliveryPersonEditProfilePageState();
+}
+
+class _DeliveryPersonEditProfilePageState
+    extends State<DeliveryPersonEditProfilePage> {
+  static const String _cloudName = 'p83ttfym';
+  static const String _uploadPreset =
+      'rd_online_shop_products';
+
+  final GlobalKey<FormState> _formKey =
+      GlobalKey<FormState>();
+
+  late final TextEditingController _nameController;
+  late final TextEditingController _phoneController;
+  late final TextEditingController
+      _vehicleNumberController;
+  late final TextEditingController
+      _licenseNumberController;
+  late final TextEditingController
+      _licenseExpiryController;
+
+  late String _photoUrl;
+  late String _licenseFrontUrl;
+  late String _licenseBackUrl;
+
+  bool _saving = false;
+  bool _uploadingImage = false;
+
+  String _value(
+    Map<String, dynamic> data,
+    String key,
+  ) {
+    return data[key]?.toString().trim() ?? '';
+  }
+
+  @override
+  void initState() {
+    super.initState();
+
+    final Map<String, dynamic> data =
+        widget.initialData;
+
+    _nameController =
+        TextEditingController(
+      text: _value(data, 'name'),
+    );
+
+    _phoneController =
+        TextEditingController(
+      text: _value(data, 'phone'),
+    );
+
+    _vehicleNumberController =
+        TextEditingController(
+      text: _value(data, 'vehicleNumber'),
+    );
+
+    _licenseNumberController =
+        TextEditingController(
+      text:
+          _value(data, 'drivingLicenseNumber'),
+    );
+
+    _licenseExpiryController =
+        TextEditingController(
+      text:
+          _value(data, 'drivingLicenseExpiry'),
+    );
+
+    _photoUrl =
+        _value(data, 'photoUrl');
+    _licenseFrontUrl =
+        _value(data, 'drivingLicenseFrontUrl');
+    _licenseBackUrl =
+        _value(data, 'drivingLicenseBackUrl');
+  }
+
+  @override
+  void dispose() {
+    _nameController.dispose();
+    _phoneController.dispose();
+    _vehicleNumberController.dispose();
+    _licenseNumberController.dispose();
+    _licenseExpiryController.dispose();
+    super.dispose();
+  }
+
+  void _showMessage(
+    String message,
+  ) {
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+      ),
+    );
+  }
+
+  Future<String> _uploadImage(
+    XFile image,
+  ) async {
+    final Uri uri = Uri.parse(
+      'https://api.cloudinary.com/v1_1/'
+      '$_cloudName/image/upload',
+    );
+
+    final http.MultipartRequest request =
+        http.MultipartRequest(
+      'POST',
+      uri,
+    );
+
+    request.fields['upload_preset'] =
+        _uploadPreset;
+
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'file',
+        await image.readAsBytes(),
+        filename: image.name,
+      ),
+    );
+
+    final http.StreamedResponse response =
+        await request.send();
+
+    final String body =
+        await response.stream.bytesToString();
+
+    if (response.statusCode < 200 ||
+        response.statusCode >= 300) {
+      throw Exception(
+        'Image upload failed: $body',
+      );
+    }
+
+    final dynamic decoded =
+        jsonDecode(body);
+
+    if (decoded is! Map<String, dynamic>) {
+      throw Exception(
+        'Invalid image upload response.',
+      );
+    }
+
+    final String url =
+        decoded['secure_url']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (url.isEmpty) {
+      throw Exception(
+        'Image URL was not received.',
+      );
+    }
+
+    return url;
+  }
+
+  Future<void> _pickImage({
+    required String type,
+  }) async {
+    if (_uploadingImage || _saving) {
+      return;
+    }
+
+    final XFile? image =
+        await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 85,
+    );
+
+    if (image == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _uploadingImage = true;
+    });
+
+    try {
+      final String url =
+          await _uploadImage(image);
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        switch (type) {
+          case 'profile':
+            _photoUrl = url;
+            break;
+          case 'front':
+            _licenseFrontUrl = url;
+            break;
+          case 'back':
+            _licenseBackUrl = url;
+            break;
+        }
+      });
+
+      _showMessage(
+        'Photo uploaded successfully.',
+      );
+    } catch (error) {
+      _showMessage(
+        'Photo upload failed: $error',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _uploadingImage = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _selectLicenseExpiry() async {
+    DateTime initialDate =
+        DateTime.now().add(
+      const Duration(days: 365),
+    );
+
+    final DateTime? parsed =
+        DateTime.tryParse(
+      _licenseExpiryController.text.trim(),
+    );
+
+    if (parsed != null) {
+      initialDate = parsed;
+    }
+
+    final DateTime firstDate =
+        DateTime.now();
+
+    if (initialDate.isBefore(firstDate)) {
+      initialDate = firstDate;
+    }
+
+    final DateTime? selected =
+        await showDatePicker(
+      context: context,
+      initialDate: initialDate,
+      firstDate: firstDate,
+      lastDate: DateTime(
+        firstDate.year + 20,
+      ),
+    );
+
+    if (selected == null) {
+      return;
+    }
+
+    _licenseExpiryController.text =
+        '${selected.year.toString().padLeft(4, '0')}-'
+        '${selected.month.toString().padLeft(2, '0')}-'
+        '${selected.day.toString().padLeft(2, '0')}';
+  }
+
+  bool get _sensitiveDocumentsChanged {
+    final Map<String, dynamic> original =
+        widget.initialData;
+
+    return _vehicleNumberController.text
+                .trim() !=
+            _value(
+              original,
+              'vehicleNumber',
+            ) ||
+        _licenseNumberController.text
+                .trim() !=
+            _value(
+              original,
+              'drivingLicenseNumber',
+            ) ||
+        _licenseExpiryController.text
+                .trim() !=
+            _value(
+              original,
+              'drivingLicenseExpiry',
+            ) ||
+        _licenseFrontUrl !=
+            _value(
+              original,
+              'drivingLicenseFrontUrl',
+            ) ||
+        _licenseBackUrl !=
+            _value(
+              original,
+              'drivingLicenseBackUrl',
+            );
+  }
+
+  Future<void> _save() async {
+    final FormState? form =
+        _formKey.currentState;
+
+    if (form == null ||
+        !form.validate() ||
+        _saving ||
+        _uploadingImage) {
+      return;
+    }
+
+    if (_photoUrl.isEmpty) {
+      _showMessage(
+        'Please upload a profile photo.',
+      );
+      return;
+    }
+
+    if (_licenseFrontUrl.isEmpty ||
+        _licenseBackUrl.isEmpty) {
+      _showMessage(
+        'Please upload both front and back of the driving licence.',
+      );
+      return;
+    }
+
+    final bool requiresReapproval =
+        _sensitiveDocumentsChanged;
+
+    setState(() {
+      _saving = true;
+    });
+
+    try {
+      final Map<String, dynamic> update =
+          <String, dynamic>{
+        'name':
+            _nameController.text.trim(),
+        'phone':
+            _phoneController.text.trim(),
+        'vehicleNumber':
+            _vehicleNumberController.text.trim(),
+        'drivingLicenseNumber':
+            _licenseNumberController.text.trim(),
+        'drivingLicenseExpiry':
+            _licenseExpiryController.text.trim(),
+        'photoUrl': _photoUrl,
+        'drivingLicenseFrontUrl':
+            _licenseFrontUrl,
+        'drivingLicenseBackUrl':
+            _licenseBackUrl,
+        'updatedAt':
+            DateTime.now().toIso8601String(),
+      };
+
+      if (requiresReapproval) {
+        update.addAll(
+          <String, dynamic>{
+            'drivingLicenseVerified': false,
+            'drivingLicenseVerifiedAt': null,
+            'isApproved': false,
+            'isOnline': false,
+            'approvalStatus': 'pending',
+            'documentReviewRequestedAt':
+                FieldValue.serverTimestamp(),
+          },
+        );
+      }
+
+      await FirebaseFirestore.instance
+          .collection('delivery_persons')
+          .doc(widget.deliveryPersonId)
+          .set(
+        update,
+        SetOptions(
+          merge: true,
+        ),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.pop<bool>(
+        context,
+        requiresReapproval,
+      );
+    } catch (error) {
+      _showMessage(
+        'Could not save profile: $error',
+      );
+
+      if (mounted) {
+        setState(() {
+          _saving = false;
+        });
+      }
+    }
+  }
+
+  Widget _photoCard({
+    required String title,
+    required String url,
+    required IconData icon,
+    required VoidCallback onTap,
+  }) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(
+          color: Colors.grey.shade300,
+        ),
+        borderRadius:
+            BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment:
+            CrossAxisAlignment.stretch,
+        children: <Widget>[
+          SizedBox(
+            height: 170,
+            child: url.isEmpty
+                ? Center(
+                    child: Icon(
+                      icon,
+                      size: 58,
+                      color:
+                          Colors.grey.shade500,
+                    ),
+                  )
+                : ClipRRect(
+                    borderRadius:
+                        BorderRadius.circular(
+                      10,
+                    ),
+                    child: Image.network(
+                      url,
+                      fit: BoxFit.contain,
+                      errorBuilder: (
+                        BuildContext context,
+                        Object error,
+                        StackTrace?
+                            stackTrace,
+                      ) {
+                        return const Center(
+                          child: Icon(
+                            Icons
+                                .broken_image_outlined,
+                            size: 56,
+                          ),
+                        );
+                      },
+                    ),
+                  ),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            title,
+            style: const TextStyle(
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 8),
+          OutlinedButton.icon(
+            onPressed:
+                _uploadingImage
+                    ? null
+                    : onTap,
+            icon: const Icon(
+              Icons.photo_library_outlined,
+            ),
+            label: Text(
+              url.isEmpty
+                  ? 'Choose Photo'
+                  : 'Change Photo',
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  @override
+  Widget build(
+    BuildContext context,
+  ) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Edit Delivery Profile',
+          style: TextStyle(
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        centerTitle: true,
+      ),
+      body: Form(
+        key: _formKey,
+        child: ListView(
+          padding:
+              const EdgeInsets.all(16),
+          children: <Widget>[
+            TextFormField(
+              controller:
+                  _nameController,
+              textCapitalization:
+                  TextCapitalization.words,
+              decoration:
+                  const InputDecoration(
+                labelText: 'Full Name',
+                prefixIcon:
+                    Icon(Icons.person),
+                border:
+                    OutlineInputBorder(),
+              ),
+              validator:
+                  (String? value) {
+                if (value == null ||
+                    value.trim().isEmpty) {
+                  return 'Please enter full name';
+                }
+
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller:
+                  _phoneController,
+              keyboardType:
+                  TextInputType.phone,
+              decoration:
+                  const InputDecoration(
+                labelText:
+                    'Phone Number',
+                prefixIcon:
+                    Icon(Icons.phone),
+                border:
+                    OutlineInputBorder(),
+              ),
+              validator:
+                  (String? value) {
+                final String phone =
+                    value?.trim() ?? '';
+
+                if (phone.isEmpty) {
+                  return 'Please enter phone number';
+                }
+
+                if (phone.length < 7) {
+                  return 'Please enter a valid phone number';
+                }
+
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller:
+                  _vehicleNumberController,
+              textCapitalization:
+                  TextCapitalization.characters,
+              decoration:
+                  const InputDecoration(
+                labelText:
+                    'Vehicle Number',
+                prefixIcon:
+                    Icon(Icons.local_shipping),
+                border:
+                    OutlineInputBorder(),
+              ),
+              validator:
+                  (String? value) {
+                if (value == null ||
+                    value.trim().isEmpty) {
+                  return 'Please enter vehicle number';
+                }
+
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller:
+                  _licenseNumberController,
+              decoration:
+                  const InputDecoration(
+                labelText:
+                    'Driving Licence Number',
+                prefixIcon:
+                    Icon(Icons.badge_outlined),
+                border:
+                    OutlineInputBorder(),
+              ),
+              validator:
+                  (String? value) {
+                if (value == null ||
+                    value.trim().isEmpty) {
+                  return 'Please enter driving licence number';
+                }
+
+                return null;
+              },
+            ),
+            const SizedBox(height: 12),
+            TextFormField(
+              controller:
+                  _licenseExpiryController,
+              readOnly: true,
+              onTap:
+                  _selectLicenseExpiry,
+              decoration:
+                  InputDecoration(
+                labelText:
+                    'Licence Expiry Date',
+                prefixIcon:
+                    const Icon(
+                  Icons.event,
+                ),
+                suffixIcon:
+                    IconButton(
+                  onPressed:
+                      _selectLicenseExpiry,
+                  icon: const Icon(
+                    Icons
+                        .calendar_month,
+                  ),
+                ),
+                border:
+                    const OutlineInputBorder(),
+              ),
+              validator:
+                  (String? value) {
+                if (value == null ||
+                    value.trim().isEmpty) {
+                  return 'Please select licence expiry date';
+                }
+
+                return null;
+              },
+            ),
+            const SizedBox(height: 16),
+            _photoCard(
+              title: 'Profile Photo',
+              url: _photoUrl,
+              icon:
+                  Icons.person_outline,
+              onTap: () =>
+                  _pickImage(
+                type: 'profile',
+              ),
+            ),
+            const SizedBox(height: 12),
+            _photoCard(
+              title:
+                  'Driving Licence Front',
+              url:
+                  _licenseFrontUrl,
+              icon:
+                  Icons.badge_outlined,
+              onTap: () =>
+                  _pickImage(
+                type: 'front',
+              ),
+            ),
+            const SizedBox(height: 12),
+            _photoCard(
+              title:
+                  'Driving Licence Back',
+              url:
+                  _licenseBackUrl,
+              icon:
+                  Icons.badge_outlined,
+              onTap: () =>
+                  _pickImage(
+                type: 'back',
+              ),
+            ),
+            const SizedBox(height: 14),
+            Container(
+              padding:
+                  const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors
+                    .orange
+                    .withValues(
+                  alpha: 0.08,
+                ),
+                borderRadius:
+                    BorderRadius.circular(
+                  10,
+                ),
+              ),
+              child: const Text(
+                'Changing vehicle or driving licence details sends the account back for Admin verification. '
+                'Name, phone or profile-photo changes do not require licence re-verification.',
+              ),
+            ),
+            const SizedBox(height: 18),
+            SizedBox(
+              height: 52,
+              child: FilledButton.icon(
+                onPressed:
+                    _saving ||
+                            _uploadingImage
+                        ? null
+                        : _save,
+                icon: _saving
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child:
+                            CircularProgressIndicator(
+                          strokeWidth: 2,
+                        ),
+                      )
+                    : const Icon(
+                        Icons.save,
+                      ),
+                label: Text(
+                  _saving
+                      ? 'Saving...'
+                      : _uploadingImage
+                          ? 'Uploading Photo...'
+                          : 'Save Changes',
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+

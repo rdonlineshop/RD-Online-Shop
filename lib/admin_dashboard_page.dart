@@ -17,6 +17,7 @@ import 'admin_homestay_fee_page.dart';
 import 'admin_resort_management_page.dart';
 import 'admin_resort_partner_management_page.dart';
 import 'admin_resort_fee_page.dart';
+import 'admin_delivery_person_management_page.dart';
 import 'admin_earnings_page.dart';
 import 'admin_notification_center_page.dart';
 import 'admin_order_page.dart';
@@ -643,6 +644,18 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
             MaterialPageRoute<void>(
               builder: (_) =>
                   const AdminSellerPage(),
+            ),
+          ),
+        ),
+        _dashboardCard(
+          icon: Icons.delivery_dining_rounded,
+          title: 'Delivery Persons',
+          onTap: () =>
+              Navigator.push<void>(
+            context,
+            MaterialPageRoute<void>(
+              builder: (_) =>
+                  const AdminDeliveryPersonManagementPage(),
             ),
           ),
         ),
