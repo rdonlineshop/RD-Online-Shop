@@ -2084,51 +2084,116 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
         );
 
         if (pickupConfirmed) {
-          return Container(
-            width: double.infinity,
-            padding:
-                const EdgeInsets.all(
-              12,
-            ),
-            decoration:
-                BoxDecoration(
-              color: Colors.green
-                  .withValues(
-                alpha: 0.08,
-              ),
-              borderRadius:
-                  BorderRadius.circular(
-                12,
-              ),
-              border: Border.all(
-                color: Colors.green
-                    .withValues(
-                  alpha: 0.30,
-                ),
-              ),
-            ),
-            child: const Row(
-              children: <Widget>[
-                Icon(
-                  Icons
-                      .verified_rounded,
-                  color:
-                      Colors.green,
-                ),
-                SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'Krishi farm pickup verified. Normal live delivery flow is now active.',
-                    style:
-                        TextStyle(
-                      fontWeight:
-                          FontWeight
-                              .bold,
+          return StreamBuilder<
+              DocumentSnapshot<Map<String, dynamic>>>(
+            stream: FirebaseFirestore.instance
+                .collection('orders')
+                .doc(orderId)
+                .snapshots(),
+            builder: (
+              BuildContext context,
+              AsyncSnapshot<
+                      DocumentSnapshot<Map<String, dynamic>>>
+                  orderSnapshot,
+            ) {
+              final Map<String, dynamic> liveOrder =
+                  orderSnapshot.data?.data() ?? order;
+
+              final String liveStatus =
+                  liveOrder['status']
+                          ?.toString()
+                          .trim() ??
+                      '';
+
+              final String liveTrackingStatus =
+                  liveOrder['trackingStatus']
+                          ?.toString()
+                          .trim() ??
+                      '';
+
+              final String deliveredAt =
+                  liveOrder['deliveredAt']
+                          ?.toString()
+                          .trim() ??
+                      '';
+
+              final bool delivered =
+                  liveStatus == 'Delivered' ||
+                      liveTrackingStatus ==
+                          'Delivered' ||
+                      deliveredAt.isNotEmpty;
+
+              if (delivered) {
+                return Container(
+                  width: double.infinity,
+                  padding:
+                      const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: Colors.green
+                        .withValues(alpha: 0.10),
+                    borderRadius:
+                        BorderRadius.circular(12),
+                    border: Border.all(
+                      color: Colors.green
+                          .withValues(alpha: 0.35),
                     ),
                   ),
+                  child: const Row(
+                    children: <Widget>[
+                      Icon(
+                        Icons.check_circle_rounded,
+                        color: Colors.green,
+                      ),
+                      SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          'Delivery Complete - customer received the order and Delivery Person confirmed delivery.',
+                          style: TextStyle(
+                            fontWeight:
+                                FontWeight.w900,
+                            color: Colors.green,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              }
+
+              return Container(
+                width: double.infinity,
+                padding:
+                    const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: Colors.green
+                      .withValues(alpha: 0.08),
+                  borderRadius:
+                      BorderRadius.circular(12),
+                  border: Border.all(
+                    color: Colors.green
+                        .withValues(alpha: 0.30),
+                  ),
                 ),
-              ],
-            ),
+                child: const Row(
+                  children: <Widget>[
+                    Icon(
+                      Icons.verified_rounded,
+                      color: Colors.green,
+                    ),
+                    SizedBox(width: 8),
+                    Expanded(
+                      child: Text(
+                        'Krishi farm pickup verified. Normal live delivery flow is now active.',
+                        style: TextStyle(
+                          fontWeight:
+                              FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
           );
         }
 
