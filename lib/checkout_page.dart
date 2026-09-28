@@ -1056,6 +1056,44 @@ class _CheckoutPageState
           'quantity':
               item['quantity'] ?? 1,
 
+          // Krishi quantity/unit metadata. These fields are ignored by
+          // normal Online Shop orders and preserved for Krishi Seller/Admin.
+          if (item['marketplace'] != null)
+            'marketplace':
+                item['marketplace'],
+
+          if (item['productType'] != null)
+            'productType':
+                item['productType'],
+
+          if (item['sellerType'] != null)
+            'sellerType':
+                item['sellerType'],
+
+          if (item['unit'] != null)
+            'unit':
+                item['unit'],
+
+          if (item['pricePerUnit'] != null)
+            'pricePerUnit':
+                item['pricePerUnit'],
+
+          if (item['stock'] != null)
+            'stockAtOrder':
+                item['stock'],
+
+          if (item['brand'] != null)
+            'brand':
+                item['brand'],
+
+          if (item['variety'] != null)
+            'variety':
+                item['variety'],
+
+          if (item['origin'] != null)
+            'origin':
+                item['origin'],
+
           'image':
               item['image'],
 
@@ -1073,6 +1111,43 @@ class _CheckoutPageState
         };
       },
     ).toList();
+
+    final bool hasKrishiItems =
+        orderedItems.any(
+      (Map<String, dynamic> item) =>
+          item['marketplace']
+                  ?.toString()
+                  .trim()
+                  .toLowerCase() ==
+              'krishi' ||
+          item['productType']
+                  ?.toString()
+                  .trim()
+                  .toLowerCase() ==
+              'krishi',
+    );
+
+    final bool hasNonKrishiItems =
+        orderedItems.any(
+      (Map<String, dynamic> item) =>
+          item['marketplace']
+                  ?.toString()
+                  .trim()
+                  .toLowerCase() !=
+              'krishi' &&
+          item['productType']
+                  ?.toString()
+                  .trim()
+                  .toLowerCase() !=
+              'krishi',
+    );
+
+    final String orderMarketplace =
+        hasKrishiItems && hasNonKrishiItems
+            ? 'mixed'
+            : hasKrishiItems
+                ? 'krishi'
+                : 'online_shop';
 
     final Set<String> uniqueSellerIds =
         orderedItems
@@ -1335,6 +1410,14 @@ class _CheckoutPageState
 
         'items':
             orderedItems,
+
+        // Marketplace routing. Existing Seller/Delivery QR/OTP flow remains
+        // unchanged; this only identifies Krishi/mixed orders.
+        'marketplace':
+            orderMarketplace,
+
+        'containsKrishiItems':
+            hasKrishiItems,
 
         // =====================================================
         // ORDER

@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/foundation.dart';
@@ -22,6 +25,9 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
 
   List<Map<String, dynamic>> _sellerOrders =
       <Map<String, dynamic>>[];
+
+  StreamSubscription<List<Map<String, dynamic>>>?
+      _ordersSubscription;
 
   String selectedFilter = 'All';
 
@@ -54,6 +60,9 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     final String sellerId =
         FirebaseAuth.instance.currentUser?.uid ?? '';
 
+    await _ordersSubscription?.cancel();
+    _ordersSubscription = null;
+
     if (sellerId.trim().isEmpty) {
       if (mounted) {
         setState(() {
@@ -63,16 +72,28 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
       return;
     }
 
-    final List<Map<String, dynamic>> orders =
-        await sellerOrdersStream(sellerId).first;
+    _ordersSubscription = sellerOrdersStream(
+      sellerId,
+    ).listen(
+      (List<Map<String, dynamic>> orders) {
+        if (!mounted) {
+          return;
+        }
 
-    if (!mounted) {
-      return;
-    }
+        setState(() {
+          _sellerOrders = orders;
+        });
+      },
+      onError: (Object error) {
+        if (!mounted) {
+          return;
+        }
 
-    setState(() {
-      _sellerOrders = orders;
-    });
+        _showMessage(
+          'Could not refresh seller orders: $error',
+        );
+      },
+    );
   }
 
   void _refreshPage() {
@@ -669,6 +690,1751 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
             searchMatch;
       },
     ).toList();
+  }
+
+  // =========================================================
+  // KRISHI NEARBY DELIVERY POOL
+  // =========================================================
+
+  bool _isKrishiOrder(
+    Map<String, dynamic> order,
+  ) {
+    for (final String key in <String>[
+      'marketplace',
+      'productType',
+      'sellerType',
+    ]) {
+      final String value =
+          order[key]
+                  ?.toString()
+                  .trim()
+                  .toLowerCase() ??
+              '';
+
+      if (value == 'krishi' ||
+          value == 'agriculture') {
+        return true;
+      }
+    }
+
+    final dynamic items =
+        order['items'];
+
+    if (items is List) {
+      for (final dynamic rawItem
+          in items) {
+        if (rawItem is! Map) {
+          continue;
+        }
+
+        for (final String key
+            in <String>[
+          'marketplace',
+          'productType',
+          'sellerType',
+        ]) {
+          final String value =
+              rawItem[key]
+                      ?.toString()
+                      .trim()
+                      .toLowerCase() ??
+                  '';
+
+          if (value == 'krishi' ||
+              value ==
+                  'agriculture') {
+            return true;
+          }
+        }
+      }
+    }
+
+    return false;
+  }
+
+  double _distanceKm(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
+    const double earthRadiusKm =
+        6371.0;
+
+    double radians(
+      double degree,
+    ) =>
+        degree * pi / 180.0;
+
+    final double dLat =
+        radians(
+      lat2 - lat1,
+    );
+    final double dLon =
+        radians(
+      lon2 - lon1,
+    );
+
+    final double a =
+        sin(dLat / 2) *
+                sin(dLat / 2) +
+            cos(radians(lat1)) *
+                cos(radians(lat2)) *
+                sin(dLon / 2) *
+                sin(dLon / 2);
+
+    final double c =
+        2 *
+            atan2(
+              sqrt(a),
+              sqrt(1 - a),
+            );
+
+    return earthRadiusKm * c;
+  }
+
+  DateTime? _timestampDate(
+    dynamic value,
+  ) {
+    if (value is Timestamp) {
+      return value.toDate();
+    }
+
+    if (value is DateTime) {
+      return value;
+    }
+
+    return DateTime.tryParse(
+      value?.toString() ?? '',
+    );
+  }
+
+  bool _poolReservationExpired(
+    Map<String, dynamic> pool,
+  ) {
+    final DateTime? expiry =
+        _timestampDate(
+      pool['reservationExpiresAt'],
+    );
+
+    return expiry == null ||
+        !expiry.isAfter(
+          DateTime.now(),
+        );
+  }
+
+  String _distanceLabel(
+    double? km,
+  ) {
+    if (km == null) {
+      return 'Unavailable';
+    }
+
+    if (km < 1) {
+      return '${(km * 1000).round()} m';
+    }
+
+    return '${km.toStringAsFixed(1)} km';
+  }
+
+  Future<Map<String, dynamic>>
+      _currentSellerFarmData(
+    Map<String, dynamic> order,
+  ) async {
+    final String sellerId =
+        FirebaseAuth.instance
+                .currentUser?.uid ??
+            '';
+
+    if (sellerId.isEmpty) {
+      return <String, dynamic>{};
+    }
+
+    String farmName =
+        order['pickupSellerName']
+                ?.toString()
+                .trim() ??
+            '';
+
+    String farmAddress =
+        order['pickupSellerAddress']
+                ?.toString()
+                .trim() ??
+            '';
+
+    String farmPhone =
+        '';
+
+    double? farmLat =
+        _toDouble(
+      order['pickupSellerLat'] ??
+          order['sellerShopLat'] ??
+          order['shopLat'],
+    );
+
+    double? farmLng =
+        _toDouble(
+      order['pickupSellerLng'] ??
+          order['sellerShopLng'] ??
+          order['shopLng'],
+    );
+
+    try {
+      final DocumentSnapshot<
+              Map<String, dynamic>>
+          sellerSnapshot =
+          await FirebaseFirestore.instance
+              .collection('sellers')
+              .doc(sellerId)
+              .get();
+
+      final Map<String, dynamic>
+          seller =
+          sellerSnapshot.data() ??
+              <String, dynamic>{};
+
+      farmName =
+          seller['shopName']
+                  ?.toString()
+                  .trim() ??
+              seller['farmName']
+                  ?.toString()
+                  .trim() ??
+              farmName;
+
+      farmAddress =
+          seller['address']
+                  ?.toString()
+                  .trim() ??
+              seller['shopAddress']
+                  ?.toString()
+                  .trim() ??
+              farmAddress;
+
+      farmPhone =
+          seller['phone']
+                  ?.toString()
+                  .trim() ??
+              seller['mobile']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      farmLat ??= _toDouble(
+        seller['shopLat'] ??
+            seller['shopLatitude'] ??
+            seller['latitude'] ??
+            seller['lat'],
+      );
+
+      farmLng ??= _toDouble(
+        seller['shopLng'] ??
+            seller['shopLongitude'] ??
+            seller['longitude'] ??
+            seller['lng'],
+      );
+
+      final dynamic shopLocation =
+          seller['shopLocation'];
+
+      if (shopLocation is GeoPoint) {
+        farmLat ??=
+            shopLocation.latitude;
+        farmLng ??=
+            shopLocation.longitude;
+      }
+    } catch (_) {
+      // Existing order pickup coordinates remain the fallback.
+    }
+
+    return <String, dynamic>{
+      'sellerId': sellerId,
+      'farmName': farmName.isEmpty
+          ? 'Krishi Farm'
+          : farmName,
+      'farmAddress': farmAddress,
+      'farmPhone': farmPhone,
+      'farmLat': farmLat,
+      'farmLng': farmLng,
+    };
+  }
+
+  Future<List<Map<String, dynamic>>>
+      _nearbyDeliveryPresence(
+    Map<String, dynamic> order,
+  ) async {
+    final Map<String, dynamic>
+        farm =
+        await _currentSellerFarmData(
+      order,
+    );
+
+    final double? farmLat =
+        _toDouble(
+      farm['farmLat'],
+    );
+
+    final double? farmLng =
+        _toDouble(
+      farm['farmLng'],
+    );
+
+    final QuerySnapshot<
+            Map<String, dynamic>>
+        snapshot =
+        await FirebaseFirestore.instance
+            .collection(
+              'delivery_presence',
+            )
+            .get();
+
+    final List<Map<String, dynamic>>
+        persons =
+        snapshot.docs
+            .map(
+              (
+                QueryDocumentSnapshot<
+                        Map<String, dynamic>>
+                    doc,
+              ) {
+                final Map<String, dynamic>
+                    data =
+                    <String, dynamic>{
+                  ...doc.data(),
+                  'driverId':
+                      doc.id,
+                };
+
+                final double? lat =
+                    _toDouble(
+                  data['latitude'],
+                );
+
+                final double? lng =
+                    _toDouble(
+                  data['longitude'],
+                );
+
+                final DateTime? locationUpdated =
+                    _timestampDate(
+                  data['locationUpdatedAt'],
+                );
+
+                final bool presenceFresh =
+                    locationUpdated == null ||
+                        DateTime.now()
+                                .difference(
+                                  locationUpdated,
+                                )
+                                .inMinutes <=
+                            5;
+
+                final bool presenceOnline =
+                    data['isOnline'] ==
+                            true &&
+                        presenceFresh;
+
+                data['isOnline'] =
+                    presenceOnline;
+
+                if (farmLat != null &&
+                    farmLng != null &&
+                    lat != null &&
+                    lng != null &&
+                    presenceOnline) {
+                  data['distanceKm'] =
+                      _distanceKm(
+                    farmLat,
+                    farmLng,
+                    lat,
+                    lng,
+                  );
+                }
+
+                return data;
+              },
+            )
+            .toList();
+
+    persons.sort(
+      (
+        Map<String, dynamic> a,
+        Map<String, dynamic> b,
+      ) {
+        final bool aOnline =
+            a['isOnline'] == true;
+        final bool bOnline =
+            b['isOnline'] == true;
+
+        if (aOnline != bOnline) {
+          return aOnline ? -1 : 1;
+        }
+
+        final double? aDistance =
+            _toDouble(
+          a['distanceKm'],
+        );
+        final double? bDistance =
+            _toDouble(
+          b['distanceKm'],
+        );
+
+        if (aDistance != null &&
+            bDistance != null) {
+          final int distanceSort =
+              aDistance.compareTo(
+            bDistance,
+          );
+
+          if (distanceSort != 0) {
+            return distanceSort;
+          }
+        } else if (aDistance !=
+            null) {
+          return -1;
+        } else if (bDistance !=
+            null) {
+          return 1;
+        }
+
+        return (a['name']
+                    ?.toString()
+                    .toLowerCase() ??
+                '')
+            .compareTo(
+          b['name']
+                  ?.toString()
+                  .toLowerCase() ??
+              '',
+        );
+      },
+    );
+
+    return persons;
+  }
+
+  String _generateKrishiReservationKey() {
+    const String alphabet =
+        'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+    final Random random = Random.secure();
+
+    return List<String>.generate(
+      40,
+      (_) => alphabet[
+        random.nextInt(alphabet.length)
+      ],
+    ).join();
+  }
+
+  Future<void> _sendPickupRequestToDriver(
+    Map<String, dynamic> order,
+    Map<String, dynamic> person,
+  ) async {
+    final String orderId = order['id']?.toString().trim() ?? '';
+    final String driverId = person['driverId']?.toString().trim() ?? '';
+
+    if (orderId.isEmpty || driverId.isEmpty) {
+      _showMessage('Order or Delivery Person ID is missing.');
+      return;
+    }
+
+    if (person['isOnline'] != true) {
+      _showMessage('This delivery person is currently offline.');
+      return;
+    }
+
+    final DocumentReference<Map<String, dynamic>> poolRef =
+        FirebaseFirestore.instance
+            .collection('krishi_delivery_pool')
+            .doc(orderId);
+    final DocumentReference<Map<String, dynamic>> requestRef =
+        poolRef.collection('pickup_requests').doc(driverId);
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> poolSnapshot =
+          await poolRef.get();
+      final Map<String, dynamic> pool =
+          poolSnapshot.data() ?? <String, dynamic>{};
+
+      if (!poolSnapshot.exists ||
+          pool['active'] != true ||
+          pool['state'] != 'available') {
+        _showMessage(
+          'This order is not currently available for a new delivery request.',
+        );
+        return;
+      }
+
+      final DocumentSnapshot<Map<String, dynamic>> existing =
+          await requestRef.get();
+      if (existing.exists) {
+        await requestRef.delete();
+      }
+
+      await requestRef.set(
+        <String, dynamic>{
+          'orderId': orderId,
+          'sellerId': FirebaseAuth.instance.currentUser?.uid ?? '',
+          'driverId': driverId,
+          'driverName': person['name']?.toString().trim() ?? '',
+          'driverPhone': person['phone']?.toString().trim() ?? '',
+          'driverEmail': person['email']?.toString().trim() ?? '',
+          'requestedBy': 'seller',
+          'status': 'pending_driver',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      _showMessage(
+        'Pickup request sent. Waiting for the delivery person to accept.',
+      );
+    } catch (error) {
+      _showMessage('Could not send pickup request: $error');
+    }
+  }
+
+  Future<void> _respondToDriverPickupRequest(
+    Map<String, dynamic> order,
+    Map<String, dynamic> requestData,
+    bool accept,
+  ) async {
+    final String orderId = order['id']?.toString().trim() ?? '';
+    final String driverId =
+        requestData['driverId']?.toString().trim() ?? '';
+
+    if (orderId.isEmpty || driverId.isEmpty) {
+      return;
+    }
+
+    final DocumentReference<Map<String, dynamic>> poolRef =
+        FirebaseFirestore.instance
+            .collection('krishi_delivery_pool')
+            .doc(orderId);
+    final DocumentReference<Map<String, dynamic>> requestRef =
+        poolRef.collection('pickup_requests').doc(driverId);
+
+    try {
+      if (!accept) {
+        await requestRef.update(
+          <String, dynamic>{
+            'status': 'rejected',
+            'respondedAt': FieldValue.serverTimestamp(),
+            'updatedAt': FieldValue.serverTimestamp(),
+          },
+        );
+        _showMessage('Pickup request rejected.');
+        return;
+      }
+
+      final String reservationKey = _generateKrishiReservationKey();
+      final Timestamp expiresAt = Timestamp.fromDate(
+        DateTime.now().add(
+          const Duration(hours: 2),
+        ),
+      );
+
+      await FirebaseFirestore.instance.runTransaction<void>(
+        (Transaction transaction) async {
+          final DocumentSnapshot<Map<String, dynamic>> poolSnapshot =
+              await transaction.get(poolRef);
+          final DocumentSnapshot<Map<String, dynamic>> requestSnapshot =
+              await transaction.get(requestRef);
+
+          final Map<String, dynamic> pool =
+              poolSnapshot.data() ?? <String, dynamic>{};
+          final Map<String, dynamic> latestRequest =
+              requestSnapshot.data() ?? <String, dynamic>{};
+
+          if (!poolSnapshot.exists ||
+              pool['active'] != true ||
+              pool['state'] != 'available') {
+            throw StateError('This pickup is no longer available.');
+          }
+
+          if (!requestSnapshot.exists ||
+              latestRequest['requestedBy'] != 'driver' ||
+              latestRequest['status'] != 'pending_seller') {
+            throw StateError('This driver request is no longer pending.');
+          }
+
+          transaction.update(
+            requestRef,
+            <String, dynamic>{
+              'status': 'accepted',
+              'respondedAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+
+          transaction.update(
+            poolRef,
+            <String, dynamic>{
+              'state': 'reserved',
+              'reservationKey': reservationKey,
+              'reservedDriverId': driverId,
+              'reservedDriverName':
+                  latestRequest['driverName']?.toString().trim() ?? '',
+              'reservedDriverPhone':
+                  latestRequest['driverPhone']?.toString().trim() ?? '',
+              'reservedDriverEmail':
+                  latestRequest['driverEmail']?.toString().trim() ?? '',
+              'reservedAt': FieldValue.serverTimestamp(),
+              'reservationExpiresAt': expiresAt,
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        },
+      );
+
+      _showMessage(
+        'Delivery person approved for pickup. QR/code verification is still required at physical handover.',
+      );
+    } catch (error) {
+      _showMessage(
+        'Could not respond to pickup request: ${error.toString().replaceFirst('Bad state: ', '').replaceFirst('Exception: ', '')}',
+      );
+    }
+  }
+
+  Widget _krishiPickupRequestsPanel(
+    Map<String, dynamic> order,
+  ) {
+    final String orderId = order['id']?.toString().trim() ?? '';
+
+    if (orderId.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('krishi_delivery_pool')
+          .doc(orderId)
+          .collection('pickup_requests')
+          .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot,
+      ) {
+        final List<Map<String, dynamic>> requests =
+            (snapshot.data?.docs ??
+                    <QueryDocumentSnapshot<Map<String, dynamic>>>[])
+                .map(
+                  (QueryDocumentSnapshot<Map<String, dynamic>> doc) =>
+                      <String, dynamic>{
+                    ...doc.data(),
+                    'requestId': doc.id,
+                  },
+                )
+                .where(
+                  (Map<String, dynamic> item) =>
+                      item['status'] == 'pending_seller' ||
+                      item['status'] == 'pending_driver',
+                )
+                .toList();
+
+        if (requests.isEmpty) {
+          return const SizedBox.shrink();
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            const SizedBox(height: 10),
+            const Text(
+              'Pickup Requests',
+              style: TextStyle(fontWeight: FontWeight.w900),
+            ),
+            const SizedBox(height: 6),
+            ...requests.map(
+              (Map<String, dynamic> request) {
+                final String name =
+                    request['driverName']?.toString().trim() ??
+                        'Delivery Person';
+                final String requestedBy =
+                    request['requestedBy']?.toString().trim() ?? '';
+                final String status =
+                    request['status']?.toString().trim() ?? '';
+
+                return Card(
+                  margin: const EdgeInsets.only(bottom: 6),
+                  child: Padding(
+                    padding: const EdgeInsets.all(10),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        Text(
+                          name,
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                        const SizedBox(height: 3),
+                        Text(
+                          requestedBy == 'driver'
+                              ? 'Delivery person requested this pickup.'
+                              : 'Waiting for this delivery person to accept your farm request.',
+                        ),
+                        if (requestedBy == 'driver' &&
+                            status == 'pending_seller') ...<Widget>[
+                          const SizedBox(height: 8),
+                          Row(
+                            children: <Widget>[
+                              Expanded(
+                                child: FilledButton.icon(
+                                  onPressed: () {
+                                    _respondToDriverPickupRequest(
+                                      order,
+                                      request,
+                                      true,
+                                    );
+                                  },
+                                  icon: const Icon(Icons.check_rounded),
+                                  label: const Text('Accept'),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: () {
+                                    _respondToDriverPickupRequest(
+                                      order,
+                                      request,
+                                      false,
+                                    );
+                                  },
+                                  icon: const Icon(Icons.close_rounded),
+                                  label: const Text('Reject'),
+                                ),
+                              ),
+                            ],
+                          ),
+                        ],
+                      ],
+                    ),
+                  ),
+                );
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void>
+      _showNearbyDeliveryPersons(
+    Map<String, dynamic> order,
+  ) async {
+    try {
+      final List<Map<String, dynamic>>
+          persons =
+          await _nearbyDeliveryPresence(
+        order,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      await showDialog<void>(
+        context: context,
+        builder: (
+          BuildContext dialogContext,
+        ) {
+          return AlertDialog(
+            title: const Text(
+              'Nearby Delivery Persons',
+              style: TextStyle(
+                fontWeight:
+                    FontWeight.w900,
+              ),
+            ),
+            content: SizedBox(
+              width: 520,
+              height: 480,
+              child: persons.isEmpty
+                  ? const Center(
+                      child: Text(
+                        'No delivery presence is available yet.',
+                      ),
+                    )
+                  : ListView.separated(
+                      itemCount:
+                          persons.length,
+                      separatorBuilder:
+                          (
+                        BuildContext context,
+                        int index,
+                      ) =>
+                              const Divider(),
+                      itemBuilder:
+                          (
+                        BuildContext context,
+                        int index,
+                      ) {
+                        final Map<String,
+                                dynamic>
+                            person =
+                            persons[index];
+
+                        final bool online =
+                            person['isOnline'] ==
+                                true;
+
+                        final String name =
+                            person['name']
+                                    ?.toString()
+                                    .trim() ??
+                                'Delivery Person';
+
+                        final String phone =
+                            person['phone']
+                                    ?.toString()
+                                    .trim() ??
+                                '';
+
+                        final double?
+                            distance =
+                            _toDouble(
+                          person[
+                              'distanceKm'],
+                        );
+
+                        return ListTile(
+                          onTap: online
+                              ? () async {
+                                  await _sendPickupRequestToDriver(
+                                    order,
+                                    person,
+                                  );
+                                }
+                              : null,
+                          leading:
+                              CircleAvatar(
+                            backgroundColor:
+                                online
+                                    ? Colors.green
+                                    : Colors.grey,
+                            child: const Icon(
+                              Icons
+                                  .delivery_dining,
+                              color:
+                                  Colors.white,
+                            ),
+                          ),
+                          title: Text(
+                            name,
+                            style:
+                                const TextStyle(
+                              fontWeight:
+                                  FontWeight
+                                      .bold,
+                            ),
+                          ),
+                          subtitle: Text(
+                            online
+                                ? 'Online • Farm → Driver: ${_distanceLabel(distance)} • Tap to request pickup'
+                                : 'Offline',
+                          ),
+                          trailing:
+                              Wrap(
+                            spacing: 2,
+                            children:
+                                <Widget>[
+                              IconButton(
+                                tooltip:
+                                    'Call',
+                                onPressed:
+                                    phone.isEmpty
+                                        ? null
+                                        : () {
+                                            _callPhone(
+                                              phone,
+                                            );
+                                          },
+                                icon:
+                                    const Icon(
+                                  Icons.call,
+                                ),
+                              ),
+                              IconButton(
+                                tooltip:
+                                    'SMS',
+                                onPressed:
+                                    phone.isEmpty
+                                        ? null
+                                        : () {
+                                            _sendSms(
+                                              phone,
+                                            );
+                                          },
+                                icon:
+                                    const Icon(
+                                  Icons.sms,
+                                ),
+                              ),
+                            ],
+                          ),
+                        );
+                      },
+                    ),
+            ),
+            actions: <Widget>[
+              FilledButton(
+                onPressed: () {
+                  Navigator.pop(
+                    dialogContext,
+                  );
+                },
+                child:
+                    const Text('Close'),
+              ),
+            ],
+          );
+        },
+      );
+    } catch (error) {
+      _showMessage(
+        'Could not load nearby delivery persons: $error',
+      );
+    }
+  }
+
+  Future<void>
+      _publishKrishiDeliveryPool(
+    Map<String, dynamic> order,
+  ) async {
+    if (!_isCurrentSellerOrder(
+          order,
+        ) ||
+        !_isKrishiOrder(order)) {
+      _showMessage(
+        'This is not an eligible Krishi order.',
+      );
+      return;
+    }
+
+    final String sellerId =
+        FirebaseAuth.instance
+                .currentUser?.uid ??
+            '';
+
+    final String orderId =
+        order['id']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String currentStatus =
+        order['status']
+                ?.toString()
+                .trim() ??
+            'Pending';
+
+    if (sellerId.isEmpty ||
+        orderId.isEmpty) {
+      _showMessage(
+        'Seller or Order ID is missing.',
+      );
+      return;
+    }
+
+    if (<String>[
+      'Shipped',
+      'Delivered',
+      'Cancelled',
+      'Returned',
+    ].contains(currentStatus)) {
+      _showMessage(
+        'This order can no longer be posted for nearby pickup.',
+      );
+      return;
+    }
+
+    if (order['pickupConfirmed'] ==
+            true ||
+        (order['driverId']
+                    ?.toString()
+                    .trim() ??
+                '')
+            .isNotEmpty) {
+      _showMessage(
+        'A delivery person is already assigned to this order.',
+      );
+      return;
+    }
+
+    final Set<String> sellerIds =
+        _orderSellerIds(
+      order,
+    );
+
+    if (sellerIds.length > 1) {
+      _showMessage(
+        'This checkout contains multiple sellers. Nearby Krishi pickup is kept safe by allowing one farm per delivery order.',
+      );
+      return;
+    }
+
+    final Map<String, dynamic>
+        farm =
+        await _currentSellerFarmData(
+      order,
+    );
+
+    final double? farmLat =
+        _toDouble(
+      farm['farmLat'],
+    );
+
+    final double? farmLng =
+        _toDouble(
+      farm['farmLng'],
+    );
+
+    if (farmLat == null ||
+        farmLng == null) {
+      _showMessage(
+        'Save the Krishi farm GPS location first. Nearby delivery cannot be calculated without the farm location.',
+      );
+      return;
+    }
+
+    final double? customerLat =
+        _customerLatitude(
+      order,
+    );
+
+    final double? customerLng =
+        _customerLongitude(
+      order,
+    );
+
+    final double? farmToCustomerKm =
+        customerLat != null &&
+                customerLng != null
+            ? _distanceKm(
+                farmLat,
+                farmLng,
+                customerLat,
+                customerLng,
+              )
+            : null;
+
+    int itemCount = 0;
+    final dynamic items =
+        order['items'];
+
+    if (items is List) {
+      for (final dynamic rawItem
+          in items) {
+        if (rawItem is! Map) {
+          continue;
+        }
+
+        final String itemSellerId =
+            rawItem['sellerId']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        if (itemSellerId.isEmpty ||
+            itemSellerId ==
+                sellerId) {
+          itemCount++;
+        }
+      }
+    }
+
+    final DocumentReference<
+            Map<String, dynamic>>
+        poolRef =
+        FirebaseFirestore.instance
+            .collection(
+              'krishi_delivery_pool',
+            )
+            .doc(orderId);
+
+    final DocumentSnapshot<
+            Map<String, dynamic>>
+        existing =
+        await poolRef.get();
+
+    final Map<String, dynamic>
+        existingData =
+        existing.data() ??
+            <String, dynamic>{};
+
+    if (existing.exists &&
+        existingData['active'] ==
+            true &&
+        existingData['state'] ==
+            'reserved' &&
+        !_poolReservationExpired(
+          existingData,
+        )) {
+      _showMessage(
+        'A delivery person already reserved this pickup. Wait for farm handover verification or stop the pool first.',
+      );
+      return;
+    }
+
+    await poolRef.set(
+      <String, dynamic>{
+        'orderId': orderId,
+        'sellerId': sellerId,
+        'marketplace': 'krishi',
+        'farmName':
+            farm['farmName']
+                    ?.toString() ??
+                'Krishi Farm',
+        'farmAddress':
+            farm['farmAddress']
+                    ?.toString() ??
+                '',
+        'farmPhone':
+            farm['farmPhone']
+                    ?.toString() ??
+                '',
+        'farmLat': farmLat,
+        'farmLng': farmLng,
+        // Route preview for nearby delivery persons. Customer phone/address
+        // still stay inside the protected order until pickup verification.
+        'customerLat': customerLat,
+        'customerLng': customerLng,
+        'farmToCustomerKm':
+            farmToCustomerKm,
+        'itemCount': itemCount,
+        'orderAmount':
+            order['amount']
+                    ?.toString()
+                    .trim() ??
+                '',
+        'readyForPickup': true,
+        'active': true,
+        'state': 'available',
+        'reservationKey': '',
+        'reservedDriverId': '',
+        'reservedDriverName': '',
+        'reservedDriverPhone': '',
+        'reservedDriverEmail': '',
+        'reservedAt': null,
+        'reservationExpiresAt': null,
+        'createdAt':
+            FieldValue.serverTimestamp(),
+        'updatedAt':
+            FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: false),
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    _showMessage(
+      'Krishi order is now visible to nearby online delivery persons.',
+    );
+  }
+
+  Future<void>
+      _stopKrishiDeliveryPool(
+    Map<String, dynamic> order,
+  ) async {
+    final String orderId =
+        order['id']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (orderId.isEmpty) {
+      return;
+    }
+
+    final DocumentReference<
+            Map<String, dynamic>>
+        poolRef =
+        FirebaseFirestore.instance
+            .collection(
+              'krishi_delivery_pool',
+            )
+            .doc(orderId);
+
+    try {
+      final DocumentSnapshot<
+              Map<String, dynamic>>
+          snapshot =
+          await poolRef.get();
+
+      final Map<String, dynamic>
+          pool =
+          snapshot.data() ??
+              <String, dynamic>{};
+
+      final bool reserved =
+          pool['active'] ==
+                  true &&
+              pool['state'] ==
+                  'reserved' &&
+              (pool['reservedDriverId']
+                          ?.toString()
+                          .trim() ??
+                      '')
+                  .isNotEmpty &&
+              !_poolReservationExpired(
+                pool,
+              );
+
+      if (!mounted) {
+        return;
+      }
+
+      final bool? confirm =
+          await showDialog<bool>(
+        context: context,
+        builder: (
+          BuildContext dialogContext,
+        ) {
+          return AlertDialog(
+            title: const Text(
+              'Stop Nearby Delivery Pool?',
+            ),
+            content: Text(
+              reserved
+                  ? 'A delivery person has reserved this pickup. Stopping the pool will cancel that reservation before parcel handover.'
+                  : 'This order will stop appearing to nearby delivery persons.',
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () {
+                  Navigator.pop(
+                    dialogContext,
+                    false,
+                  );
+                },
+                child:
+                    const Text('Keep Active'),
+              ),
+              FilledButton(
+                onPressed: () {
+                  Navigator.pop(
+                    dialogContext,
+                    true,
+                  );
+                },
+                child:
+                    const Text('Stop Pool'),
+              ),
+            ],
+          );
+        },
+      );
+
+      if (confirm != true) {
+        return;
+      }
+
+      await poolRef.update(
+        <String, dynamic>{
+          'active': false,
+          'readyForPickup': false,
+          'state': 'closed',
+          'updatedAt':
+              FieldValue.serverTimestamp(),
+        },
+      );
+
+      if (mounted) {
+        _showMessage(
+          'Nearby Krishi delivery pool stopped.',
+        );
+      }
+    } catch (error) {
+      _showMessage(
+        'Could not stop nearby delivery pool: $error',
+      );
+    }
+  }
+
+  Widget _krishiDeliveryPoolCard(
+    Map<String, dynamic> order,
+  ) {
+    if (!_isKrishiOrder(order)) {
+      return const SizedBox.shrink();
+    }
+
+    final String orderId =
+        order['id']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (orderId.isEmpty) {
+      return const SizedBox.shrink();
+    }
+
+    final bool pickupConfirmed =
+        order['pickupConfirmed'] ==
+            true;
+
+    final String orderStatus =
+        order['status']?.toString().trim() ?? '';
+
+    if (orderStatus == 'Delivered') {
+      return Container(
+        width: double.infinity,
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.green.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(12),
+          border: Border.all(
+            color: Colors.green.withValues(alpha: 0.35),
+          ),
+        ),
+        child: const Row(
+          children: <Widget>[
+            Icon(
+              Icons.check_circle_rounded,
+              color: Colors.green,
+            ),
+            SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Delivery Complete — customer received the order and Delivery Person confirmed delivery.',
+                style: TextStyle(
+                  fontWeight: FontWeight.w900,
+                  color: Colors.green,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    }
+
+    return StreamBuilder<
+        DocumentSnapshot<
+            Map<String, dynamic>>>(
+      stream:
+          FirebaseFirestore.instance
+              .collection(
+                'krishi_delivery_pool',
+              )
+              .doc(orderId)
+              .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<
+                DocumentSnapshot<
+                    Map<String, dynamic>>>
+            snapshot,
+      ) {
+        final Map<String, dynamic>
+            pool =
+            snapshot.data?.data() ??
+                <String, dynamic>{};
+
+        final bool active =
+            pool['active'] == true &&
+                pool['readyForPickup'] ==
+                    true;
+
+        final String state =
+            pool['state']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        final String reservedDriverId =
+            pool['reservedDriverId']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        final String reservedName =
+            pool['reservedDriverName']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        final String reservedPhone =
+            pool['reservedDriverPhone']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        final bool expired =
+            state == 'reserved' &&
+                _poolReservationExpired(
+                  pool,
+                );
+
+        final bool reserved =
+            active &&
+                state == 'reserved' &&
+                reservedDriverId
+                    .isNotEmpty &&
+                !expired;
+
+        final double?
+            farmToCustomerKm =
+            _toDouble(
+          pool['farmToCustomerKm'],
+        );
+
+        if (pickupConfirmed) {
+          return Container(
+            width: double.infinity,
+            padding:
+                const EdgeInsets.all(
+              12,
+            ),
+            decoration:
+                BoxDecoration(
+              color: Colors.green
+                  .withValues(
+                alpha: 0.08,
+              ),
+              borderRadius:
+                  BorderRadius.circular(
+                12,
+              ),
+              border: Border.all(
+                color: Colors.green
+                    .withValues(
+                  alpha: 0.30,
+                ),
+              ),
+            ),
+            child: const Row(
+              children: <Widget>[
+                Icon(
+                  Icons
+                      .verified_rounded,
+                  color:
+                      Colors.green,
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Krishi farm pickup verified. Normal live delivery flow is now active.',
+                    style:
+                        TextStyle(
+                      fontWeight:
+                          FontWeight
+                              .bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          );
+        }
+
+        return Container(
+          width: double.infinity,
+          padding:
+              const EdgeInsets.all(
+            12,
+          ),
+          decoration:
+              BoxDecoration(
+            color: Colors.green
+                .withValues(
+              alpha: 0.06,
+            ),
+            borderRadius:
+                BorderRadius.circular(
+              12,
+            ),
+            border: Border.all(
+              color: Colors.green
+                  .withValues(
+                alpha: 0.30,
+              ),
+            ),
+          ),
+          child: Column(
+            crossAxisAlignment:
+                CrossAxisAlignment.start,
+            children: <Widget>[
+              const Row(
+                children: <Widget>[
+                  Icon(
+                    Icons
+                        .agriculture_rounded,
+                    color:
+                        Colors.green,
+                  ),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'Nearby Krishi Delivery',
+                      style:
+                          TextStyle(
+                        fontSize: 16,
+                        fontWeight:
+                            FontWeight
+                                .bold,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(
+                height: 8,
+              ),
+              if (!active) ...<Widget>[
+                const Text(
+                  'Krishi customer orders are normally listed automatically for nearby online delivery persons. Use the button below only to publish or refresh this order manually if needed.',
+                ),
+                const SizedBox(
+                  height: 10,
+                ),
+                SizedBox(
+                  width:
+                      double.infinity,
+                  child:
+                      FilledButton.icon(
+                    onPressed: () {
+                      _publishKrishiDeliveryPool(
+                        order,
+                      );
+                    },
+                    icon:
+                        const Icon(
+                      Icons
+                          .campaign_rounded,
+                    ),
+                    label:
+                        const Text(
+                      'Publish / Notify Nearby Drivers',
+                    ),
+                  ),
+                ),
+              ] else ...<Widget>[
+                Text(
+                  reserved
+                      ? 'Reserved by: ${reservedName.isEmpty ? reservedDriverId : reservedName}'
+                      : expired
+                          ? 'Previous reservation expired. The order is available to nearby delivery persons again.'
+                          : 'Waiting for a nearby delivery person.',
+                  style:
+                      const TextStyle(
+                    fontWeight:
+                        FontWeight.w700,
+                  ),
+                ),
+                if (farmToCustomerKm !=
+                    null) ...<Widget>[
+                  const SizedBox(
+                    height: 5,
+                  ),
+                  Text(
+                    'Farm → Customer: ${_distanceLabel(farmToCustomerKm)}',
+                  ),
+                ],
+                if (!reserved && !expired)
+                  _krishiPickupRequestsPanel(
+                    order,
+                  ),
+                if (reserved &&
+                    reservedPhone
+                        .isNotEmpty) ...<Widget>[
+                  const SizedBox(
+                    height: 8,
+                  ),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child:
+                            OutlinedButton
+                                .icon(
+                          onPressed: () {
+                            _callPhone(
+                              reservedPhone,
+                            );
+                          },
+                          icon:
+                              const Icon(
+                            Icons.call,
+                          ),
+                          label:
+                              const Text(
+                            'Call Driver',
+                          ),
+                        ),
+                      ),
+                      const SizedBox(
+                        width: 8,
+                      ),
+                      Expanded(
+                        child:
+                            OutlinedButton
+                                .icon(
+                          onPressed: () {
+                            _sendSms(
+                              reservedPhone,
+                            );
+                          },
+                          icon:
+                              const Icon(
+                            Icons.sms,
+                          ),
+                          label:
+                              const Text(
+                            'SMS',
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+                if (reserved) ...<Widget>[
+                  const SizedBox(
+                    height: 8,
+                  ),
+                  const Text(
+                    'Only verify after the delivery person is physically at the farm and the parcel is being handed over.',
+                    style:
+                        TextStyle(
+                      color:
+                          Colors.orange,
+                      fontWeight:
+                          FontWeight
+                              .w700,
+                    ),
+                  ),
+                  const SizedBox(
+                    height: 8,
+                  ),
+                  SizedBox(
+                    width:
+                        double.infinity,
+                    child:
+                        FilledButton.icon(
+                      onPressed: () {
+                        _scanPickupQr(
+                          order,
+                        );
+                      },
+                      icon:
+                          const Icon(
+                        Icons
+                            .qr_code_scanner,
+                      ),
+                      label:
+                          const Text(
+                        'Scan Driver Pickup QR',
+                      ),
+                    ),
+                  ),
+                  const SizedBox(
+                    height: 8,
+                  ),
+                  SizedBox(
+                    width:
+                        double.infinity,
+                    child:
+                        OutlinedButton
+                            .icon(
+                      onPressed: () {
+                        _enterPickupCode(
+                          order,
+                        );
+                      },
+                      icon:
+                          const Icon(
+                        Icons
+                            .password_rounded,
+                      ),
+                      label:
+                          const Text(
+                        'Enter 6-digit Pickup Code',
+                      ),
+                    ),
+                  ),
+                ],
+                const SizedBox(
+                  height: 8,
+                ),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child:
+                          OutlinedButton
+                              .icon(
+                        onPressed: () {
+                          _showNearbyDeliveryPersons(
+                            order,
+                          );
+                        },
+                        icon:
+                            const Icon(
+                          Icons
+                              .near_me_rounded,
+                        ),
+                        label:
+                            const Text(
+                          'Find Nearby Delivery',
+                        ),
+                      ),
+                    ),
+                    const SizedBox(
+                      width: 8,
+                    ),
+                    Expanded(
+                      child:
+                          OutlinedButton
+                              .icon(
+                        onPressed: () {
+                          _stopKrishiDeliveryPool(
+                            order,
+                          );
+                        },
+                        icon:
+                            const Icon(
+                          Icons.stop_circle_outlined,
+                        ),
+                        label:
+                            const Text(
+                          'Stop Pool',
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+              const SizedBox(
+                height: 8,
+              ),
+              SizedBox(
+                width:
+                    double.infinity,
+                child:
+                    TextButton.icon(
+                  onPressed: () {
+                    _showNearbyDeliveryPersons(
+                      order,
+                    );
+                  },
+                  icon:
+                      const Icon(
+                    Icons
+                        .delivery_dining,
+                  ),
+                  label:
+                      const Text(
+                    'View / Request Delivery Persons Nearest to This Farm',
+                  ),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   // =========================================================
@@ -1712,31 +3478,34 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
   }) async {
     final String orderId =
         order['id']?.toString().trim() ?? '';
-    final String driverId =
+
+    String driverId =
         order['driverId']?.toString().trim() ?? '';
+
     final String sellerId =
         FirebaseAuth.instance.currentUser?.uid ?? '';
-    final String cleanProof = proof.trim();
+
+    final String cleanProof =
+        proof.trim();
 
     if (orderId.isEmpty) {
-      _showMessage('Order ID is missing.');
-      return;
-    }
-
-    if (driverId.isEmpty) {
       _showMessage(
-        'Please assign a delivery person first.',
+        'Order ID is missing.',
       );
       return;
     }
 
     if (sellerId.isEmpty) {
-      _showMessage('Seller login is required.');
+      _showMessage(
+        'Seller login is required.',
+      );
       return;
     }
 
     if (order['pickupConfirmed'] == true) {
-      _showMessage('Pickup is already confirmed.');
+      _showMessage(
+        'Pickup is already confirmed.',
+      );
       return;
     }
 
@@ -1750,53 +3519,229 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
     }
 
     if (method == 'code' &&
-        !RegExp(r'^\d{6}$').hasMatch(cleanProof)) {
-      _showMessage('Enter the 6-digit pickup code.');
+        !RegExp(r'^\d{6}$')
+            .hasMatch(
+          cleanProof,
+        )) {
+      _showMessage(
+        'Enter the 6-digit pickup code.',
+      );
       return;
     }
 
     try {
-      final DocumentReference<Map<String, dynamic>> orderRef =
+      final DocumentReference<
+              Map<String, dynamic>>
+          orderRef =
           FirebaseFirestore.instance
               .collection('orders')
               .doc(orderId);
 
-      final DocumentReference<Map<String, dynamic>>
+      bool fromKrishiPool = false;
+
+      Map<String, dynamic>
+          poolData =
+          <String, dynamic>{};
+
+      DocumentReference<
+              Map<String, dynamic>>?
+          poolRef;
+
+      if (driverId.isEmpty &&
+          _isKrishiOrder(
+            order,
+          )) {
+        poolRef =
+            FirebaseFirestore.instance
+                .collection(
+                  'krishi_delivery_pool',
+                )
+                .doc(orderId);
+
+        final DocumentSnapshot<
+                Map<String, dynamic>>
+            poolSnapshot =
+            await poolRef.get();
+
+        poolData =
+            poolSnapshot.data() ??
+                <String, dynamic>{};
+
+        final String poolDriverId =
+            poolData[
+                        'reservedDriverId']
+                    ?.toString()
+                    .trim() ??
+                '';
+
+        final bool poolReservationValid =
+            poolSnapshot.exists &&
+                poolData['active'] ==
+                    true &&
+                poolData[
+                        'readyForPickup'] ==
+                    true &&
+                poolData['state'] ==
+                    'reserved' &&
+                poolDriverId
+                    .isNotEmpty &&
+                !_poolReservationExpired(
+                  poolData,
+                );
+
+        if (!poolReservationValid) {
+          _showMessage(
+            'No active nearby delivery reservation is ready for farm handover.',
+          );
+          return;
+        }
+
+        driverId =
+            poolDriverId;
+        fromKrishiPool = true;
+      }
+
+      if (driverId.isEmpty) {
+        _showMessage(
+          'Please assign or reserve a delivery person first.',
+        );
+        return;
+      }
+
+      final String reservationKey =
+          fromKrishiPool
+              ? poolData['reservationKey']
+                      ?.toString()
+                      .trim() ??
+                  ''
+              : '';
+
+      if (fromKrishiPool &&
+          reservationKey.isEmpty) {
+        _showMessage(
+          'This nearby pickup reservation is no longer valid. Please reserve it again.',
+        );
+        return;
+      }
+
+      final DocumentReference<
+              Map<String, dynamic>>
           confirmationRef =
-          orderRef
-              .collection('pickup_confirmations')
-              .doc('current');
+          fromKrishiPool
+              ? FirebaseFirestore
+                  .instance
+                  .collection(
+                    'krishi_delivery_pool',
+                  )
+                  .doc(orderId)
+                  .collection(
+                    'pickup_confirmations',
+                  )
+                  .doc('current')
+              : orderRef
+                  .collection(
+                    'pickup_confirmations',
+                  )
+                  .doc('current');
 
       final String now =
-          DateTime.now().toIso8601String();
+          DateTime.now()
+              .toIso8601String();
 
       // Firestore Rules validate this proof against the private pickup
-      // verification owned by the assigned delivery person.
+      // verification owned by the assigned or reserved delivery person.
       await confirmationRef.set(
         <String, dynamic>{
           'orderId': orderId,
           'sellerId': sellerId,
           'driverId': driverId,
+          if (fromKrishiPool)
+            'reservationKey':
+                reservationKey,
           'method': method,
           'proof': cleanProof,
           'confirmedAt': now,
         },
-        SetOptions(merge: false),
+        SetOptions(
+          merge: false,
+        ),
       );
+
+      final Map<String, dynamic>
+          trackingUpdate =
+          <String, dynamic>{
+        'status': 'Shipped',
+        'trackingStatus':
+            'Picked Up',
+        'deliveryStartedAt': now,
+        'pickupConfirmed': true,
+        'pickupConfirmedAt': now,
+        'pickupConfirmedBySellerId':
+            sellerId,
+        'pickupConfirmationDriverId':
+            driverId,
+        'pickupConfirmationMethod':
+            method,
+      };
+
+      if (fromKrishiPool) {
+        trackingUpdate.addAll(
+          <String, dynamic>{
+            'driverId': driverId,
+            'driverName':
+                poolData[
+                            'reservedDriverName']
+                        ?.toString()
+                        .trim() ??
+                    '',
+            'driverPhone':
+                poolData[
+                            'reservedDriverPhone']
+                        ?.toString()
+                        .trim() ??
+                    '',
+            'driverEmail':
+                poolData[
+                            'reservedDriverEmail']
+                        ?.toString()
+                        .trim() ??
+                    '',
+            'trackingEnabled':
+                true,
+            'deliveryAssignedAt':
+                now,
+            'driverLat': null,
+            'driverLng': null,
+            'driverLocationUpdatedAt':
+                null,
+            'deliveryAssignmentType':
+                'krishi_nearby_pool',
+          },
+        );
+      }
 
       await updateOrderTrackingFields(
         orderId,
-        <String, dynamic>{
-          'status': 'Shipped',
-          'trackingStatus': 'Picked Up',
-          'deliveryStartedAt': now,
-          'pickupConfirmed': true,
-          'pickupConfirmedAt': now,
-          'pickupConfirmedBySellerId': sellerId,
-          'pickupConfirmationDriverId': driverId,
-          'pickupConfirmationMethod': method,
-        },
+        trackingUpdate,
       );
+
+      if (fromKrishiPool &&
+          poolRef != null) {
+        await poolRef.set(
+          <String, dynamic>{
+            'active': false,
+            'readyForPickup': false,
+            'state': 'picked_up',
+            'pickedUpAt':
+                FieldValue.serverTimestamp(),
+            'updatedAt':
+                FieldValue.serverTimestamp(),
+          },
+          SetOptions(
+            merge: true,
+          ),
+        );
+      }
 
       if (!mounted) {
         return;
@@ -1809,18 +3754,21 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
       }
 
       _showMessage(
-        'Pickup confirmed. Parcel handed to $driverId.',
+        fromKrishiPool
+            ? 'Krishi pickup verified. The parcel is now securely assigned to the delivery person.'
+            : 'Pickup confirmed. Parcel handed to $driverId.',
       );
     } on FirebaseException catch (error) {
       if (!mounted) {
         return;
       }
 
-      if (error.code == 'permission-denied') {
+      if (error.code ==
+          'permission-denied') {
         _showMessage(
           method == 'qr'
-              ? 'Pickup QR is invalid or belongs to another order.'
-              : 'Pickup code is incorrect.',
+              ? 'Pickup QR is invalid, expired, or belongs to another order.'
+              : 'Pickup code is incorrect, expired, or belongs to another order.',
         );
         return;
       }
@@ -1835,7 +3783,7 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
 
       _showMessage(
         'Could not confirm pickup: '
-        '${error.toString().replaceFirst('Exception: ', '')}',
+        '${error.toString().replaceFirst('Exception: ', '').replaceFirst('Bad state: ', '')}',
       );
     }
   }
@@ -1987,6 +3935,11 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                 ?.toString()
                 .trim() ??
             '';
+
+    final bool isKrishi =
+        _isKrishiOrder(
+      order,
+    );
 
     final double? driverLat =
         _toDouble(
@@ -2461,7 +4414,8 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                   OutlinedButton
                       .icon(
                 onPressed:
-                    pickupConfirmed
+                    pickupConfirmed ||
+                            isKrishi
                         ? null
                         : () {
                             _assignDeliveryPerson(
@@ -2470,18 +4424,23 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                           },
                 icon:
                     Icon(
-                  assigned
-                      ? Icons.edit
-                      : Icons
-                          .person_add,
+                  isKrishi
+                      ? Icons
+                          .agriculture_rounded
+                      : assigned
+                          ? Icons.edit
+                          : Icons
+                              .person_add,
                 ),
                 label:
                     Text(
                   pickupConfirmed
                       ? 'Delivery Person Locked After Pickup'
-                      : assigned
-                          ? 'Change Delivery Person'
-                          : 'Assign Delivery Person',
+                      : isKrishi
+                          ? 'Krishi: Use Nearby Delivery Pool'
+                          : assigned
+                              ? 'Change Delivery Person'
+                              : 'Assign Delivery Person',
                 ),
               ),
             ),
@@ -3864,14 +5823,27 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
                   16,
             ),
 
-            _deliveryPersonCard(
+            if (_isKrishiOrder(
               order,
-            ),
+            )) ...<Widget>[
+              _krishiDeliveryPoolCard(
+                order,
+              ),
+              const SizedBox(
+                height: 16,
+              ),
+            ],
 
-            const SizedBox(
-              height:
-                  16,
-            ),
+            if (!_isKrishiOrder(order) ||
+                order['pickupConfirmed'] == true ||
+                (order['driverId']?.toString().trim().isNotEmpty ?? false)) ...<Widget>[
+              _deliveryPersonCard(
+                order,
+              ),
+              const SizedBox(
+                height: 16,
+              ),
+            ],
 
             _productDetails(
               order['items'],
@@ -4137,6 +6109,8 @@ class _SellerOrderPageState extends State<SellerOrderPage> {
 
   @override
   void dispose() {
+    _ordersSubscription?.cancel();
+
     searchController
       ..removeListener(
         _refreshPage,

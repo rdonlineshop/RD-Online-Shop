@@ -488,6 +488,89 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
   }
 
 
+
+  Future<void> _deleteOrder(
+    Map<String, dynamic> order,
+  ) async {
+    final String orderId =
+        order['id']?.toString().trim() ?? '';
+
+    if (orderId.isEmpty) {
+      return;
+    }
+
+    final String customerName =
+        (order['customerName'] ?? order['name'] ?? 'Customer')
+            .toString();
+
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text(
+            'Permanently Delete Order?',
+          ),
+          content: Text(
+            'Order $orderId for $customerName will be permanently removed '
+            'from active orders. It will also disappear from Customer, Seller, '
+            'Delivery and earnings views that use this order. This cannot be undone.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, false);
+              },
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.red,
+              ),
+              onPressed: () {
+                Navigator.pop(dialogContext, true);
+              },
+              icon: const Icon(Icons.delete_forever),
+              label: const Text('Permanent Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    try {
+      await adminPermanentlyDeleteOrder(orderId);
+
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Order $orderId permanently deleted.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Could not delete order: '
+            '${error.toString().replaceFirst('Exception: ', '')}',
+          ),
+        ),
+      );
+    }
+  }
+
   String _generateDeviceRestoreCode() {
     const String alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
     final Random random = Random.secure();
@@ -3546,6 +3629,24 @@ class _AdminOrderPageState extends State<AdminOrderPage> {
                                           icon: const Icon(Icons.visibility),
                                           label:
                                               const Text('View Order Details'),
+                                        ),
+                                      ),
+                                      const SizedBox(height: 10),
+                                      SizedBox(
+                                        width: double.infinity,
+                                        child: OutlinedButton.icon(
+                                          style: OutlinedButton.styleFrom(
+                                            foregroundColor: Colors.red,
+                                          ),
+                                          onPressed: () {
+                                            _deleteOrder(order);
+                                          },
+                                          icon: const Icon(
+                                            Icons.delete_forever_outlined,
+                                          ),
+                                          label: const Text(
+                                            'Permanent Delete Order',
+                                          ),
                                         ),
                                       ),
                                     ],

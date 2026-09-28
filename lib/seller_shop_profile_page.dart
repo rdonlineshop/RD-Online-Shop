@@ -624,13 +624,6 @@ class _SellerShopProfilePageState
     });
 
     try {
-      if (PlatformCapabilities.isWindows) {
-        throw Exception(
-          'Current GPS Location works on Android/iPhone/macOS. '
-          'On Windows enter Latitude and Longitude manually.',
-        );
-      }
-
       final bool serviceEnabled =
           await Geolocator
               .isLocationServiceEnabled();

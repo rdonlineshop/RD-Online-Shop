@@ -60,6 +60,22 @@ class _KrishiProductPageState extends State<KrishiProductPage> {
     return '';
   }
 
+  String _thumbnailUrl(
+    String url,
+  ) {
+    final String value = url.trim();
+
+    if (value.contains('res.cloudinary.com') &&
+        value.contains('/image/upload/')) {
+      return value.replaceFirst(
+        '/image/upload/',
+        '/image/upload/c_fill,g_auto,w_320,h_320,q_auto:good/',
+      );
+    }
+
+    return value;
+  }
+
   Future<void> _openEditor({
     Map<String, dynamic>? product,
   }) async {
@@ -182,10 +198,35 @@ class _KrishiProductPageState extends State<KrishiProductPage> {
     return ClipRRect(
       borderRadius: BorderRadius.circular(12),
       child: Image.network(
-        url,
+        _thumbnailUrl(url),
         width: 82,
         height: 82,
         fit: BoxFit.cover,
+        cacheWidth: 320,
+        cacheHeight: 320,
+        loadingBuilder: (
+          BuildContext context,
+          Widget child,
+          ImageChunkEvent? loadingProgress,
+        ) {
+          if (loadingProgress == null) {
+            return child;
+          }
+
+          return Container(
+            width: 82,
+            height: 82,
+            color: Colors.green.withValues(alpha: 0.06),
+            alignment: Alignment.center,
+            child: const SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+              ),
+            ),
+          );
+        },
         errorBuilder: (
           BuildContext context,
           Object error,
@@ -882,7 +923,9 @@ class _KrishiProductEditorPageState
       http.MultipartFile.fromBytes(
         'file',
         await image.readAsBytes(),
-        filename: image.name,
+        filename: image.name.trim().isEmpty
+            ? 'krishi_product.jpg'
+            : image.name,
       ),
     );
 
@@ -928,6 +971,8 @@ class _KrishiProductEditorPageState
     final List<XFile> images =
         await ImagePicker().pickMultiImage(
       imageQuality: 85,
+      maxWidth: 2048,
+      maxHeight: 2048,
     );
 
     if (images.isEmpty) {

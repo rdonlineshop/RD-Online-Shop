@@ -6,7 +6,12 @@ import 'order_history_page.dart';
 import 'wishlist_page.dart';
 
 class CustomerDashboardPage extends StatefulWidget {
-  const CustomerDashboardPage({super.key});
+  const CustomerDashboardPage({
+    super.key,
+    this.krishiOnly = false,
+  });
+
+  final bool krishiOnly;
 
   @override
   State<CustomerDashboardPage> createState() =>
@@ -28,6 +33,13 @@ class _CustomerDashboardPageState
 
   Future<void> _loadCustomer() async {
     try {
+      if (widget.krishiOnly) {
+        // Krishi Customer is a real customer session. This keeps Firestore
+        // order status/tracking updates authorized and realtime, even if the
+        // same app was previously logged in as Seller/Admin/Delivery.
+        await switchToGuestCustomerSession();
+      }
+
       final String id = await getOrCreateCustomerId();
       await loadOrders();
 
@@ -100,9 +112,11 @@ class _CustomerDashboardPageState
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'Customer Dashboard',
-          style: TextStyle(
+        title: Text(
+          widget.krishiOnly
+              ? 'Krishi Customer Dashboard'
+              : 'Customer Dashboard',
+          style: const TextStyle(
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -152,9 +166,11 @@ class _CustomerDashboardPageState
                             crossAxisAlignment:
                                 CrossAxisAlignment.start,
                             children: <Widget>[
-                              const Text(
-                                'RD Customer',
-                                style: TextStyle(
+                              Text(
+                                widget.krishiOnly
+                                    ? 'NRD Krishi Customer'
+                                    : 'RD Customer',
+                                style: const TextStyle(
                                   color: Colors.white,
                                   fontSize: 20,
                                   fontWeight:
@@ -192,11 +208,14 @@ class _CustomerDashboardPageState
                   _dashboardButton(
                     icon: Icons.inventory_2_outlined,
                     title: 'My Orders',
-                    subtitle:
-                        'See only this customer’s orders and tracking.',
+                    subtitle: widget.krishiOnly
+                        ? 'See only this customer’s Krishi orders and tracking.'
+                        : 'See only this customer’s orders and tracking.',
                     onTap: () {
                       _open(
-                        const OrderHistoryPage(),
+                        OrderHistoryPage(
+                          krishiOnly: widget.krishiOnly,
+                        ),
                       );
                     },
                   ),

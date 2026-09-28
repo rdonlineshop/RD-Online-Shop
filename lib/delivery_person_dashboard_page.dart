@@ -1,9 +1,11 @@
+import 'dart:async';
 import 'dart:convert';
 import 'dart:math';
 
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
+import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -26,6 +28,11 @@ class _DeliveryPersonDashboardPageState
   bool _isLoading = true;
   bool _isOnline = false;
   bool _updatingAvailability = false;
+  bool _updatingAvailabilityLocation = false;
+
+  Timer? _availabilityLocationTimer;
+  double? _currentLatitude;
+  double? _currentLongitude;
 
   String _deliveryPersonName = '';
   String _deliveryPersonPhone = '';
@@ -38,6 +45,17 @@ class _DeliveryPersonDashboardPageState
   void initState() {
     super.initState();
     _loadDeliveryPerson();
+
+    _availabilityLocationTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) {
+        if (_isOnline) {
+          unawaited(
+            _refreshAvailabilityLocation(),
+          );
+        }
+      },
+    );
   }
 
   // =========================================================
@@ -89,6 +107,14 @@ class _DeliveryPersonDashboardPageState
 
         _isLoading = false;
       });
+
+      await _publishDeliveryPresence(
+        online: _isOnline,
+      );
+
+      if (_isOnline) {
+        await _refreshAvailabilityLocation();
+      }
     } catch (_) {
       if (!mounted) {
         return;
@@ -1157,10 +1183,14 @@ class _DeliveryPersonDashboardPageState
     final Map<String, dynamic> verification =
         _preparePickupVerificationData(order);
 
-    await verificationRef.set(
-      verification,
-      SetOptions(merge: false),
-    );
+    await verificationRef
+        .set(
+          verification,
+          SetOptions(merge: false),
+        )
+        .timeout(
+          const Duration(seconds: 10),
+        );
 
     return verification;
   }
@@ -1719,6 +1749,164 @@ class _DeliveryPersonDashboardPageState
   }
 
   // =========================================================
+  // DELIVERY AVAILABILITY PRESENCE / GPS
+  // =========================================================
+
+  Future<void> _publishDeliveryPresence({
+    required bool online,
+  }) async {
+    final String driverId =
+        _deliveryPersonId.trim();
+
+    if (driverId.isEmpty) {
+      return;
+    }
+
+    final User? user =
+        FirebaseAuth.instance.currentUser;
+
+    final Map<String, dynamic> presence =
+        <String, dynamic>{
+      'driverId': driverId,
+      'name': _deliveryPersonName.trim(),
+      'phone': _deliveryPersonPhone.trim(),
+      'email': user?.email?.trim() ?? '',
+      'isOnline': online,
+      'updatedAt': FieldValue.serverTimestamp(),
+      'locationUpdatedAt': online &&
+              _currentLatitude != null &&
+              _currentLongitude != null
+          ? FieldValue.serverTimestamp()
+          : null,
+      'latitude':
+          online ? _currentLatitude : null,
+      'longitude':
+          online ? _currentLongitude : null,
+    };
+
+    await FirebaseFirestore.instance
+        .collection('delivery_presence')
+        .doc(driverId)
+        .set(
+          presence,
+          SetOptions(merge: true),
+        );
+  }
+
+  Future<void> _refreshAvailabilityLocation({
+    bool showErrors = false,
+  }) async {
+    if (!_isOnline ||
+        _updatingAvailabilityLocation ||
+        _deliveryPersonId.trim().isEmpty) {
+      return;
+    }
+
+    _updatingAvailabilityLocation = true;
+
+    try {
+      final bool serviceEnabled =
+          await Geolocator.isLocationServiceEnabled();
+
+      if (!serviceEnabled) {
+        if (showErrors) {
+          _showMessage(
+            'Turn on device Location/GPS to receive nearby Krishi orders.',
+          );
+        }
+        return;
+      }
+
+      LocationPermission permission =
+          await Geolocator.checkPermission();
+
+      if (permission == LocationPermission.denied) {
+        permission =
+            await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission ==
+              LocationPermission.deniedForever) {
+        if (showErrors) {
+          _showMessage(
+            'Location permission is required for nearby Krishi orders.',
+          );
+        }
+        return;
+      }
+
+      final Position position =
+          await Geolocator.getCurrentPosition(
+        locationSettings:
+            const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _currentLatitude =
+            position.latitude;
+        _currentLongitude =
+            position.longitude;
+      });
+
+      await _publishDeliveryPresence(
+        online: true,
+      );
+    } catch (error) {
+      if (showErrors) {
+        _showMessage(
+          'Could not update delivery location: $error',
+        );
+      }
+    } finally {
+      _updatingAvailabilityLocation = false;
+    }
+  }
+
+  Future<void> _openNearbyKrishiOrders() async {
+    if (!_isOnline) {
+      _showMessage(
+        'Go Online first to view nearby Krishi orders.',
+      );
+      return;
+    }
+
+    await _refreshAvailabilityLocation(
+      showErrors: true,
+    );
+
+    if (!mounted) {
+      return;
+    }
+
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) =>
+            _NearbyKrishiOrdersPage(
+          driverId: _deliveryPersonId,
+          driverName: _deliveryPersonName,
+          driverPhone: _deliveryPersonPhone,
+          initialLatitude:
+              _currentLatitude,
+          initialLongitude:
+              _currentLongitude,
+        ),
+      ),
+    );
+
+    if (mounted && _isOnline) {
+      await _refreshAvailabilityLocation();
+    }
+  }
+
+  // =========================================================
   // ONLINE / OFFLINE
   // =========================================================
 
@@ -1761,6 +1949,16 @@ class _DeliveryPersonDashboardPageState
           'isOnline': value,
         };
       });
+
+      await _publishDeliveryPresence(
+        online: value,
+      );
+
+      if (value) {
+        await _refreshAvailabilityLocation(
+          showErrors: true,
+        );
+      }
 
       _showMessage(
         value
@@ -1888,6 +2086,14 @@ class _DeliveryPersonDashboardPageState
       }
     }
 
+    try {
+      await _publishDeliveryPresence(
+        online: false,
+      );
+    } catch (_) {
+      // Continue logout.
+    }
+
     await FirebaseAuth.instance.signOut();
     await FirebaseAuth.instance.signInAnonymously();
 
@@ -1898,6 +2104,12 @@ class _DeliveryPersonDashboardPageState
     Navigator.pop(
       context,
     );
+  }
+
+  @override
+  void dispose() {
+    _availabilityLocationTimer?.cancel();
+    super.dispose();
   }
 
   // =========================================================
@@ -2082,6 +2294,73 @@ class _DeliveryPersonDashboardPageState
                       ),
                     ),
 
+                    Padding(
+                      padding:
+                          const EdgeInsets.fromLTRB(
+                        14,
+                        0,
+                        14,
+                        12,
+                      ),
+                      child: Column(
+                        children: <Widget>[
+                          SizedBox(
+                            width: double.infinity,
+                            height: 52,
+                            child: FilledButton.icon(
+                              onPressed: _isOnline
+                                  ? _openNearbyKrishiOrders
+                                  : null,
+                              icon: const Icon(
+                                Icons.agriculture_rounded,
+                              ),
+                              label: Text(
+                                _isOnline
+                                    ? 'Nearby Krishi Delivery Orders'
+                                    : 'Go Online for Nearby Krishi Orders',
+                              ),
+                            ),
+                          ),
+                          if (_isOnline) ...<Widget>[
+                            const SizedBox(height: 6),
+                            Row(
+                              mainAxisAlignment:
+                                  MainAxisAlignment.center,
+                              children: <Widget>[
+                                Icon(
+                                  _currentLatitude != null &&
+                                          _currentLongitude != null
+                                      ? Icons.gps_fixed
+                                      : Icons.gps_not_fixed,
+                                  size: 16,
+                                  color: _currentLatitude != null &&
+                                          _currentLongitude != null
+                                      ? Colors.green
+                                      : Colors.orange,
+                                ),
+                                const SizedBox(width: 5),
+                                TextButton(
+                                  onPressed:
+                                      _updatingAvailabilityLocation
+                                          ? null
+                                          : () {
+                                              _refreshAvailabilityLocation(
+                                                showErrors: true,
+                                              );
+                                            },
+                                  child: Text(
+                                    _updatingAvailabilityLocation
+                                        ? 'Updating GPS...'
+                                        : 'Refresh delivery GPS',
+                                  ),
+                                ),
+                              ],
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+
                     Expanded(
                       child: StreamBuilder<
                           List<
@@ -2196,6 +2475,1923 @@ class _DeliveryPersonDashboardPageState
                     ),
                   ],
                 ),
+    );
+  }
+}
+
+
+class _NearbyKrishiOrdersPage
+    extends StatefulWidget {
+  const _NearbyKrishiOrdersPage({
+    required this.driverId,
+    required this.driverName,
+    required this.driverPhone,
+    required this.initialLatitude,
+    required this.initialLongitude,
+  });
+
+  final String driverId;
+  final String driverName;
+  final String driverPhone;
+  final double? initialLatitude;
+  final double? initialLongitude;
+
+  @override
+  State<_NearbyKrishiOrdersPage> createState() =>
+      _NearbyKrishiOrdersPageState();
+}
+
+class _NearbyKrishiOrdersPageState
+    extends State<_NearbyKrishiOrdersPage> {
+  double? _latitude;
+  double? _longitude;
+  bool _refreshingLocation = false;
+  String? _busyOrderId;
+  Timer? _locationTimer;
+
+  void _showNearbyMessage(String message) {
+    if (!mounted) {
+      return;
+    }
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(message)),
+    );
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _latitude = widget.initialLatitude;
+    _longitude = widget.initialLongitude;
+    _refreshLocation();
+
+    _locationTimer = Timer.periodic(
+      const Duration(seconds: 60),
+      (_) {
+        unawaited(
+          _refreshLocation(),
+        );
+      },
+    );
+  }
+
+  double? _toDouble(
+    dynamic value,
+  ) {
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    return double.tryParse(
+      value?.toString().trim() ?? '',
+    );
+  }
+
+  double _distanceKm(
+    double lat1,
+    double lon1,
+    double lat2,
+    double lon2,
+  ) {
+    const double earthRadiusKm = 6371.0;
+
+    double radians(double degree) =>
+        degree * pi / 180.0;
+
+    final double dLat =
+        radians(lat2 - lat1);
+    final double dLon =
+        radians(lon2 - lon1);
+
+    final double a =
+        sin(dLat / 2) * sin(dLat / 2) +
+            cos(radians(lat1)) *
+                cos(radians(lat2)) *
+                sin(dLon / 2) *
+                sin(dLon / 2);
+
+    final double c =
+        2 * atan2(
+          sqrt(a),
+          sqrt(1 - a),
+        );
+
+    return earthRadiusKm * c;
+  }
+
+  double? _driverToFarmKm(
+    Map<String, dynamic> pool,
+  ) {
+    final double? farmLat =
+        _toDouble(pool['farmLat']);
+    final double? farmLng =
+        _toDouble(pool['farmLng']);
+
+    if (_latitude == null ||
+        _longitude == null ||
+        farmLat == null ||
+        farmLng == null) {
+      return null;
+    }
+
+    return _distanceKm(
+      _latitude!,
+      _longitude!,
+      farmLat,
+      farmLng,
+    );
+  }
+
+  DateTime? _timestampDate(
+    dynamic value,
+  ) {
+    if (value is Timestamp) {
+      return value.toDate();
+    }
+
+    if (value is DateTime) {
+      return value;
+    }
+
+    return DateTime.tryParse(
+      value?.toString() ?? '',
+    );
+  }
+
+  bool _reservationExpired(
+    Map<String, dynamic> pool,
+  ) {
+    final DateTime? expiry =
+        _timestampDate(
+      pool['reservationExpiresAt'],
+    );
+
+    return expiry == null ||
+        !expiry.isAfter(
+          DateTime.now(),
+        );
+  }
+
+  String _distanceText(
+    double? km,
+  ) {
+    if (km == null) {
+      return 'GPS unavailable';
+    }
+
+    if (km < 1) {
+      return '${(km * 1000).round()} m';
+    }
+
+    return '${km.toStringAsFixed(1)} km';
+  }
+
+  Future<void> _refreshLocation() async {
+    if (_refreshingLocation) {
+      return;
+    }
+
+    setState(() {
+      _refreshingLocation = true;
+    });
+
+    try {
+      final bool serviceEnabled =
+          await Geolocator.isLocationServiceEnabled();
+
+      if (!serviceEnabled) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Turn on Location/GPS to sort Krishi orders by distance.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      LocationPermission permission =
+          await Geolocator.checkPermission();
+
+      if (permission == LocationPermission.denied) {
+        permission =
+            await Geolocator.requestPermission();
+      }
+
+      if (permission == LocationPermission.denied ||
+          permission ==
+              LocationPermission.deniedForever) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Location permission is required for nearby Krishi orders.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+
+      final Position position =
+          await Geolocator.getCurrentPosition(
+        locationSettings:
+            const LocationSettings(
+          accuracy: LocationAccuracy.high,
+        ),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _latitude =
+            position.latitude;
+        _longitude =
+            position.longitude;
+      });
+
+      await FirebaseFirestore.instance
+          .collection('delivery_presence')
+          .doc(widget.driverId)
+          .set(
+        <String, dynamic>{
+          'driverId': widget.driverId,
+          'name': widget.driverName.trim(),
+          'phone': widget.driverPhone.trim(),
+          'email': FirebaseAuth
+                  .instance.currentUser?.email
+                  ?.trim() ??
+              '',
+          'isOnline': true,
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'locationUpdatedAt':
+              FieldValue.serverTimestamp(),
+          'updatedAt':
+              FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not refresh GPS: $error',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _refreshingLocation = false;
+        });
+      }
+    }
+  }
+
+  Stream<List<Map<String, dynamic>>>
+      _poolStream() {
+    return FirebaseFirestore.instance
+        .collection(
+          'krishi_delivery_pool',
+        )
+        .where(
+          'active',
+          isEqualTo: true,
+        )
+        .snapshots()
+        .map(
+      (
+        QuerySnapshot<Map<String, dynamic>>
+            snapshot,
+      ) {
+        final List<Map<String, dynamic>>
+            orders = snapshot.docs
+                .map(
+                  (
+                    QueryDocumentSnapshot<
+                            Map<String, dynamic>>
+                        doc,
+                  ) =>
+                      <String, dynamic>{
+                    ...doc.data(),
+                    'poolId': doc.id,
+                  },
+                )
+                .where(
+                  (
+                    Map<String, dynamic>
+                        item,
+                  ) =>
+                      item['readyForPickup'] ==
+                      true,
+                )
+                .toList();
+
+        orders.sort(
+          (
+            Map<String, dynamic> a,
+            Map<String, dynamic> b,
+          ) {
+            final double? aDistance =
+                _driverToFarmKm(a);
+            final double? bDistance =
+                _driverToFarmKm(b);
+
+            if (aDistance == null &&
+                bDistance == null) {
+              return 0;
+            }
+
+            if (aDistance == null) {
+              return 1;
+            }
+
+            if (bDistance == null) {
+              return -1;
+            }
+
+            return aDistance
+                .compareTo(bDistance);
+          },
+        );
+
+        return orders;
+      },
+    );
+  }
+
+  String _generateReservationKey() {
+    const String alphabet =
+        'ABCDEFGHJKLMNPQRSTUVWXYZ'
+        'abcdefghijkmnopqrstuvwxyz'
+        '23456789';
+
+    final Random random =
+        Random.secure();
+
+    return List<String>.generate(
+      40,
+      (_) => alphabet[
+        random.nextInt(
+          alphabet.length,
+        )
+      ],
+    ).join();
+  }
+
+  Future<void> _reserveOrder(
+    Map<String, dynamic> pool,
+  ) async {
+    final String orderId =
+        pool['orderId']?.toString().trim() ??
+            pool['poolId']?.toString().trim() ??
+            '';
+
+    if (orderId.isEmpty || _busyOrderId != null) {
+      return;
+    }
+
+    setState(() {
+      _busyOrderId = orderId;
+    });
+
+    final DocumentReference<Map<String, dynamic>> poolRef =
+        FirebaseFirestore.instance
+            .collection('krishi_delivery_pool')
+            .doc(orderId);
+    final DocumentReference<Map<String, dynamic>> requestRef =
+        poolRef
+            .collection('pickup_requests')
+            .doc(widget.driverId);
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> poolSnapshot =
+          await poolRef.get();
+      final Map<String, dynamic> latestPool =
+          poolSnapshot.data() ?? <String, dynamic>{};
+
+      if (!poolSnapshot.exists ||
+          latestPool['active'] != true ||
+          latestPool['readyForPickup'] != true ||
+          latestPool['state'] != 'available') {
+        throw StateError(
+          'This Krishi pickup is no longer available for a new request.',
+        );
+      }
+
+      final DocumentSnapshot<Map<String, dynamic>> existing =
+          await requestRef.get();
+      final Map<String, dynamic> existingData =
+          existing.data() ?? <String, dynamic>{};
+
+      if (existing.exists &&
+          existingData['status'] == 'pending_driver' &&
+          existingData['requestedBy'] == 'seller') {
+        throw StateError(
+          'This farm already sent you a pickup request. Use Accept Farm Request below.',
+        );
+      }
+
+      if (existing.exists) {
+        await requestRef.delete();
+      }
+
+      await requestRef.set(
+        <String, dynamic>{
+          'orderId': orderId,
+          'sellerId': latestPool['sellerId']?.toString().trim() ?? '',
+          'driverId': widget.driverId,
+          'driverName': widget.driverName.trim(),
+          'driverPhone': widget.driverPhone.trim(),
+          'driverEmail':
+              FirebaseAuth.instance.currentUser?.email?.trim() ?? '',
+          'requestedBy': 'driver',
+          'status': 'pending_seller',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Pickup request sent to the farm. Wait for seller approval before using QR/code.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        _showNearbyMessage(
+          error
+              .toString()
+              .replaceFirst('Bad state: ', '')
+              .replaceFirst('Exception: ', ''),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busyOrderId = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _acceptFarmPickupRequest(
+    Map<String, dynamic> pool,
+  ) async {
+    final String orderId =
+        pool['orderId']?.toString().trim() ??
+            pool['poolId']?.toString().trim() ??
+            '';
+
+    if (orderId.isEmpty || _busyOrderId != null) {
+      return;
+    }
+
+    setState(() {
+      _busyOrderId = orderId;
+    });
+
+    final DocumentReference<Map<String, dynamic>> poolRef =
+        FirebaseFirestore.instance
+            .collection('krishi_delivery_pool')
+            .doc(orderId);
+    final DocumentReference<Map<String, dynamic>> requestRef =
+        poolRef
+            .collection('pickup_requests')
+            .doc(widget.driverId);
+
+    final String reservationKey = _generateReservationKey();
+    final Timestamp expiresAt = Timestamp.fromDate(
+      DateTime.now().add(
+        const Duration(hours: 2),
+      ),
+    );
+
+    try {
+      await FirebaseFirestore.instance.runTransaction<void>(
+        (Transaction transaction) async {
+          final DocumentSnapshot<Map<String, dynamic>> poolSnapshot =
+              await transaction.get(poolRef);
+          final DocumentSnapshot<Map<String, dynamic>> requestSnapshot =
+              await transaction.get(requestRef);
+
+          final Map<String, dynamic> latestPool =
+              poolSnapshot.data() ?? <String, dynamic>{};
+          final Map<String, dynamic> request =
+              requestSnapshot.data() ?? <String, dynamic>{};
+
+          if (!poolSnapshot.exists ||
+              latestPool['active'] != true ||
+              latestPool['state'] != 'available') {
+            throw StateError('This order is no longer available.');
+          }
+
+          if (!requestSnapshot.exists ||
+              request['requestedBy'] != 'seller' ||
+              request['status'] != 'pending_driver') {
+            throw StateError('The farm pickup request is no longer pending.');
+          }
+
+          transaction.update(
+            requestRef,
+            <String, dynamic>{
+              'status': 'accepted',
+              'respondedAt': FieldValue.serverTimestamp(),
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+
+          transaction.update(
+            poolRef,
+            <String, dynamic>{
+              'state': 'reserved',
+              'reservationKey': reservationKey,
+              'reservedDriverId': widget.driverId,
+              'reservedDriverName': widget.driverName.trim(),
+              'reservedDriverPhone': widget.driverPhone.trim(),
+              'reservedDriverEmail':
+                  FirebaseAuth.instance.currentUser?.email?.trim() ?? '',
+              'reservedAt': FieldValue.serverTimestamp(),
+              'reservationExpiresAt': expiresAt,
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        },
+      );
+
+      final DocumentSnapshot<Map<String, dynamic>> fresh =
+          await poolRef.get();
+      final Map<String, dynamic> reservedPool = <String, dynamic>{
+        ...?fresh.data(),
+        'poolId': orderId,
+      };
+
+      await _getOrCreatePickupVerification(
+        reservedPool,
+      );
+
+      if (mounted) {
+        _showNearbyMessage(
+          'Farm request accepted. QR/code is ready for physical parcel handover.',
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        _showNearbyMessage(
+          'Could not accept farm request: ${error.toString().replaceFirst('Bad state: ', '').replaceFirst('Exception: ', '')}',
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busyOrderId = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _declineFarmPickupRequest(
+    Map<String, dynamic> pool,
+  ) async {
+    final String orderId =
+        pool['orderId']?.toString().trim() ??
+            pool['poolId']?.toString().trim() ??
+            '';
+
+    if (orderId.isEmpty || _busyOrderId != null) {
+      return;
+    }
+
+    setState(() {
+      _busyOrderId = orderId;
+    });
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('krishi_delivery_pool')
+          .doc(orderId)
+          .collection('pickup_requests')
+          .doc(widget.driverId)
+          .update(
+        <String, dynamic>{
+          'status': 'rejected',
+          'respondedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+    } catch (error) {
+      if (mounted) {
+        _showNearbyMessage('Could not decline farm request: $error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busyOrderId = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _cancelPickupRequest(
+    Map<String, dynamic> pool,
+  ) async {
+    final String orderId =
+        pool['orderId']?.toString().trim() ??
+            pool['poolId']?.toString().trim() ??
+            '';
+
+    if (orderId.isEmpty || _busyOrderId != null) {
+      return;
+    }
+
+    setState(() {
+      _busyOrderId = orderId;
+    });
+
+    try {
+      await FirebaseFirestore.instance
+          .collection('krishi_delivery_pool')
+          .doc(orderId)
+          .collection('pickup_requests')
+          .doc(widget.driverId)
+          .update(
+        <String, dynamic>{
+          'status': 'cancelled',
+          'respondedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+    } catch (error) {
+      if (mounted) {
+        _showNearbyMessage('Could not cancel pickup request: $error');
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busyOrderId = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _releaseReservation(
+    Map<String, dynamic> pool,
+  ) async {
+    final String orderId =
+        pool['orderId']?.toString().trim() ??
+            pool['poolId']?.toString().trim() ??
+            '';
+
+    if (orderId.isEmpty || _busyOrderId != null) {
+      return;
+    }
+
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Release this reservation?'),
+          content: const Text(
+            'The order will become available to nearby delivery persons again. No pickup is recorded.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, false);
+              },
+              child: const Text('Keep Reservation'),
+            ),
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, true);
+              },
+              child: const Text('Release'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _busyOrderId = orderId;
+    });
+
+    final DocumentReference<Map<String, dynamic>> ref =
+        FirebaseFirestore.instance
+            .collection('krishi_delivery_pool')
+            .doc(orderId);
+
+    try {
+      // Remove the old private proof while this driver still owns the active
+      // reservation. A future reservation will receive a fresh proof.
+      try {
+        await ref
+            .collection('pickup_private')
+            .doc('verification')
+            .delete()
+            .timeout(
+              const Duration(seconds: 6),
+            );
+      } catch (_) {
+        // Missing/expired proof is harmless; releasing the parent reservation
+        // is still the important operation.
+      }
+
+      await FirebaseFirestore.instance
+          .runTransaction<void>(
+        (Transaction transaction) async {
+          final DocumentSnapshot<Map<String, dynamic>> snapshot =
+              await transaction.get(ref);
+
+          if (!snapshot.exists) {
+            throw StateError('This reservation no longer exists.');
+          }
+
+          final Map<String, dynamic> data =
+              snapshot.data() ?? <String, dynamic>{};
+          final String reservedDriverId =
+              data['reservedDriverId']?.toString().trim() ?? '';
+
+          if (data['state'] != 'reserved' ||
+              reservedDriverId != widget.driverId) {
+            throw StateError(
+              'This pickup is no longer reserved by you.',
+            );
+          }
+
+          transaction.update(
+            ref,
+            <String, dynamic>{
+              'state': 'available',
+              'reservationKey': '',
+              'reservedDriverId': '',
+              'reservedDriverName': '',
+              'reservedDriverPhone': '',
+              'reservedDriverEmail': '',
+              'reservedAt': null,
+              'reservationExpiresAt': null,
+              'updatedAt': FieldValue.serverTimestamp(),
+            },
+          );
+        },
+      ).timeout(
+        const Duration(seconds: 12),
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Reservation released. The order is available again.',
+            ),
+          ),
+        );
+      }
+    } on TimeoutException {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Release timed out. Check internet and try again.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Could not release reservation: ${error.toString().replaceFirst('Bad state: ', '').replaceFirst('Exception: ', '')}',
+            ),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() {
+          _busyOrderId = null;
+        });
+      }
+    }
+  }
+
+  String _generatePickupCode() {
+    final Random random =
+        Random.secure();
+
+    return (100000 +
+            random.nextInt(900000))
+        .toString();
+  }
+
+  String _generatePickupToken() {
+    const String alphabet =
+        'ABCDEFGHJKLMNPQRSTUVWXYZ'
+        'abcdefghijkmnopqrstuvwxyz'
+        '23456789';
+
+    final Random random =
+        Random.secure();
+
+    return List<String>.generate(
+      32,
+      (_) => alphabet[
+        random.nextInt(
+          alphabet.length,
+        )
+      ],
+    ).join();
+  }
+
+  Future<Map<String, dynamic>>
+      _getOrCreatePickupVerification(
+    Map<String, dynamic> pool,
+  ) async {
+    final String orderId =
+        pool['orderId']?.toString().trim() ??
+            pool['poolId']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String reservedDriverId =
+        pool['reservedDriverId']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String reservationKey =
+        pool['reservationKey']
+                ?.toString()
+                .trim() ??
+            '';
+
+    if (orderId.isEmpty ||
+        reservedDriverId !=
+            widget.driverId ||
+        reservationKey.isEmpty ||
+        _reservationExpired(pool)) {
+      throw StateError(
+        'Reserve this order first. The reservation must still be active.',
+      );
+    }
+
+    final DocumentReference<
+            Map<String, dynamic>>
+        verificationRef =
+        FirebaseFirestore.instance
+            .collection(
+              'krishi_delivery_pool',
+            )
+            .doc(orderId)
+            .collection(
+              'pickup_private',
+            )
+            .doc('verification');
+
+    final DocumentSnapshot<
+            Map<String, dynamic>>
+        existing =
+        await verificationRef.get().timeout(
+          const Duration(seconds: 10),
+        );
+
+    final Map<String, dynamic>?
+        existingData =
+        existing.data();
+
+    if (existing.exists &&
+        existingData != null &&
+        existingData['driverId']
+                ?.toString()
+                .trim() ==
+            widget.driverId &&
+        existingData['reservationKey']
+                ?.toString()
+                .trim() ==
+            reservationKey &&
+        existingData['isActive'] ==
+            true) {
+      final String code =
+          existingData['pickupCode']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      final String qr =
+          existingData['qrPayload']
+                  ?.toString()
+                  .trim() ??
+              '';
+
+      if (RegExp(r'^\d{6}$')
+              .hasMatch(code) &&
+          qr.startsWith(
+            'NRD_PICKUP|',
+          )) {
+        return existingData;
+      }
+    }
+
+    final String code =
+        _generatePickupCode();
+    final String token =
+        _generatePickupToken();
+    final String qrPayload =
+        'NRD_PICKUP|$orderId|'
+        '${widget.driverId}|$token';
+    final String now =
+        DateTime.now()
+            .toIso8601String();
+
+    final Map<String, dynamic>
+        verification =
+        <String, dynamic>{
+      'orderId': orderId,
+      'driverId':
+          widget.driverId,
+      'reservationKey':
+          reservationKey,
+      'pickupCode': code,
+      'qrPayload': qrPayload,
+      'isActive': true,
+      'createdAt': now,
+      'updatedAt': now,
+    };
+
+    await verificationRef.set(
+      verification,
+      SetOptions(merge: false),
+    );
+
+    return verification;
+  }
+
+  Future<void> _showPickupProof(
+    Map<String, dynamic> pool,
+  ) async {
+    final Future<Map<String, dynamic>> proofFuture =
+        _getOrCreatePickupVerification(pool);
+
+    if (!mounted) {
+      return;
+    }
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text(
+            'Farm Pickup Verification',
+            style: TextStyle(
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          content: SizedBox(
+            width: 330,
+            child: FutureBuilder<Map<String, dynamic>>(
+              future: proofFuture,
+              builder: (
+                BuildContext context,
+                AsyncSnapshot<Map<String, dynamic>> snapshot,
+              ) {
+                if (snapshot.connectionState == ConnectionState.waiting) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 28),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        CircularProgressIndicator(),
+                        SizedBox(height: 14),
+                        Text(
+                          'Preparing pickup QR & 6-digit code...',
+                          textAlign: TextAlign.center,
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                if (snapshot.hasError || !snapshot.hasData) {
+                  String message = snapshot.error
+                          ?.toString()
+                          .replaceFirst('Bad state: ', '')
+                          .replaceFirst('Exception: ', '') ??
+                      'Could not prepare pickup QR/code.';
+
+                  if (snapshot.error is TimeoutException) {
+                    message =
+                        'Pickup QR/code timed out. Check internet and try again.';
+                  } else if (snapshot.error is FirebaseException &&
+                      (snapshot.error! as FirebaseException).code ==
+                          'permission-denied') {
+                    message =
+                        'Pickup QR/code permission was denied. Deploy the latest Firestore rules and retry.';
+                  }
+
+                  return Padding(
+                    padding: const EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      message,
+                      textAlign: TextAlign.center,
+                      style: const TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  );
+                }
+
+                final Map<String, dynamic> verification = snapshot.data!;
+                final String code =
+                    verification['pickupCode']?.toString().trim() ?? '';
+                final String qr =
+                    verification['qrPayload']?.toString().trim() ?? '';
+
+                if (!RegExp(r'^\d{6}$').hasMatch(code) || qr.isEmpty) {
+                  return const Padding(
+                    padding: EdgeInsets.symmetric(vertical: 16),
+                    child: Text(
+                      'Pickup QR or code is not available. Close and retry.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        color: Colors.red,
+                        fontWeight: FontWeight.w700,
+                      ),
+                    ),
+                  );
+                }
+
+                return SingleChildScrollView(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      const Text(
+                        'Show this QR or 6-digit code to the Krishi seller only when you are physically collecting the parcel.',
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 14),
+                      Container(
+                        padding: const EdgeInsets.all(10),
+                        color: Colors.white,
+                        child: QrImageView(
+                          data: qr,
+                          version: QrVersions.auto,
+                          size: 210,
+                          backgroundColor: Colors.white,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      const Text(
+                        'PICKUP CODE',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1.2,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      SelectableText(
+                        code,
+                        style: const TextStyle(
+                          fontSize: 30,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 6,
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      const Text(
+                        'The order becomes your real delivery only after the seller verifies this proof and hands over the parcel.',
+                        textAlign: TextAlign.center,
+                        style: TextStyle(
+                          color: Colors.green,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
+                  ),
+                );
+              },
+            ),
+          ),
+          actions: <Widget>[
+            FilledButton(
+              onPressed: () {
+                Navigator.pop(dialogContext);
+              },
+              child: const Text('Close'),
+            ),
+          ],
+        );
+      },
+    );
+  }
+
+  Future<void> _openFarmDirections(
+    double latitude,
+    double longitude,
+  ) async {
+    final Map<String, String> query =
+        <String, String>{
+      'api': '1',
+      'destination': '$latitude,$longitude',
+      'travelmode': 'driving',
+      'dir_action': 'navigate',
+    };
+
+    if (_latitude != null &&
+        _longitude != null) {
+      query['origin'] =
+          '$_latitude,$_longitude';
+    }
+
+    final Uri uri = Uri.https(
+      'www.google.com',
+      '/maps/dir/',
+      query,
+    );
+
+    try {
+      final bool opened = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!opened) {
+        _showNearbyMessage(
+          'Farm pickup navigation could not be opened.',
+        );
+      }
+    } catch (_) {
+      _showNearbyMessage(
+        'Farm pickup navigation could not be opened.',
+      );
+    }
+  }
+
+  Future<void> _openFullKrishiRoute(
+    double farmLat,
+    double farmLng,
+    double customerLat,
+    double customerLng,
+  ) async {
+    final Map<String, String> query =
+        <String, String>{
+      'api': '1',
+      'destination': '$customerLat,$customerLng',
+      'waypoints': '$farmLat,$farmLng',
+      'travelmode': 'driving',
+      'dir_action': 'navigate',
+    };
+
+    if (_latitude != null &&
+        _longitude != null) {
+      query['origin'] =
+          '$_latitude,$_longitude';
+    }
+
+    final Uri uri = Uri.https(
+      'www.google.com',
+      '/maps/dir/',
+      query,
+    );
+
+    try {
+      final bool opened = await launchUrl(
+        uri,
+        mode: LaunchMode.externalApplication,
+      );
+
+      if (!opened) {
+        _showNearbyMessage(
+          'Full Krishi delivery route could not be opened.',
+        );
+      }
+    } catch (_) {
+      _showNearbyMessage(
+        'Full Krishi delivery route could not be opened.',
+      );
+    }
+  }
+
+  Future<void> _callFarm(
+    String phone,
+  ) async {
+    final String clean =
+        phone
+            .replaceAll(' ', '')
+            .replaceAll('-', '')
+            .trim();
+
+    if (clean.isEmpty) {
+      return;
+    }
+
+    await launchUrl(
+      Uri(
+        scheme: 'tel',
+        path: clean,
+      ),
+      mode:
+          LaunchMode.externalApplication,
+    );
+  }
+
+  Widget _poolCard(
+    Map<String, dynamic> pool,
+  ) {
+    final String orderId =
+        pool['orderId']?.toString().trim() ??
+            pool['poolId']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String farmName =
+        pool['farmName']
+                ?.toString()
+                .trim() ??
+            'Krishi Farm';
+
+    final String farmAddress =
+        pool['farmAddress']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final String farmPhone =
+        pool['farmPhone']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final double? farmLat =
+        _toDouble(pool['farmLat']);
+    final double? farmLng =
+        _toDouble(pool['farmLng']);
+    final double? customerLat =
+        _toDouble(pool['customerLat']);
+    final double? customerLng =
+        _toDouble(pool['customerLng']);
+
+    final double? youToFarm =
+        _driverToFarmKm(pool);
+
+    final double? farmToCustomer =
+        _toDouble(
+      pool['farmToCustomerKm'],
+    );
+
+    final double? totalRoute =
+        youToFarm != null &&
+                farmToCustomer != null
+            ? youToFarm +
+                farmToCustomer
+            : null;
+
+    final String state =
+        pool['state']
+                ?.toString()
+                .trim() ??
+            'available';
+
+    final String reservedDriverId =
+        pool['reservedDriverId']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final bool expired =
+        state == 'reserved' &&
+            _reservationExpired(pool);
+
+    final bool reservedByMe =
+        state == 'reserved' &&
+            reservedDriverId ==
+                widget.driverId &&
+            !expired;
+
+    final bool reservedByOther =
+        state == 'reserved' &&
+            reservedDriverId.isNotEmpty &&
+            reservedDriverId !=
+                widget.driverId &&
+            !expired;
+
+    final int itemCount =
+        (pool['itemCount'] as num?)
+                ?.toInt() ??
+            0;
+
+    final String amount =
+        pool['orderAmount']
+                ?.toString()
+                .trim() ??
+            '';
+
+    final bool busy =
+        _busyOrderId == orderId;
+
+    return Card(
+      margin:
+          const EdgeInsets.only(
+        bottom: 14,
+      ),
+      child: Padding(
+        padding:
+            const EdgeInsets.all(
+          14,
+        ),
+        child: Column(
+          crossAxisAlignment:
+              CrossAxisAlignment.start,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const CircleAvatar(
+                  backgroundColor:
+                      Colors.green,
+                  child: Icon(
+                    Icons.agriculture,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(
+                  width: 10,
+                ),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment
+                            .start,
+                    children: <Widget>[
+                      Text(
+                        farmName,
+                        style:
+                            const TextStyle(
+                          fontSize: 17,
+                          fontWeight:
+                              FontWeight
+                                  .bold,
+                        ),
+                      ),
+                      Text(
+                        'Order #$orderId',
+                        maxLines: 1,
+                        overflow:
+                            TextOverflow
+                                .ellipsis,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey
+                              .shade700,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+                Chip(
+                  label: Text(
+                    reservedByMe
+                        ? 'RESERVED BY YOU'
+                        : reservedByOther
+                            ? 'RESERVED'
+                            : expired
+                                ? 'AVAILABLE AGAIN'
+                                : 'AVAILABLE',
+                  ),
+                ),
+              ],
+            ),
+            if (farmAddress.isNotEmpty) ...<Widget>[
+              const SizedBox(
+                height: 8,
+              ),
+              Text(
+                farmAddress,
+                maxLines: 2,
+                overflow:
+                    TextOverflow.ellipsis,
+              ),
+            ],
+            const SizedBox(
+              height: 12,
+            ),
+            Container(
+              width: double.infinity,
+              padding:
+                  const EdgeInsets.all(
+                12,
+              ),
+              decoration:
+                  BoxDecoration(
+                color: Colors.green
+                    .withValues(
+                  alpha: 0.07,
+                ),
+                borderRadius:
+                    BorderRadius.circular(
+                  10,
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment:
+                    CrossAxisAlignment
+                        .start,
+                children: <Widget>[
+                  Text(
+                    'You → Farm: ${_distanceText(youToFarm)}',
+                    style:
+                        const TextStyle(
+                      fontWeight:
+                          FontWeight.w800,
+                    ),
+                  ),
+                  const SizedBox(
+                    height: 4,
+                  ),
+                  Text(
+                    'Farm → Customer: ${_distanceText(farmToCustomer)}',
+                  ),
+                  const SizedBox(
+                    height: 4,
+                  ),
+                  Text(
+                    'Estimated route: ${_distanceText(totalRoute)}',
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(
+              height: 8,
+            ),
+            Text(
+              'Items: $itemCount'
+              '${amount.isEmpty ? '' : ' • Order amount: Rs. $amount'}',
+            ),
+            const SizedBox(
+              height: 10,
+            ),
+            if (farmLat != null &&
+                farmLng != null &&
+                customerLat != null &&
+                customerLng != null) ...<Widget>[
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: () {
+                    _openFullKrishiRoute(
+                      farmLat,
+                      farmLng,
+                      customerLat,
+                      customerLng,
+                    );
+                  },
+                  icon: const Icon(
+                    Icons.route_rounded,
+                  ),
+                  label: const Text(
+                    'Track Full Route: You → Farm → Customer',
+                  ),
+                ),
+              ),
+              const SizedBox(
+                height: 8,
+              ),
+            ],
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child:
+                      OutlinedButton.icon(
+                    onPressed:
+                        farmLat == null ||
+                                farmLng ==
+                                    null
+                            ? null
+                            : () {
+                                _openFarmDirections(
+                                  farmLat,
+                                  farmLng,
+                                );
+                              },
+                    icon:
+                        const Icon(
+                      Icons.navigation,
+                    ),
+                    label:
+                        const Text(
+                      'Track Farm Pickup',
+                    ),
+                  ),
+                ),
+                const SizedBox(
+                  width: 8,
+                ),
+                Expanded(
+                  child:
+                      OutlinedButton.icon(
+                    onPressed:
+                        farmPhone.isEmpty
+                            ? null
+                            : () {
+                                _callFarm(
+                                  farmPhone,
+                                );
+                              },
+                    icon:
+                        const Icon(
+                      Icons.call,
+                    ),
+                    label:
+                        const Text(
+                      'Call Farm',
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(
+              height: 8,
+            ),
+            if (reservedByMe) ...<Widget>[
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: busy
+                      ? null
+                      : () {
+                          _showPickupProof(
+                            pool,
+                          );
+                        },
+                  icon: const Icon(Icons.qr_code_2),
+                  label: const Text(
+                    'Show Pickup QR / Code at Farm',
+                  ),
+                ),
+              ),
+              const SizedBox(height: 8),
+              SizedBox(
+                width: double.infinity,
+                child: OutlinedButton.icon(
+                  onPressed: busy
+                      ? null
+                      : () {
+                          _releaseReservation(pool);
+                        },
+                  icon: const Icon(Icons.undo),
+                  label: const Text('Release Reservation'),
+                ),
+              ),
+            ] else if (reservedByOther) ...<Widget>[
+              SizedBox(
+                width: double.infinity,
+                child: FilledButton.icon(
+                  onPressed: null,
+                  icon: Icon(Icons.lock_outline),
+                  label: Text(
+                    'Reserved by another delivery person',
+                  ),
+                ),
+              ),
+            ] else ...<Widget>[
+              StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('krishi_delivery_pool')
+                    .doc(orderId)
+                    .collection('pickup_requests')
+                    .doc(widget.driverId)
+                    .snapshots(),
+                builder: (
+                  BuildContext context,
+                  AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>>
+                      requestSnapshot,
+                ) {
+                  final Map<String, dynamic> request =
+                      requestSnapshot.data?.data() ?? <String, dynamic>{};
+                  final String requestStatus =
+                      request['status']?.toString().trim() ?? '';
+                  final String requestedBy =
+                      request['requestedBy']?.toString().trim() ?? '';
+
+                  if (requestStatus == 'pending_seller' &&
+                      requestedBy == 'driver') {
+                    return Column(
+                      children: <Widget>[
+                        const Row(
+                          children: <Widget>[
+                            Icon(
+                              Icons.hourglass_top_rounded,
+                              color: Colors.orange,
+                            ),
+                            SizedBox(width: 8),
+                            Expanded(
+                              child: Text(
+                                'Waiting for Farm Seller Approval',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w800,
+                                  color: Colors.orange,
+                                ),
+                              ),
+                            ),
+                          ],
+                        ),
+                        const SizedBox(height: 8),
+                        SizedBox(
+                          width: double.infinity,
+                          child: OutlinedButton.icon(
+                            onPressed: busy
+                                ? null
+                                : () {
+                                    _cancelPickupRequest(pool);
+                                  },
+                            icon: const Icon(Icons.close_rounded),
+                            label: const Text('Cancel Pickup Request'),
+                          ),
+                        ),
+                      ],
+                    );
+                  }
+
+                  if (requestStatus == 'pending_driver' &&
+                      requestedBy == 'seller') {
+                    return Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: <Widget>[
+                        const Text(
+                          'Farm Seller requested you to pick up this order.',
+                          style: TextStyle(
+                            fontWeight: FontWeight.w800,
+                            color: Colors.green,
+                          ),
+                        ),
+                        const SizedBox(height: 8),
+                        Row(
+                          children: <Widget>[
+                            Expanded(
+                              child: FilledButton.icon(
+                                onPressed: busy
+                                    ? null
+                                    : () {
+                                        _acceptFarmPickupRequest(pool);
+                                      },
+                                icon: const Icon(Icons.check_rounded),
+                                label: const Text('Accept Farm Request'),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            Expanded(
+                              child: OutlinedButton.icon(
+                                onPressed: busy
+                                    ? null
+                                    : () {
+                                        _declineFarmPickupRequest(pool);
+                                      },
+                                icon: const Icon(Icons.close_rounded),
+                                label: const Text('Decline'),
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    );
+                  }
+
+                  return SizedBox(
+                    width: double.infinity,
+                    child: FilledButton.icon(
+                      onPressed: busy
+                          ? null
+                          : () {
+                              _reserveOrder(pool);
+                            },
+                      icon: const Icon(Icons.send_rounded),
+                      label: Text(
+                        expired
+                            ? 'Request Pickup Again'
+                            : 'Request Pickup from Farm',
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ],
+            const SizedBox(
+              height: 8,
+            ),
+            const Text(
+              'Customer GPS route is visible for planning. Customer phone and text address stay private until the farm verifies pickup.',
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.blueGrey,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  void dispose() {
+    _locationTimer?.cancel();
+    super.dispose();
+  }
+
+  @override
+  Widget build(
+    BuildContext context,
+  ) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Nearby Krishi Orders',
+          style: TextStyle(
+            fontWeight:
+                FontWeight.bold,
+          ),
+        ),
+        actions: <Widget>[
+          IconButton(
+            tooltip:
+                'Refresh GPS',
+            onPressed:
+                _refreshingLocation
+                    ? null
+                    : _refreshLocation,
+            icon: const Icon(
+              Icons.gps_fixed,
+            ),
+          ),
+        ],
+      ),
+      body: Column(
+        children: <Widget>[
+          Container(
+            width: double.infinity,
+            margin:
+                const EdgeInsets.all(
+              12,
+            ),
+            padding:
+                const EdgeInsets.all(
+              12,
+            ),
+            decoration:
+                BoxDecoration(
+              color: Colors.green
+                  .withValues(
+                alpha: 0.08,
+              ),
+              borderRadius:
+                  BorderRadius.circular(
+                12,
+              ),
+            ),
+            child: const Text(
+              'New Krishi customer orders appear here automatically. Nearest farm orders appear first. There is no fixed limit on how many pickups you may reserve, but every parcel must be verified separately by that farm before it becomes an active delivery.',
+              style: TextStyle(
+                fontWeight:
+                    FontWeight.w700,
+              ),
+            ),
+          ),
+          Expanded(
+            child: StreamBuilder<
+                List<
+                    Map<String,
+                        dynamic>>>(
+              stream:
+                  _poolStream(),
+              builder: (
+                BuildContext context,
+                AsyncSnapshot<
+                        List<
+                            Map<String,
+                                dynamic>>>
+                    snapshot,
+              ) {
+                if (snapshot
+                        .connectionState ==
+                    ConnectionState
+                        .waiting) {
+                  return const Center(
+                    child:
+                        CircularProgressIndicator(),
+                  );
+                }
+
+                if (snapshot.hasError) {
+                  return Center(
+                    child: Padding(
+                      padding:
+                          const EdgeInsets
+                              .all(
+                        20,
+                      ),
+                      child: Text(
+                        'Could not load nearby Krishi orders.\n${snapshot.error}',
+                        textAlign:
+                            TextAlign
+                                .center,
+                      ),
+                    ),
+                  );
+                }
+
+                final List<
+                        Map<String,
+                            dynamic>>
+                    orders =
+                    snapshot.data ??
+                        <Map<String,
+                            dynamic>>[];
+
+                if (orders.isEmpty) {
+                  return const Center(
+                    child: Column(
+                      mainAxisAlignment:
+                          MainAxisAlignment
+                              .center,
+                      children:
+                          <Widget>[
+                        Icon(
+                          Icons
+                              .agriculture_outlined,
+                          size: 72,
+                          color:
+                              Colors.grey,
+                        ),
+                        SizedBox(
+                          height: 12,
+                        ),
+                        Text(
+                          'No Krishi pickup orders are ready nearby.',
+                          style:
+                              TextStyle(
+                            fontSize: 17,
+                            fontWeight:
+                                FontWeight
+                                    .bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  );
+                }
+
+                return RefreshIndicator(
+                  onRefresh:
+                      _refreshLocation,
+                  child:
+                      ListView.builder(
+                    physics:
+                        const AlwaysScrollableScrollPhysics(),
+                    padding:
+                        const EdgeInsets.fromLTRB(
+                      12,
+                      0,
+                      12,
+                      16,
+                    ),
+                    itemCount:
+                        orders.length,
+                    itemBuilder: (
+                      BuildContext context,
+                      int index,
+                    ) {
+                      return _poolCard(
+                        orders[index],
+                      );
+                    },
+                  ),
+                );
+              },
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

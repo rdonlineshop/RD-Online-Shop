@@ -450,6 +450,73 @@ class AdminKrishiSellerPage extends StatelessWidget {
     }
   }
 
+
+  Future<void> _deleteSeller(
+    BuildContext context,
+    String sellerId,
+    String shopName,
+  ) async {
+    final bool? confirmed = await showDialog<bool>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text(
+            'Permanently Delete Krishi Seller?',
+          ),
+          content: Text(
+            '$shopName will be removed from the Krishi seller registry. '
+            'This removes the Firestore seller profile. Existing products or '
+            'orders are not silently changed by this action.',
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(dialogContext, false);
+              },
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.red,
+              ),
+              onPressed: () {
+                Navigator.pop(dialogContext, true);
+              },
+              icon: const Icon(Icons.delete_forever),
+              label: const Text('Permanent Delete'),
+            ),
+          ],
+        );
+      },
+    );
+
+    if (confirmed != true) {
+      return;
+    }
+
+    try {
+      await _sellers.doc(sellerId).delete();
+
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('$shopName permanently deleted.'),
+          ),
+        );
+      }
+    } on FirebaseException catch (error) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(
+              'Delete failed: ${error.message ?? error.code}',
+            ),
+          ),
+        );
+      }
+    }
+  }
+
   Widget _certificateCard(
     String title,
     String url,
@@ -739,6 +806,29 @@ class AdminKrishiSellerPage extends StatelessWidget {
                       ),
                     ],
                   ],
+                ),
+                const SizedBox(height: 10),
+                SizedBox(
+                  width: double.infinity,
+                  child: OutlinedButton.icon(
+                    style: OutlinedButton.styleFrom(
+                      foregroundColor: Colors.red,
+                    ),
+                    onPressed: () async {
+                      Navigator.pop(sheetContext);
+                      await _deleteSeller(
+                        context,
+                        sellerId,
+                        shopName,
+                      );
+                    },
+                    icon: const Icon(
+                      Icons.delete_forever_outlined,
+                    ),
+                    label: const Text(
+                      'Permanent Delete Krishi Seller',
+                    ),
+                  ),
                 ),
               ],
             ),

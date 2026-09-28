@@ -30,7 +30,17 @@ service cloud.firestore {
       return signedIn()
         && exists(/databases/$(database)/documents/sellers/$(request.auth.uid))
         && sellerData().isActive == true
-        && sellerData().role == 'seller';
+        && (
+          sellerData().role == 'seller'
+          || (
+            // Compatibility for already-approved Krishi seller accounts
+            // created before the unified seller role was enforced.
+            sellerData().get('sellerType', '') == 'krishi'
+            && sellerData().get('krishiSeller', false) == true
+            && sellerData().get('accountStatus', '') == 'active'
+            && sellerData().get('legalVerified', false) == true
+          )
+        );
     }
 
     function customerData() {
@@ -55,6 +65,11 @@ service cloud.firestore {
         && driverData().isActive == true
         && driverData().isApproved == true
         && driverData().role == 'delivery_person';
+    }
+
+    function isOnlineDeliveryDriver() {
+      return isActiveDriver()
+        && driverData().get('isOnline', false) == true;
     }
 
     function rideDriverData() {
@@ -280,6 +295,61 @@ service cloud.firestore {
           ]));
 
       allow delete: if isAdmin();
+    }
+
+
+    // ============================================================
+    // DELIVERY PRESENCE
+    // Public operational fields only; licence/profile documents stay private.
+    // ============================================================
+    match /delivery_presence/{driverId} {
+      allow read: if isAdmin()
+        || isActiveSeller()
+        || (signedIn() && request.auth.uid == driverId);
+
+      function validOwnPresence() {
+        return isActiveDriver()
+          && request.auth.uid == driverId
+          && request.resource.data.driverId == request.auth.uid
+          && request.resource.data.name is string
+          && request.resource.data.name.size() <= 120
+          && request.resource.data.name
+            == driverData().get('name', '')
+          && request.resource.data.phone is string
+          && request.resource.data.phone.size() <= 40
+          && request.resource.data.phone
+            == driverData().get('phone', '')
+          && request.resource.data.email is string
+          && request.resource.data.email.size() <= 180
+          && request.resource.data.isOnline is bool
+          && (
+            request.resource.data.get('latitude', null) == null
+            || request.resource.data.latitude is number
+          )
+          && (
+            request.resource.data.get('longitude', null) == null
+            || request.resource.data.longitude is number
+          )
+          && request.resource.data.keys().hasOnly([
+            'driverId',
+            'name',
+            'phone',
+            'email',
+            'isOnline',
+            'latitude',
+            'longitude',
+            'locationUpdatedAt',
+            'updatedAt'
+          ]);
+      }
+
+      allow create: if validOwnPresence();
+
+      allow update: if validOwnPresence()
+        && resource.data.driverId == request.auth.uid;
+
+      allow delete: if isAdmin()
+        || (signedIn() && request.auth.uid == driverId);
     }
 
 
@@ -1178,6 +1248,11 @@ service cloud.firestore {
           && request.resource.data.customerId == customerData().customerId;
       }
 
+      function sellerCanReadOrder() {
+        return signedIn()
+          && resource.data.sellerIds.hasAny([request.auth.uid]);
+      }
+
       function sellerOwnsOrder() {
         return isActiveSeller()
           && resource.data.sellerIds is list
@@ -1423,6 +1498,85 @@ service cloud.firestore {
           );
       }
 
+      function krishiPoolExists() {
+        return exists(
+          /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
+        );
+      }
+
+      function krishiPoolData() {
+        return get(
+          /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
+        ).data;
+      }
+
+      function krishiPoolPrivateExists() {
+        return exists(
+          /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_private/verification
+        );
+      }
+
+      function krishiPoolPrivateData() {
+        return get(
+          /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_private/verification
+        ).data;
+      }
+
+      function krishiPoolConfirmationExists() {
+        return exists(
+          /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_confirmations/current
+        );
+      }
+
+      function krishiPoolConfirmationData() {
+        return get(
+          /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_confirmations/current
+        ).data;
+      }
+
+      function validSellerKrishiPoolPickupConfirmation() {
+        return sellerOwnsOrder()
+          && resource.data.get('pickupConfirmed', false) != true
+          && resource.data.get('driverId', '') == ''
+          && krishiPoolExists()
+          && krishiPoolData().sellerId == request.auth.uid
+          && krishiPoolData().active == true
+          && krishiPoolData().readyForPickup == true
+          && krishiPoolData().state == 'reserved'
+          && krishiPoolData().reservedDriverId is string
+          && krishiPoolData().reservedDriverId.size() > 0
+          && krishiPoolData().reservationExpiresAt is timestamp
+          && krishiPoolData().reservationExpiresAt > request.time
+          && krishiPoolPrivateExists()
+          && krishiPoolConfirmationExists()
+          && krishiPoolPrivateData().isActive == true
+          && krishiPoolData().reservationKey is string
+          && krishiPoolData().reservationKey.size() >= 20
+          && krishiPoolPrivateData().driverId
+            == krishiPoolData().reservedDriverId
+          && krishiPoolPrivateData().reservationKey
+            == krishiPoolData().reservationKey
+          && krishiPoolConfirmationData().sellerId == request.auth.uid
+          && krishiPoolConfirmationData().driverId
+            == krishiPoolData().reservedDriverId
+          && krishiPoolConfirmationData().reservationKey
+            == krishiPoolData().reservationKey
+          && krishiPoolConfirmationData().method in ['code', 'qr']
+          && (
+            (
+              krishiPoolConfirmationData().method == 'code'
+              && krishiPoolConfirmationData().proof
+                == krishiPoolPrivateData().pickupCode
+            )
+            ||
+            (
+              krishiPoolConfirmationData().method == 'qr'
+              && krishiPoolConfirmationData().proof
+                == krishiPoolPrivateData().qrPayload
+            )
+          );
+      }
+
       // Keep Admin read isolated from customer/seller/driver checks.
       // Some older orders may not contain sellerIds/driverId; evaluating those
       // role checks in the same expression can deny an otherwise valid Admin
@@ -1430,7 +1584,7 @@ service cloud.firestore {
       allow read: if isAdmin();
 
       allow read: if customerOwnsOrder()
-        || sellerOwnsOrder()
+        || sellerCanReadOrder()
         || driverOwnsOrder();
 
       allow create: if isAdmin()
@@ -1567,9 +1721,62 @@ service cloud.firestore {
           'pickupConfirmationMethod'
         ]);
 
+      // Nearby Krishi reservation becomes a real driver assignment only after
+      // the farm verifies the reserved driver's QR/code while handing over.
+      allow update: if validSellerKrishiPoolPickupConfirmation()
+        && request.resource.data.customerId == resource.data.customerId
+        && request.resource.data.sellerIds == resource.data.sellerIds
+        && request.resource.data.driverId
+          == krishiPoolData().reservedDriverId
+        && request.resource.data.driverName
+          == krishiPoolData().get('reservedDriverName', '')
+        && request.resource.data.driverPhone
+          == krishiPoolData().get('reservedDriverPhone', '')
+        && request.resource.data.driverEmail
+          == krishiPoolData().get('reservedDriverEmail', '')
+        && request.resource.data.status == 'Shipped'
+        && request.resource.data.trackingStatus == 'Picked Up'
+        && request.resource.data.pickupConfirmed == true
+        && request.resource.data.pickupConfirmedBySellerId == request.auth.uid
+        && request.resource.data.pickupConfirmationDriverId
+          == krishiPoolData().reservedDriverId
+        && request.resource.data.pickupConfirmationMethod
+          == krishiPoolConfirmationData().method
+        && request.resource.data.deliveryAssignmentType
+          == 'krishi_nearby_pool'
+        && request.resource.data.trackingEnabled == true
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'trackingStatus',
+          'updatedAt',
+          'deliveryStartedAt',
+          'pickupConfirmed',
+          'pickupConfirmedAt',
+          'pickupConfirmedBySellerId',
+          'pickupConfirmationDriverId',
+          'pickupConfirmationMethod',
+          'driverId',
+          'driverName',
+          'driverPhone',
+          'driverEmail',
+          'trackingEnabled',
+          'deliveryAssignedAt',
+          'driverLat',
+          'driverLng',
+          'driverLocationUpdatedAt',
+          'deliveryAssignmentType'
+        ]);
+
       allow update: if sellerOwnsOrder()
         && request.resource.data.customerId == resource.data.customerId
         && request.resource.data.sellerIds == resource.data.sellerIds
+        && (
+          request.resource.data.get('driverId', '')
+            == resource.data.get('driverId', '')
+          || !krishiPoolExists()
+          || krishiPoolData().get('active', false) != true
+          || resource.data.get('pickupConfirmed', false) == true
+        )
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'status',
           'trackingStatus',
@@ -1764,6 +1971,571 @@ service cloud.firestore {
           ]);
 
         allow delete: if isAdmin();
+      }
+    }
+
+
+    // ============================================================
+    // KRISHI NEARBY DELIVERY POOL
+    // Nearby discovery data includes Farm GPS plus Customer GPS so an online
+    // delivery person can preview Driver -> Farm -> Customer routing before pickup.
+    // Customer phone number and text address remain protected inside /orders.
+    // ============================================================
+    match /krishi_delivery_pool/{orderId} {
+      function sourceOrderExists() {
+        return exists(
+          /databases/$(database)/documents/orders/$(orderId)
+        );
+      }
+
+      function sourceOrderData() {
+        return get(
+          /databases/$(database)/documents/orders/$(orderId)
+        ).data;
+      }
+
+      function poolSellerOwns() {
+        return isActiveSeller()
+          && resource.data.sellerId == request.auth.uid;
+      }
+
+      function sellerOwnsSourceOrder() {
+        return isActiveSeller()
+          && sourceOrderExists()
+          && sourceOrderData().sellerIds is list
+          && request.auth.uid in sourceOrderData().sellerIds;
+      }
+
+      function customerOwnsSourceOrder() {
+        return hasCustomerSession()
+          && sourceOrderExists()
+          && sourceOrderData().customerId == customerData().customerId;
+      }
+
+      function sourceOrderEligibleForNearbyPool() {
+        return sourceOrderExists()
+          && sourceOrderData().sellerIds is list
+          && sourceOrderData().driverId == ''
+          && sourceOrderData().get('pickupConfirmed', false) != true
+          && sourceOrderData().status in [
+            'Pending',
+            'Confirmed',
+            'Processing'
+          ];
+      }
+
+      function validPoolPublisher() {
+        return (
+            sellerOwnsSourceOrder()
+            && request.resource.data.sellerId == request.auth.uid
+          )
+          || (
+            customerOwnsSourceOrder()
+            && request.resource.data.sellerId is string
+            && request.resource.data.sellerId
+              in sourceOrderData().sellerIds
+          );
+      }
+
+      allow read: if isAdmin()
+        || sellerOwnsSourceOrder()
+        || poolSellerOwns()
+        || (isOnlineDeliveryDriver()
+          && resource.data.get('active', false) == true);
+
+      allow create: if validPoolPublisher()
+        && sourceOrderEligibleForNearbyPool()
+        && request.resource.data.orderId == orderId
+        && request.resource.data.marketplace == 'krishi'
+        && request.resource.data.farmName is string
+        && request.resource.data.farmName.size() > 0
+        && request.resource.data.farmName.size() <= 160
+        && request.resource.data.farmAddress is string
+        && request.resource.data.farmAddress.size() <= 500
+        && request.resource.data.farmPhone is string
+        && request.resource.data.farmPhone.size() <= 40
+        && request.resource.data.farmLat is number
+        && request.resource.data.farmLng is number
+        && (
+          request.resource.data.get('customerLat', null) == null
+          || request.resource.data.customerLat is number
+        )
+        && (
+          request.resource.data.get('customerLng', null) == null
+          || request.resource.data.customerLng is number
+        )
+        && (
+          request.resource.data.get('farmToCustomerKm', null) == null
+          || request.resource.data.farmToCustomerKm is number
+        )
+        && request.resource.data.itemCount is int
+        && request.resource.data.itemCount >= 0
+        && request.resource.data.orderAmount is string
+        && request.resource.data.readyForPickup == true
+        && request.resource.data.active == true
+        && request.resource.data.state == 'available'
+        && request.resource.data.reservationKey == ''
+        && request.resource.data.reservedDriverId == ''
+        && request.resource.data.reservedDriverName == ''
+        && request.resource.data.reservedDriverPhone == ''
+        && request.resource.data.reservedDriverEmail == ''
+        && request.resource.data.get('reservedAt', null) == null
+        && request.resource.data.get('reservationExpiresAt', null) == null
+        && request.resource.data.keys().hasOnly([
+          'orderId',
+          'sellerId',
+          'marketplace',
+          'farmName',
+          'farmAddress',
+          'farmPhone',
+          'farmLat',
+          'farmLng',
+          'customerLat',
+          'customerLng',
+          'farmToCustomerKm',
+          'itemCount',
+          'orderAmount',
+          'readyForPickup',
+          'active',
+          'state',
+          'reservationKey',
+          'reservedDriverId',
+          'reservedDriverName',
+          'reservedDriverPhone',
+          'reservedDriverEmail',
+          'reservedAt',
+          'reservationExpiresAt',
+          'createdAt',
+          'updatedAt'
+        ]);
+
+      // Seller may refresh/close its own sanitized pool entry, but may never
+      // change the source order ID or seller ownership.
+      allow update: if poolSellerOwns()
+        && request.resource.data.orderId == resource.data.orderId
+        && request.resource.data.sellerId == resource.data.sellerId;
+
+      function ownDeliveryPresenceExists() {
+        return exists(
+          /databases/$(database)/documents/delivery_presence/$(request.auth.uid)
+        );
+      }
+
+      function ownDeliveryPresence() {
+        return get(
+          /databases/$(database)/documents/delivery_presence/$(request.auth.uid)
+        ).data;
+      }
+
+      function ownAcceptedPickupRequestAfterExists() {
+        return existsAfter(
+          /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_requests/$(request.auth.uid)
+        );
+      }
+
+      function ownAcceptedPickupRequestAfter() {
+        return getAfter(
+          /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_requests/$(request.auth.uid)
+        ).data;
+      }
+
+      function validDriverReserve() {
+        return isOnlineDeliveryDriver()
+          && ownAcceptedPickupRequestAfterExists()
+          && ownAcceptedPickupRequestAfter().driverId == request.auth.uid
+          && ownAcceptedPickupRequestAfter().status == 'accepted'
+          && ownDeliveryPresenceExists()
+          && ownDeliveryPresence().isOnline == true
+          && resource.data.active == true
+          && resource.data.readyForPickup == true
+          && request.resource.data.active == resource.data.active
+          && request.resource.data.readyForPickup == resource.data.readyForPickup
+          && request.resource.data.orderId == resource.data.orderId
+          && request.resource.data.sellerId == resource.data.sellerId
+          && request.resource.data.state == 'reserved'
+          && request.resource.data.reservationKey is string
+          && request.resource.data.reservationKey.size() >= 20
+          && request.resource.data.reservationKey.size() <= 80
+          && request.resource.data.reservedDriverId == request.auth.uid
+          && request.resource.data.reservedDriverName is string
+          && request.resource.data.reservedDriverName
+            == ownDeliveryPresence().name
+          && request.resource.data.reservedDriverPhone is string
+          && request.resource.data.reservedDriverPhone
+            == ownDeliveryPresence().phone
+          && request.resource.data.reservedDriverEmail is string
+          && request.resource.data.reservedDriverEmail
+            == ownDeliveryPresence().email
+          && request.resource.data.reservedAt is timestamp
+          && request.resource.data.reservationExpiresAt is timestamp
+          && request.resource.data.reservationExpiresAt > request.time
+          && request.resource.data.reservationExpiresAt
+            <= request.time + duration.value(3, 'h')
+          && (
+            resource.data.get('state', 'available') == 'available'
+            || resource.data.get('reservedDriverId', '') == request.auth.uid
+            || (
+              resource.data.get('state', '') == 'reserved'
+              && (
+                resource.data.get('reservationExpiresAt', null) == null
+                || resource.data.reservationExpiresAt <= request.time
+              )
+            )
+          )
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'state',
+            'reservationKey',
+            'reservedDriverId',
+            'reservedDriverName',
+            'reservedDriverPhone',
+            'reservedDriverEmail',
+            'reservedAt',
+            'reservationExpiresAt',
+            'updatedAt'
+          ]);
+      }
+
+      function validDriverRelease() {
+        return isActiveDriver()
+          && resource.data.active == true
+          && resource.data.get('state', '') == 'reserved'
+          && resource.data.get('reservedDriverId', '') == request.auth.uid
+          && request.resource.data.state == 'available'
+          && request.resource.data.reservationKey == ''
+          && request.resource.data.reservedDriverId == ''
+          && request.resource.data.reservedDriverName == ''
+          && request.resource.data.reservedDriverPhone == ''
+          && request.resource.data.reservedDriverEmail == ''
+          && request.resource.data.get('reservedAt', null) == null
+          && request.resource.data.get('reservationExpiresAt', null) == null
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'state',
+            'reservationKey',
+            'reservedDriverId',
+            'reservedDriverName',
+            'reservedDriverPhone',
+            'reservedDriverEmail',
+            'reservedAt',
+            'reservationExpiresAt',
+            'updatedAt'
+          ]);
+      }
+
+      allow update: if validDriverReserve()
+        || validDriverRelease();
+
+      allow delete: if isAdmin()
+        || poolSellerOwns();
+
+      match /pickup_requests/{driverId} {
+        function parentPool() {
+          return get(
+            /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
+          ).data;
+        }
+
+        function parentPoolAfter() {
+          return getAfter(
+            /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
+          ).data;
+        }
+
+        function sellerOwnsPool() {
+          return isActiveSeller()
+            && parentPool().sellerId == request.auth.uid;
+        }
+
+        function driverOwnsRequest() {
+          return isActiveDriver()
+            && request.auth.uid == driverId;
+        }
+
+        function driverPresenceExists() {
+          return exists(
+            /databases/$(database)/documents/delivery_presence/$(driverId)
+          );
+        }
+
+        function driverPresence() {
+          return get(
+            /databases/$(database)/documents/delivery_presence/$(driverId)
+          ).data;
+        }
+
+        function validBaseRequest() {
+          return request.resource.data.orderId == orderId
+            && request.resource.data.sellerId == parentPool().sellerId
+            && request.resource.data.driverId == driverId
+            && request.resource.data.driverName is string
+            && request.resource.data.driverName.size() <= 160
+            && request.resource.data.driverPhone is string
+            && request.resource.data.driverPhone.size() <= 40
+            && request.resource.data.driverEmail is string
+            && request.resource.data.driverEmail.size() <= 200
+            && request.resource.data.requestedBy in ['driver', 'seller']
+            && request.resource.data.status in [
+              'pending_seller',
+              'pending_driver',
+              'accepted',
+              'rejected',
+              'cancelled'
+            ]
+            && request.resource.data.createdAt is timestamp
+            && request.resource.data.updatedAt is timestamp
+            && (
+              request.resource.data.get('respondedAt', null) == null
+              || request.resource.data.respondedAt is timestamp
+            )
+            && request.resource.data.keys().hasOnly([
+              'orderId',
+              'sellerId',
+              'driverId',
+              'driverName',
+              'driverPhone',
+              'driverEmail',
+              'requestedBy',
+              'status',
+              'createdAt',
+              'updatedAt',
+              'respondedAt'
+            ]);
+        }
+
+        function parentAvailable() {
+          return parentPool().active == true
+            && parentPool().readyForPickup == true
+            && parentPool().get('state', 'available') == 'available';
+        }
+
+        allow read: if isAdmin()
+          || sellerOwnsPool()
+          || driverOwnsRequest();
+
+        allow create: if validBaseRequest()
+          && parentAvailable()
+          && (
+            (
+              driverOwnsRequest()
+              && driverPresenceExists()
+              && driverPresence().isOnline == true
+              && request.resource.data.requestedBy == 'driver'
+              && request.resource.data.status == 'pending_seller'
+              && request.resource.data.driverName == driverPresence().name
+              && request.resource.data.driverPhone == driverPresence().phone
+              && request.resource.data.driverEmail == driverPresence().email
+            )
+            ||
+            (
+              sellerOwnsPool()
+              && driverPresenceExists()
+              && driverPresence().isOnline == true
+              && request.resource.data.requestedBy == 'seller'
+              && request.resource.data.status == 'pending_driver'
+              && request.resource.data.driverName == driverPresence().name
+              && request.resource.data.driverPhone == driverPresence().phone
+              && request.resource.data.driverEmail == driverPresence().email
+            )
+          );
+
+        function immutableRequestFields() {
+          return request.resource.data.orderId == resource.data.orderId
+            && request.resource.data.sellerId == resource.data.sellerId
+            && request.resource.data.driverId == resource.data.driverId
+            && request.resource.data.driverName == resource.data.driverName
+            && request.resource.data.driverPhone == resource.data.driverPhone
+            && request.resource.data.driverEmail == resource.data.driverEmail
+            && request.resource.data.requestedBy == resource.data.requestedBy
+            && request.resource.data.createdAt == resource.data.createdAt;
+        }
+
+        function acceptedParentMatchesDriver() {
+          return parentPoolAfter().state == 'reserved'
+            && parentPoolAfter().reservedDriverId == driverId
+            && parentPoolAfter().reservationKey is string
+            && parentPoolAfter().reservationKey.size() >= 20
+            && parentPoolAfter().reservationExpiresAt is timestamp
+            && parentPoolAfter().reservationExpiresAt > request.time;
+        }
+
+        allow update: if validBaseRequest()
+          && immutableRequestFields()
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'respondedAt',
+            'updatedAt'
+          ])
+          && (
+            (
+              sellerOwnsPool()
+              && resource.data.requestedBy == 'driver'
+              && resource.data.status == 'pending_seller'
+              && request.resource.data.status in ['accepted', 'rejected']
+              && (
+                request.resource.data.status != 'accepted'
+                || acceptedParentMatchesDriver()
+              )
+            )
+            ||
+            (
+              driverOwnsRequest()
+              && resource.data.requestedBy == 'seller'
+              && resource.data.status == 'pending_driver'
+              && request.resource.data.status in ['accepted', 'rejected']
+              && (
+                request.resource.data.status != 'accepted'
+                || acceptedParentMatchesDriver()
+              )
+            )
+            ||
+            (
+              driverOwnsRequest()
+              && resource.data.requestedBy == 'driver'
+              && resource.data.status == 'pending_seller'
+              && request.resource.data.status == 'cancelled'
+            )
+          );
+
+        allow delete: if isAdmin()
+          || sellerOwnsPool()
+          || driverOwnsRequest();
+      }
+
+      match /pickup_private/{documentId} {
+        function parentPool() {
+          return get(
+            /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
+          ).data;
+        }
+
+        function reservedDeliveryPerson() {
+          return isActiveDriver()
+            && parentPool().active == true
+            && parentPool().readyForPickup == true
+            && parentPool().state == 'reserved'
+            && parentPool().reservedDriverId == request.auth.uid
+            && parentPool().reservationExpiresAt is timestamp
+            && parentPool().reservationExpiresAt > request.time;
+        }
+
+        allow read: if isAdmin()
+          || reservedDeliveryPerson();
+
+        function validPrivateProof() {
+          return documentId == 'verification'
+            && reservedDeliveryPerson()
+            && request.resource.data.orderId == orderId
+            && request.resource.data.driverId == request.auth.uid
+            && request.resource.data.reservationKey
+              == parentPool().reservationKey
+            && request.resource.data.reservationKey is string
+            && request.resource.data.reservationKey.size() >= 20
+            && request.resource.data.pickupCode is string
+            && request.resource.data.pickupCode.matches('^[0-9]{6}$')
+            && request.resource.data.qrPayload is string
+            && request.resource.data.qrPayload.size() >= 20
+            && request.resource.data.qrPayload.size() <= 300
+            && request.resource.data.qrPayload.matches('^NRD_PICKUP[|].+')
+            && request.resource.data.isActive == true
+            && request.resource.data.createdAt is string
+            && request.resource.data.updatedAt is string
+            && request.resource.data.keys().hasOnly([
+              'orderId',
+              'driverId',
+              'reservationKey',
+              'pickupCode',
+              'qrPayload',
+              'isActive',
+              'createdAt',
+              'updatedAt'
+            ]);
+        }
+
+        allow create: if validPrivateProof();
+
+        allow update: if validPrivateProof();
+
+        allow delete: if isAdmin()
+          || reservedDeliveryPerson();
+      }
+
+      match /pickup_confirmations/{documentId} {
+        function parentPool() {
+          return get(
+            /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
+          ).data;
+        }
+
+        function privateProofExists() {
+          return exists(
+            /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_private/verification
+          );
+        }
+
+        function privateProof() {
+          return get(
+            /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_private/verification
+          ).data;
+        }
+
+        function sellerOwnsPool() {
+          return isActiveSeller()
+            && parentPool().sellerId == request.auth.uid;
+        }
+
+        function validSellerProof() {
+          return documentId == 'current'
+            && sellerOwnsPool()
+            && parentPool().active == true
+            && parentPool().readyForPickup == true
+            && parentPool().state == 'reserved'
+            && parentPool().reservedDriverId is string
+            && parentPool().reservedDriverId.size() > 0
+            && parentPool().reservationExpiresAt is timestamp
+            && parentPool().reservationExpiresAt > request.time
+            && privateProofExists()
+            && privateProof().isActive == true
+            && privateProof().driverId == parentPool().reservedDriverId
+            && parentPool().reservationKey is string
+            && parentPool().reservationKey.size() >= 20
+            && privateProof().reservationKey == parentPool().reservationKey
+            && request.resource.data.orderId == orderId
+            && request.resource.data.sellerId == request.auth.uid
+            && request.resource.data.driverId == parentPool().reservedDriverId
+            && request.resource.data.reservationKey == parentPool().reservationKey
+            && request.resource.data.method in ['code', 'qr']
+            && request.resource.data.proof is string
+            && request.resource.data.confirmedAt is string
+            && request.resource.data.keys().hasOnly([
+              'orderId',
+              'sellerId',
+              'driverId',
+              'reservationKey',
+              'method',
+              'proof',
+              'confirmedAt'
+            ])
+            && (
+              (
+                request.resource.data.method == 'code'
+                && request.resource.data.proof == privateProof().pickupCode
+              )
+              ||
+              (
+                request.resource.data.method == 'qr'
+                && request.resource.data.proof == privateProof().qrPayload
+              )
+            );
+        }
+
+        allow read: if isAdmin()
+          || sellerOwnsPool();
+
+        allow create: if validSellerProof();
+
+        allow update: if validSellerProof();
+
+        allow delete: if isAdmin()
+          || sellerOwnsPool();
       }
     }
 
@@ -4682,6 +5454,22 @@ service cloud.firestore {
       allow read, create, update, delete: if isAdmin();
     }
 
+
+
+    // ============================================================
+    // ADMIN-DELETED ORDER TOMBSTONES
+    // Keeps only deletion markers so old customer local backups cannot
+    // resurrect an order after Admin permanently deletes it.
+    // ============================================================
+    match /admin_deleted_orders/{orderId} {
+      allow read: if isAdmin()
+        || (
+          hasCustomerSession()
+          && resource.data.customerId == customerData().customerId
+        );
+
+      allow create, update, delete: if isAdmin();
+    }
 
 
     match /{document=**} {

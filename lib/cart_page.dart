@@ -4,13 +4,23 @@ import 'checkout_page.dart';
 import 'data/cart_data.dart';
 
 class CartPage extends StatefulWidget {
-  const CartPage({super.key});
+  const CartPage({
+    super.key,
+    this.marketplace = 'online',
+  });
+
+  final String marketplace;
 
   @override
   State<CartPage> createState() => _CartPageState();
 }
 
 class _CartPageState extends State<CartPage> {
+  List<Map<String, dynamic>> get _cartItems =>
+      cartItemsForMarketplace(
+        widget.marketplace,
+      );
+
   final TextEditingController couponController =
       TextEditingController();
 
@@ -28,7 +38,9 @@ class _CartPageState extends State<CartPage> {
   }
 
   Future<void> _loadCart() async {
-    await loadCart();
+    await loadCart(
+      marketplace: widget.marketplace,
+    );
 
     if (!mounted) {
       return;
@@ -46,21 +58,25 @@ class _CartPageState extends State<CartPage> {
   double get subtotal {
     double total = 0;
 
-    for (final Map<String, dynamic> item in cartItems) {
-      final String priceText =
-          item['price']
-              ?.toString()
-              .replaceAll('Rs.', '')
-              .replaceAll('Rs', '')
-              .replaceAll(',', '')
-              .trim() ??
-          '0';
+    for (final Map<String, dynamic> item in _cartItems) {
+      final dynamic rawPrice =
+          item['pricePerUnit'] ?? item['price'];
 
-      final double price =
-          double.tryParse(priceText) ?? 0;
+      final double price = rawPrice is num
+          ? rawPrice.toDouble()
+          : double.tryParse(
+                rawPrice
+                        ?.toString()
+                        .replaceAll('Rs.', '')
+                        .replaceAll('Rs', '')
+                        .replaceAll(',', '')
+                        .trim() ??
+                    '0',
+              ) ??
+              0;
 
-      final int quantity =
-          int.tryParse(
+      final double quantity =
+          double.tryParse(
             item['quantity']?.toString() ?? '1',
           ) ??
           1;
@@ -201,6 +217,22 @@ class _CartPageState extends State<CartPage> {
   // PRODUCT IMAGE
   // =========================================================
 
+  String _cartThumbnailUrl(
+    String url,
+  ) {
+    final String value = url.trim();
+
+    if (value.contains('res.cloudinary.com') &&
+        value.contains('/image/upload/')) {
+      return value.replaceFirst(
+        '/image/upload/',
+        '/image/upload/c_fill,g_auto,w_240,h_240,q_auto:good/',
+      );
+    }
+
+    return value;
+  }
+
   Widget _productImage(
     Map<String, dynamic> item,
   ) {
@@ -225,10 +257,34 @@ class _CartPageState extends State<CartPage> {
     if (image.startsWith('http://') ||
         image.startsWith('https://')) {
       return Image.network(
-        image,
+        _cartThumbnailUrl(image),
         fit: BoxFit.cover,
         width: 75,
         height: 75,
+        cacheWidth: 240,
+        cacheHeight: 240,
+        loadingBuilder: (
+          BuildContext context,
+          Widget child,
+          ImageChunkEvent? loadingProgress,
+        ) {
+          if (loadingProgress == null) {
+            return child;
+          }
+
+          return Container(
+            width: 75,
+            height: 75,
+            alignment: Alignment.center,
+            child: const SizedBox(
+              width: 20,
+              height: 20,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+              ),
+            ),
+          );
+        },
         errorBuilder: (
           BuildContext context,
           Object error,
@@ -258,6 +314,257 @@ class _CartPageState extends State<CartPage> {
     return fallback;
   }
 
+  bool _isKrishi(
+    Map<String, dynamic> item,
+  ) {
+    return isKrishiCartItem(item);
+  }
+
+  double _quantityValue(
+    Map<String, dynamic> item,
+  ) {
+    return double.tryParse(
+          item['quantity']?.toString() ?? '1',
+        ) ??
+        1;
+  }
+
+  double? _stockValue(
+    Map<String, dynamic> item,
+  ) {
+    if (item['stock'] == null) {
+      return null;
+    }
+
+    if (item['stock'] is num) {
+      return (item['stock'] as num).toDouble();
+    }
+
+    return double.tryParse(
+      item['stock'].toString(),
+    );
+  }
+
+  String _unitText(
+    Map<String, dynamic> item,
+  ) {
+    final String unit =
+        item['unit']?.toString().trim() ?? '';
+
+    return unit.isEmpty ? 'unit' : unit;
+  }
+
+  String _numberText(
+    double value,
+  ) {
+    if (value == value.roundToDouble()) {
+      return value.toStringAsFixed(0);
+    }
+
+    String text = value.toStringAsFixed(2);
+
+    while (text.endsWith('0')) {
+      text = text.substring(
+        0,
+        text.length - 1,
+      );
+    }
+
+    if (text.endsWith('.')) {
+      text = text.substring(
+        0,
+        text.length - 1,
+      );
+    }
+
+    return text;
+  }
+
+  double _krishiStep(
+    Map<String, dynamic> item,
+  ) {
+    final String unit =
+        _unitText(item).toLowerCase();
+
+    if (<String>[
+      'kg',
+      'kilogram',
+      'kilograms',
+      'l',
+      'ltr',
+      'litre',
+      'liter',
+      'litres',
+      'liters',
+    ].contains(unit)) {
+      return 0.5;
+    }
+
+    return 1;
+  }
+
+  bool _wholeKrishiUnit(
+    Map<String, dynamic> item,
+  ) {
+    final String unit =
+        _unitText(item).toLowerCase();
+
+    return <String>[
+      'pc',
+      'pcs',
+      'piece',
+      'pieces',
+      'dozen',
+      'packet',
+      'packets',
+      'pack',
+      'bag',
+      'bags',
+      'sack',
+      'sacks',
+      'box',
+      'boxes',
+      'crate',
+      'crates',
+      'tray',
+      'trays',
+      'bottle',
+      'bottles',
+      'bundle',
+      'bundles',
+    ].contains(unit);
+  }
+
+  Future<void> _editKrishiQuantity(
+    int index,
+  ) async {
+    if (index < 0 ||
+        index >= _cartItems.length ||
+        !_isKrishi(_cartItems[index])) {
+      return;
+    }
+
+    final Map<String, dynamic> item =
+        _cartItems[index];
+
+    final String unit =
+        _unitText(item);
+    final double? stock =
+        _stockValue(item);
+
+    final TextEditingController controller =
+        TextEditingController(
+      text: _numberText(
+        _quantityValue(item),
+      ),
+    );
+
+    final double? result =
+        await showDialog<double>(
+      context: context,
+      builder: (
+        BuildContext dialogContext,
+      ) {
+        return AlertDialog(
+          title: Text(
+            'Enter quantity ($unit)',
+          ),
+          content: TextField(
+            controller: controller,
+            autofocus: true,
+            keyboardType:
+                TextInputType.numberWithOptions(
+              decimal:
+                  !_wholeKrishiUnit(item),
+            ),
+            decoration: InputDecoration(
+              labelText: 'Quantity',
+              helperText: stock == null
+                  ? null
+                  : 'Available: ${_numberText(stock)} $unit',
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () {
+                Navigator.pop(
+                  dialogContext,
+                );
+              },
+              child: const Text(
+                'Cancel',
+              ),
+            ),
+            FilledButton(
+              onPressed: () {
+                final double? typed =
+                    double.tryParse(
+                  controller.text.trim(),
+                );
+
+                if (typed == null ||
+                    typed <= 0) {
+                  return;
+                }
+
+                double value = typed;
+
+                if (_wholeKrishiUnit(
+                  item,
+                )) {
+                  value =
+                      typed.roundToDouble();
+                }
+
+                Navigator.pop(
+                  dialogContext,
+                  value,
+                );
+              },
+              child: const Text(
+                'Update',
+              ),
+            ),
+          ],
+        );
+      },
+    );
+
+    controller.dispose();
+
+    if (result == null) {
+      return;
+    }
+
+    if (stock != null &&
+        stock > 0 &&
+        result > stock) {
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(context)
+          .showSnackBar(
+        SnackBar(
+          content: Text(
+            'Only ${_numberText(stock)} $unit is available.',
+          ),
+        ),
+      );
+
+      return;
+    }
+
+    setState(() {
+      _cartItems[index]['quantity'] =
+          result;
+    });
+
+    await saveCart(
+      marketplace: widget.marketplace,
+    );
+  }
+
   // =========================================================
   // QUANTITY
   // =========================================================
@@ -267,14 +574,74 @@ class _CartPageState extends State<CartPage> {
     int change,
   ) async {
     if (index < 0 ||
-        index >= cartItems.length) {
+        index >= _cartItems.length) {
+      return;
+    }
+
+    final Map<String, dynamic> item =
+        _cartItems[index];
+
+    if (_isKrishi(item)) {
+      final double quantity =
+          _quantityValue(item);
+      final double step =
+          _krishiStep(item);
+      final double? stock =
+          _stockValue(item);
+
+      double newQuantity =
+          quantity + (change * step);
+
+      if (_wholeKrishiUnit(item)) {
+        newQuantity =
+            newQuantity.roundToDouble();
+      }
+
+      if (newQuantity <= 0) {
+        setState(() {
+          _cartItems.removeAt(index);
+        });
+
+        await saveCart(
+      marketplace: widget.marketplace,
+    );
+        return;
+      }
+
+      if (stock != null &&
+          stock > 0 &&
+          newQuantity > stock) {
+        if (!mounted) {
+          return;
+        }
+
+        ScaffoldMessenger.of(context)
+            .showSnackBar(
+          SnackBar(
+            content: Text(
+              'Only ${_numberText(stock)} ${_unitText(item)} is available.',
+            ),
+          ),
+        );
+
+        return;
+      }
+
+      setState(() {
+        _cartItems[index]['quantity'] =
+            newQuantity;
+      });
+
+      await saveCart(
+      marketplace: widget.marketplace,
+    );
       return;
     }
 
     setState(() {
       final int quantity =
           int.tryParse(
-            cartItems[index]['quantity']
+            _cartItems[index]['quantity']
                     ?.toString() ??
                 '1',
           ) ??
@@ -282,19 +649,21 @@ class _CartPageState extends State<CartPage> {
 
       if (change < 0 &&
           quantity <= 1) {
-        cartItems.removeAt(index);
+        _cartItems.removeAt(index);
       } else {
         final int newQuantity =
             quantity + change;
 
-        cartItems[index]['quantity'] =
+        _cartItems[index]['quantity'] =
             newQuantity < 1
                 ? 1
                 : newQuantity;
       }
     });
 
-    await saveCart();
+    await saveCart(
+      marketplace: widget.marketplace,
+    );
   }
 
   // =========================================================
@@ -305,15 +674,17 @@ class _CartPageState extends State<CartPage> {
     int index,
   ) async {
     if (index < 0 ||
-        index >= cartItems.length) {
+        index >= _cartItems.length) {
       return;
     }
 
     setState(() {
-      cartItems.removeAt(index);
+      _cartItems.removeAt(index);
     });
 
-    await saveCart();
+    await saveCart(
+      marketplace: widget.marketplace,
+    );
 
     if (!mounted) {
       return;
@@ -359,7 +730,7 @@ class _CartPageState extends State<CartPage> {
             ),
           ),
           Text(
-            'Rs. ${amount.toStringAsFixed(0)}',
+            'Rs. ${_numberText(amount)}',
             style: TextStyle(
               color: color,
               fontWeight:
@@ -378,7 +749,7 @@ class _CartPageState extends State<CartPage> {
   // =========================================================
 
   void _openCheckout() {
-    if (cartItems.isEmpty) {
+    if (_cartItems.isEmpty) {
       ScaffoldMessenger.of(context)
           .showSnackBar(
         const SnackBar(
@@ -390,6 +761,10 @@ class _CartPageState extends State<CartPage> {
 
       return;
     }
+
+    activateCartMarketplace(
+      widget.marketplace,
+    );
 
     Navigator.push<void>(
       context,
@@ -429,9 +804,14 @@ class _CartPageState extends State<CartPage> {
   ) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'My Cart',
-          style: TextStyle(
+        title: Text(
+          widget.marketplace
+                      .trim()
+                      .toLowerCase() ==
+                  'krishi'
+              ? 'Krishi Cart'
+              : 'My Cart',
+          style: const TextStyle(
             fontWeight:
                 FontWeight.bold,
           ),
@@ -444,7 +824,7 @@ class _CartPageState extends State<CartPage> {
                   child:
                       CircularProgressIndicator(),
                 )
-              : cartItems.isEmpty
+              : _cartItems.isEmpty
               ? const Center(
                   child: Column(
                     mainAxisAlignment:
@@ -481,7 +861,7 @@ class _CartPageState extends State<CartPage> {
                         ),
                         children: <Widget>[
                           ...List.generate(
-                            cartItems.length,
+                            _cartItems.length,
                             (
                               int index,
                             ) {
@@ -489,17 +869,32 @@ class _CartPageState extends State<CartPage> {
                                       String,
                                       dynamic>
                                   item =
-                                  cartItems[
+                                  _cartItems[
                                       index];
 
-                              final int
+                              final bool
+                                  isKrishi =
+                                  _isKrishi(
+                                item,
+                              );
+
+                              final double
                                   quantity =
-                                  int.tryParse(
-                                        item['quantity']
-                                                ?.toString() ??
-                                            '1',
-                                      ) ??
-                                      1;
+                                  _quantityValue(
+                                item,
+                              );
+
+                              final String
+                                  unit =
+                                  _unitText(
+                                item,
+                              );
+
+                              final double?
+                                  stock =
+                                  _stockValue(
+                                item,
+                              );
 
                               return Card(
                                 margin:
@@ -571,8 +966,10 @@ class _CartPageState extends State<CartPage> {
                                                       8,
                                                 ),
                                                 Text(
-                                                  item['price']?.toString() ??
-                                                      'Rs. 0',
+                                                  isKrishi
+                                                      ? '${item['price']?.toString() ?? 'Rs. 0'} / $unit'
+                                                      : item['price']?.toString() ??
+                                                          'Rs. 0',
                                                   style:
                                                       const TextStyle(
                                                     color:
@@ -581,6 +978,25 @@ class _CartPageState extends State<CartPage> {
                                                         FontWeight.bold,
                                                   ),
                                                 ),
+                                                if (isKrishi) ...<Widget>[
+                                                  const SizedBox(
+                                                    height: 4,
+                                                  ),
+                                                  Text(
+                                                    stock == null
+                                                        ? 'Krishi quantity: ${_numberText(quantity)} $unit'
+                                                        : 'Selected: ${_numberText(quantity)} $unit • Available: ${_numberText(stock)} $unit',
+                                                    maxLines: 2,
+                                                    overflow:
+                                                        TextOverflow.ellipsis,
+                                                    style:
+                                                        const TextStyle(
+                                                      fontSize: 12,
+                                                      color:
+                                                          Colors.black54,
+                                                    ),
+                                                  ),
+                                                ],
                                               ],
                                             ),
                                           ),
@@ -608,10 +1024,12 @@ class _CartPageState extends State<CartPage> {
                                                 .spaceBetween,
                                         children:
                                             <Widget>[
-                                          const Text(
-                                            'Quantity',
+                                          Text(
+                                            isKrishi
+                                                ? 'Quantity ($unit)'
+                                                : 'Quantity',
                                             style:
-                                                TextStyle(
+                                                const TextStyle(
                                               fontWeight:
                                                   FontWeight.w500,
                                             ),
@@ -633,17 +1051,38 @@ class _CartPageState extends State<CartPage> {
                                                       .remove_circle_outline,
                                                 ),
                                               ),
-                                              Text(
-                                                quantity
-                                                    .toString(),
-                                                style:
-                                                    const TextStyle(
-                                                  fontSize:
-                                                      18,
-                                                  fontWeight:
-                                                      FontWeight.bold,
-                                                ),
-                                              ),
+                                              isKrishi
+                                                  ? TextButton(
+                                                      onPressed:
+                                                          () {
+                                                        _editKrishiQuantity(
+                                                          index,
+                                                        );
+                                                      },
+                                                      child:
+                                                          Text(
+                                                        '${_numberText(quantity)} $unit',
+                                                        style:
+                                                            const TextStyle(
+                                                          fontSize:
+                                                              17,
+                                                          fontWeight:
+                                                              FontWeight.bold,
+                                                        ),
+                                                      ),
+                                                    )
+                                                  : Text(
+                                                      quantity
+                                                          .round()
+                                                          .toString(),
+                                                      style:
+                                                          const TextStyle(
+                                                        fontSize:
+                                                            18,
+                                                        fontWeight:
+                                                            FontWeight.bold,
+                                                      ),
+                                                    ),
                                               IconButton(
                                                 onPressed:
                                                     () {

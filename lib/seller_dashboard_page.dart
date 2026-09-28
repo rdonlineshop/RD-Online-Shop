@@ -6,6 +6,7 @@ import 'seller_auth_page.dart';
 import 'seller_product_page.dart';
 import 'seller_shop_profile_page.dart';
 import 'seller_order_page.dart';
+import 'seller_wallet_page.dart';
 
 class SellerDashboardPage extends StatelessWidget {
   const SellerDashboardPage({super.key});
@@ -773,13 +774,16 @@ class SellerDashboardPage extends StatelessWidget {
                     color:
                         Colors.green,
                     title:
-                        'Earnings',
+                        'Wallet & Earnings',
                     subtitle:
-                        'Sales, commission and payment report — coming soon',
+                        'Sales, pending settlement, paid amount and payment history',
                     onTap: () {
-                      _comingSoon(
+                      Navigator.push<void>(
                         context,
-                        'Earnings',
+                        MaterialPageRoute<void>(
+                          builder: (_) =>
+                              const SellerWalletPage(),
+                        ),
                       );
                     },
                   ),
@@ -859,17 +863,4 @@ class SellerDashboardPage extends StatelessWidget {
     );
   }
 
-  static void _comingSoon(
-    BuildContext context,
-    String feature,
-  ) {
-    ScaffoldMessenger.of(context)
-        .showSnackBar(
-      SnackBar(
-        content: Text(
-          '$feature will be available soon.',
-        ),
-      ),
-    );
-  }
 }

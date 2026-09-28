@@ -22,6 +22,9 @@ CollectionReference<Map<String, dynamic>> get _customersCollection =>
 CollectionReference<Map<String, dynamic>> get _customerDeviceLinksCollection =>
     FirebaseFirestore.instance.collection('customer_device_links');
 
+CollectionReference<Map<String, dynamic>> get _adminDeletedOrdersCollection =>
+    FirebaseFirestore.instance.collection('admin_deleted_orders');
+
 StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _ordersSubscription;
 bool _ordersListenerStarted = false;
 String _ordersListenerCustomerId = '';
@@ -363,6 +366,266 @@ Map<String, dynamic> _safeMap(Map<String, dynamic> data) {
   );
 }
 
+double? _deliveryNumber(dynamic value) {
+  if (value is num) {
+    return value.toDouble();
+  }
+
+  if (value is String) {
+    return double.tryParse(value.trim());
+  }
+
+  if (value is Map) {
+    final dynamic latitude = value['latitude'] ?? value['lat'];
+    if (latitude is num) {
+      return latitude.toDouble();
+    }
+    if (latitude != null) {
+      return double.tryParse(latitude.toString());
+    }
+  }
+
+  return null;
+}
+
+double _deliveryDistanceKm(
+  double lat1,
+  double lon1,
+  double lat2,
+  double lon2,
+) {
+  const double earthRadiusKm = 6371.0;
+
+  double radians(double degree) => degree * pi / 180.0;
+
+  final double dLat = radians(lat2 - lat1);
+  final double dLon = radians(lon2 - lon1);
+
+  final double a = sin(dLat / 2) * sin(dLat / 2) +
+      cos(radians(lat1)) *
+          cos(radians(lat2)) *
+          sin(dLon / 2) *
+          sin(dLon / 2);
+
+  final double c = 2 * atan2(sqrt(a), sqrt(1 - a));
+  return earthRadiusKm * c;
+}
+
+Future<void> _ensureAutomaticKrishiDeliveryPool(
+  Map<String, dynamic> order,
+) async {
+  final String orderId = order['id']?.toString().trim() ?? '';
+  if (orderId.isEmpty) {
+    return;
+  }
+
+  final String status = order['status']?.toString().trim() ?? 'Pending';
+  if (<String>['Shipped', 'Delivered', 'Cancelled', 'Returned']
+      .contains(status)) {
+    return;
+  }
+
+  if (order['pickupConfirmed'] == true ||
+      (order['driverId']?.toString().trim() ?? '').isNotEmpty) {
+    return;
+  }
+
+  final Set<String> sellerIds = <String>{};
+  final dynamic rawSellerIds = order['sellerIds'];
+  if (rawSellerIds is List) {
+    for (final dynamic value in rawSellerIds) {
+      final String sellerId = value?.toString().trim() ?? '';
+      if (sellerId.isNotEmpty) {
+        sellerIds.add(sellerId);
+      }
+    }
+  }
+
+  final dynamic rawItems = order['items'];
+  if (rawItems is List) {
+    for (final dynamic raw in rawItems) {
+      if (raw is! Map) {
+        continue;
+      }
+      final String sellerId = raw['sellerId']?.toString().trim() ?? '';
+      if (sellerId.isNotEmpty) {
+        sellerIds.add(sellerId);
+      }
+    }
+  }
+
+  // Keep one sanitized nearby-pickup record tied to one physical farm.
+  // Multi-seller checkout remains untouched by this automatic discovery step.
+  if (sellerIds.length != 1) {
+    return;
+  }
+
+  final String sellerId = sellerIds.first;
+
+  try {
+    final DocumentReference<Map<String, dynamic>> poolRef =
+        FirebaseFirestore.instance
+            .collection('krishi_delivery_pool')
+            .doc(orderId);
+
+    final DocumentSnapshot<Map<String, dynamic>> existing =
+        await poolRef.get();
+
+    // Respect a seller stop, an existing reservation, or any existing pool
+    // state. Automatic discovery only creates the missing sanitized record.
+    if (existing.exists) {
+      return;
+    }
+
+    final DocumentSnapshot<Map<String, dynamic>> sellerSnapshot =
+        await FirebaseFirestore.instance
+            .collection('sellers')
+            .doc(sellerId)
+            .get();
+
+    if (!sellerSnapshot.exists) {
+      return;
+    }
+
+    final Map<String, dynamic> seller =
+        sellerSnapshot.data() ?? <String, dynamic>{};
+
+    final String sellerType =
+        seller['sellerType']?.toString().trim().toLowerCase() ?? '';
+    final String marketplace =
+        seller['marketplace']?.toString().trim().toLowerCase() ?? '';
+    final bool krishiSeller = seller['krishiSeller'] == true ||
+        sellerType == 'krishi' ||
+        marketplace == 'krishi';
+
+    if (!krishiSeller) {
+      return;
+    }
+
+    String farmName = seller['shopName']?.toString().trim() ??
+        seller['farmName']?.toString().trim() ??
+        'Krishi Farm';
+    String farmAddress = seller['address']?.toString().trim() ??
+        seller['shopAddress']?.toString().trim() ??
+        '';
+    final String farmPhone = seller['phone']?.toString().trim() ??
+        seller['mobile']?.toString().trim() ??
+        '';
+
+    double? farmLat = _deliveryNumber(
+      seller['shopLat'] ??
+          seller['shopLatitude'] ??
+          seller['latitude'] ??
+          seller['lat'],
+    );
+    double? farmLng = _deliveryNumber(
+      seller['shopLng'] ??
+          seller['shopLongitude'] ??
+          seller['longitude'] ??
+          seller['lng'],
+    );
+
+    final dynamic shopLocation = seller['shopLocation'];
+    if (shopLocation is GeoPoint) {
+      farmLat ??= shopLocation.latitude;
+      farmLng ??= shopLocation.longitude;
+    } else if (shopLocation is Map) {
+      farmLat ??= _deliveryNumber(
+        shopLocation['latitude'] ?? shopLocation['lat'],
+      );
+      farmLng ??= _deliveryNumber(
+        shopLocation['longitude'] ?? shopLocation['lng'],
+      );
+    }
+
+    int itemCount = 0;
+    if (rawItems is List) {
+      for (final dynamic raw in rawItems) {
+        if (raw is! Map) {
+          continue;
+        }
+
+        final String itemSellerId =
+            raw['sellerId']?.toString().trim() ?? '';
+        if (itemSellerId != sellerId) {
+          continue;
+        }
+
+        itemCount++;
+        if (farmName == 'Krishi Farm') {
+          final String itemFarmName =
+              raw['sellerShopName']?.toString().trim() ?? '';
+          if (itemFarmName.isNotEmpty) {
+            farmName = itemFarmName;
+          }
+        }
+
+        farmLat ??= _deliveryNumber(raw['sellerLatitude']);
+        farmLng ??= _deliveryNumber(raw['sellerLongitude']);
+      }
+    }
+
+    if (farmLat == null || farmLng == null) {
+      return;
+    }
+
+    final double? customerLat = _deliveryNumber(
+      order['customerLat'] ?? order['latitude'],
+    );
+    final double? customerLng = _deliveryNumber(
+      order['customerLng'] ?? order['longitude'],
+    );
+
+    final double? farmToCustomerKm =
+        customerLat != null && customerLng != null
+            ? _deliveryDistanceKm(
+                farmLat,
+                farmLng,
+                customerLat,
+                customerLng,
+              )
+            : null;
+
+    await poolRef.set(
+      <String, dynamic>{
+        'orderId': orderId,
+        'sellerId': sellerId,
+        'marketplace': 'krishi',
+        'farmName': farmName.isEmpty ? 'Krishi Farm' : farmName,
+        'farmAddress': farmAddress,
+        'farmPhone': farmPhone,
+        'farmLat': farmLat,
+        'farmLng': farmLng,
+        // Customer GPS is intentionally shared in the nearby delivery pool
+        // so an online delivery person can preview the complete route:
+        // Driver -> Farm -> Customer. Phone/text address remain private.
+        'customerLat': customerLat,
+        'customerLng': customerLng,
+        'farmToCustomerKm': farmToCustomerKm,
+        'itemCount': itemCount,
+        'orderAmount': order['amount']?.toString().trim() ?? '',
+        'readyForPickup': true,
+        'active': true,
+        'state': 'available',
+        'reservationKey': '',
+        'reservedDriverId': '',
+        'reservedDriverName': '',
+        'reservedDriverPhone': '',
+        'reservedDriverEmail': '',
+        'reservedAt': null,
+        'reservationExpiresAt': null,
+        'createdAt': FieldValue.serverTimestamp(),
+        'updatedAt': FieldValue.serverTimestamp(),
+      },
+      SetOptions(merge: false),
+    );
+  } catch (error) {
+    debugPrint(
+      'KRISHI AUTO DELIVERY POOL: could not publish $orderId: $error',
+    );
+  }
+}
+
 String _trackingStatusForOrderStatus(String status) {
   switch (status) {
     case 'Pending':
@@ -596,6 +859,35 @@ Future<void> saveOrders() async {
   // Older RD builds may still have recoverable orders in that legacy backup.
 }
 
+
+Future<Set<String>> _adminDeletedOrderIdsForCustomer(
+  String customerId,
+) async {
+  final String cleanCustomerId = customerId.trim();
+
+  if (cleanCustomerId.isEmpty) {
+    return <String>{};
+  }
+
+  try {
+    final QuerySnapshot<Map<String, dynamic>> snapshot =
+        await _adminDeletedOrdersCollection
+            .where(
+              'customerId',
+              isEqualTo: cleanCustomerId,
+            )
+            .get();
+
+    return snapshot.docs
+        .map((QueryDocumentSnapshot<Map<String, dynamic>> doc) => doc.id)
+        .toSet();
+  } catch (_) {
+    // If the tombstone check is temporarily unavailable, keep the existing
+    // local backup behavior. A later successful sync will apply the deletion.
+    return <String>{};
+  }
+}
+
 Future<void> _startOrdersListener() async {
   final User? user = FirebaseAuth.instance.currentUser;
 
@@ -640,17 +932,21 @@ Future<void> _startOrdersListener() async {
           )
           .toList();
 
+      final Set<String> adminDeletedIds =
+          await _adminDeletedOrderIdsForCustomer(customerId);
+
       final Map<String, Map<String, dynamic>> mergedById =
           <String, Map<String, dynamic>>{};
 
-      // Keep local/recovered orders first.
+      // Keep local/recovered orders first, except orders explicitly and
+      // permanently deleted by Admin.
       for (final Map<String, dynamic> localOrder in orderHistory) {
         if (localOrder['customerId']?.toString().trim() != customerId) {
           continue;
         }
 
         final String id = localOrder['id']?.toString().trim() ?? '';
-        if (id.isNotEmpty) {
+        if (id.isNotEmpty && !adminDeletedIds.contains(id)) {
           mergedById[id] = _normalizeOrder(localOrder);
         }
       }
@@ -658,7 +954,7 @@ Future<void> _startOrdersListener() async {
       // Firestore is authoritative for an order that exists in both places.
       for (final Map<String, dynamic> cloudOrder in cloudOrders) {
         final String id = cloudOrder['id']?.toString().trim() ?? '';
-        if (id.isNotEmpty) {
+        if (id.isNotEmpty && !adminDeletedIds.contains(id)) {
           mergedById[id] = cloudOrder;
         }
       }
@@ -666,6 +962,15 @@ Future<void> _startOrdersListener() async {
       orderHistory = mergedById.values.toList();
       _sortOrders();
       await saveOrders();
+
+      // Krishi customer orders are discoverable by nearby delivery persons
+      // automatically. This is sanitized and does not expose the customer's
+      // exact phone/address/location before verified farm pickup.
+      for (final Map<String, dynamic> cloudOrder in cloudOrders) {
+        unawaited(
+          _ensureAutomaticKrishiDeliveryPool(cloudOrder),
+        );
+      }
     },
     onError: (Object error) {
       // Keep local backup visible if Firestore is temporarily unavailable.
@@ -761,6 +1066,11 @@ Future<void> addOrder(Map<String, dynamic> newOrder) async {
         _safeMap(order),
         SetOptions(merge: true),
       );
+
+  // A single-farm Krishi order is published to the nearby delivery pool
+  // immediately after the customer order is safely stored. Seller action is
+  // optional; the seller can still stop or republish the pool later.
+  await _ensureAutomaticKrishiDeliveryPool(order);
 }
 
 Future<void> updateOrderStatus(String orderId, String newStatus) async {
@@ -1004,6 +1314,78 @@ Stream<List<Map<String, dynamic>>> sellerOrdersStream(String sellerId) {
     orders.sort(_orderSort);
     return orders;
   });
+}
+
+
+/// Permanently removes one operational order from Firestore for Admin.
+///
+/// A small Admin-only tombstone is kept so a customer's old local backup
+/// cannot make the deleted order appear again on that device. The tombstone
+/// is not an active order and is not used by Seller/Customer earnings.
+Future<void> adminPermanentlyDeleteOrder(
+  String orderId,
+) async {
+  final String cleanOrderId = orderId.trim();
+
+  if (cleanOrderId.isEmpty) {
+    throw ArgumentError('Order ID cannot be empty.');
+  }
+
+  final User? adminUser = FirebaseAuth.instance.currentUser;
+  if (adminUser == null || adminUser.isAnonymous) {
+    throw StateError('Active Admin login is required.');
+  }
+
+  final DocumentReference<Map<String, dynamic>> orderRef =
+      _ordersCollection.doc(cleanOrderId);
+
+  final DocumentSnapshot<Map<String, dynamic>> snapshot =
+      await orderRef.get();
+
+  if (!snapshot.exists) {
+    return;
+  }
+
+  final Map<String, dynamic> data =
+      snapshot.data() ?? <String, dynamic>{};
+
+  final String customerId =
+      data['customerId']?.toString().trim() ?? '';
+
+  final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+  batch.set(
+    _adminDeletedOrdersCollection.doc(cleanOrderId),
+    <String, dynamic>{
+      'orderId': cleanOrderId,
+      'customerId': customerId,
+      'sellerIds': data['sellerIds'] is List
+          ? List<dynamic>.from(data['sellerIds'] as List)
+          : <dynamic>[],
+      'status': data['status']?.toString() ?? '',
+      'amount': data['amount'],
+      'payment': data['payment'],
+      'orderDateTime': data['orderDateTime'],
+      'deletedByUid': adminUser.uid,
+      'deletedAt': FieldValue.serverTimestamp(),
+      'recordType': 'order_tombstone',
+    },
+    SetOptions(merge: true),
+  );
+
+  batch.delete(orderRef);
+
+  await batch.commit();
+
+  final int before = orderHistory.length;
+  orderHistory.removeWhere(
+    (Map<String, dynamic> order) =>
+        order['id']?.toString().trim() == cleanOrderId,
+  );
+
+  if (orderHistory.length != before) {
+    await saveOrders();
+  }
 }
 
 // Admin must read ALL orders directly from Firestore, not customer orderHistory.

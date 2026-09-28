@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 import 'package:qr_flutter/qr_flutter.dart';
@@ -7,7 +9,12 @@ import 'order_data.dart';
 import 'tracking/order_tracking_page.dart';
 
 class OrderHistoryPage extends StatefulWidget {
-  const OrderHistoryPage({super.key});
+  const OrderHistoryPage({
+    super.key,
+    this.krishiOnly = false,
+  });
+
+  final bool krishiOnly;
 
   @override
   State<OrderHistoryPage> createState() =>
@@ -18,6 +25,9 @@ class _OrderHistoryPageState
     extends State<OrderHistoryPage> {
   bool isLoading = true;
   String currentCustomerId = '';
+  StreamSubscription<List<Map<String, dynamic>>>?
+      _customerOrdersSubscription;
+  final Set<String> _krishiSellerIds = <String>{};
 
   @override
   void initState() {
@@ -33,16 +43,133 @@ class _OrderHistoryPageState
     final String customerId =
         await getOrCreateCustomerId();
 
-    await loadOrders();
-
     if (!mounted) {
       return;
     }
 
+    // Show the page immediately with the current customer identity.
+    // Network refresh, Firestore status sync and the legacy Krishi-seller
+    // fallback must never keep My Orders stuck on a loading spinner.
     setState(() {
       currentCustomerId = customerId;
       isLoading = false;
     });
+
+    unawaited(_refreshOrdersInBackground(customerId));
+  }
+
+  Future<void> _refreshOrdersInBackground(
+    String customerId,
+  ) async {
+    try {
+      await loadOrders();
+
+      if (widget.krishiOnly) {
+        await _loadKrishiSellerIds().timeout(
+          const Duration(seconds: 8),
+        );
+      }
+
+      await _startCustomerOrderSync(customerId);
+    } catch (_) {
+      // Keep the local customer order backup visible. Realtime sync can
+      // recover automatically when Firestore/network access is available.
+    }
+
+    if (mounted) {
+      setState(() {});
+    }
+  }
+
+  Future<void> _loadKrishiSellerIds() async {
+    try {
+      final QuerySnapshot<Map<String, dynamic>> snapshot =
+          await FirebaseFirestore.instance
+              .collection('sellers')
+              .where('sellerType', isEqualTo: 'krishi')
+              .get();
+
+      _krishiSellerIds
+        ..clear()
+        ..addAll(
+          snapshot.docs.map((QueryDocumentSnapshot<Map<String, dynamic>> doc) => doc.id),
+        );
+    } catch (_) {
+      // New Krishi orders carry marketplace markers, so seller lookup is only
+      // a compatibility fallback for older Krishi orders.
+    }
+  }
+
+  Future<void> _startCustomerOrderSync(
+    String customerId,
+  ) async {
+    await _customerOrdersSubscription?.cancel();
+
+    _customerOrdersSubscription =
+        customerOrdersStream(customerId).listen(
+      (List<Map<String, dynamic>> cloudOrders) async {
+        final Map<String, Map<String, dynamic>> mergedById =
+            <String, Map<String, dynamic>>{};
+
+        for (final Map<String, dynamic> localOrder in orderHistory) {
+          if (localOrder['customerId']?.toString().trim() !=
+              customerId.trim()) {
+            continue;
+          }
+
+          final String id =
+              localOrder['id']?.toString().trim() ?? '';
+          if (id.isNotEmpty) {
+            mergedById[id] = localOrder;
+          }
+        }
+
+        // Firestore is authoritative for status/tracking updates.
+        for (final Map<String, dynamic> cloudOrder in cloudOrders) {
+          final String id =
+              cloudOrder['id']?.toString().trim() ?? '';
+          if (id.isNotEmpty) {
+            mergedById[id] = cloudOrder;
+          }
+        }
+
+        orderHistory = mergedById.values.toList()
+          ..sort(
+            (Map<String, dynamic> first,
+                Map<String, dynamic> second) {
+              final DateTime? firstDate = DateTime.tryParse(
+                first['orderDateTime']?.toString() ?? '',
+              );
+              final DateTime? secondDate = DateTime.tryParse(
+                second['orderDateTime']?.toString() ?? '',
+              );
+
+              if (firstDate == null && secondDate == null) return 0;
+              if (firstDate == null) return 1;
+              if (secondDate == null) return -1;
+              return secondDate.compareTo(firstDate);
+            },
+          );
+
+        await saveOrders();
+
+        if (mounted) {
+          setState(() {
+            isLoading = false;
+          });
+        }
+      },
+      onError: (Object error) {
+        // Keep the customer-specific local backup visible if Firestore
+        // is temporarily unavailable or the active role cannot read it.
+      },
+    );
+  }
+
+  @override
+  void dispose() {
+    _customerOrdersSubscription?.cancel();
+    super.dispose();
   }
 
   List<Map<String, dynamic>>
@@ -59,10 +186,142 @@ class _OrderHistoryPageState
                     .trim() ??
                 '';
 
-        return orderCustomerId ==
-            currentCustomerId;
+        if (orderCustomerId != currentCustomerId) {
+          return false;
+        }
+
+        if (widget.krishiOnly && !_isKrishiOrder(order)) {
+          return false;
+        }
+
+        return true;
       },
     ).toList();
+  }
+
+  bool _isKrishiOrder(
+    Map<String, dynamic> order,
+  ) {
+    final String marketplace =
+        order['marketplace']?.toString().trim().toLowerCase() ?? '';
+
+    if (marketplace == 'krishi') {
+      return true;
+    }
+
+    if (marketplace == 'online_shop' || marketplace == 'mixed') {
+      return false;
+    }
+
+    final dynamic rawItems = order['items'];
+    bool foundItem = false;
+    bool foundUnclassifiedItem = false;
+
+    if (rawItems is List) {
+      for (final dynamic rawItem in rawItems) {
+        if (rawItem is! Map) {
+          continue;
+        }
+
+        foundItem = true;
+
+        final String itemMarketplace =
+            rawItem['marketplace']?.toString().trim().toLowerCase() ?? '';
+        final String productType =
+            rawItem['productType']?.toString().trim().toLowerCase() ?? '';
+        final String sellerType =
+            rawItem['sellerType']?.toString().trim().toLowerCase() ?? '';
+
+        final bool hasClassification = itemMarketplace.isNotEmpty ||
+            productType.isNotEmpty ||
+            sellerType.isNotEmpty;
+
+        if (!hasClassification) {
+          foundUnclassifiedItem = true;
+          continue;
+        }
+
+        final bool isKrishiItem = itemMarketplace == 'krishi' ||
+            productType == 'krishi' ||
+            productType == 'agriculture' ||
+            sellerType == 'krishi';
+
+        if (!isKrishiItem) {
+          return false;
+        }
+      }
+    }
+
+    // New orders mark every Krishi item explicitly.
+    if (foundItem && !foundUnclassifiedItem) {
+      return true;
+    }
+
+    // Compatibility fallback for Krishi orders placed before marketplace
+    // metadata was added to cart/checkout.
+    final Set<String> orderSellerIds = <String>{};
+
+    final dynamic rawSellerIds = order['sellerIds'];
+    if (rawSellerIds is List) {
+      for (final dynamic value in rawSellerIds) {
+        final String sellerId = value?.toString().trim() ?? '';
+        if (sellerId.isNotEmpty) {
+          orderSellerIds.add(sellerId);
+        }
+      }
+    }
+
+    if (rawItems is List) {
+      for (final dynamic rawItem in rawItems) {
+        if (rawItem is Map) {
+          final String sellerId =
+              rawItem['sellerId']?.toString().trim() ?? '';
+          if (sellerId.isNotEmpty) {
+            orderSellerIds.add(sellerId);
+          }
+        }
+      }
+    }
+
+    if (orderSellerIds.isNotEmpty &&
+        orderSellerIds.every(_krishiSellerIds.contains)) {
+      return true;
+    }
+
+    return order['containsKrishiItems'] == true;
+  }
+
+  String _displayStatus(
+    Map<String, dynamic> order,
+  ) {
+    final String status =
+        order['status']?.toString().trim() ?? 'Pending';
+    final String trackingStatus =
+        order['trackingStatus']?.toString().trim() ?? '';
+    final String deliveredAt =
+        order['deliveredAt']?.toString().trim() ?? '';
+
+    if (status == 'Delivered' ||
+        trackingStatus == 'Delivered' ||
+        order['deliveryOtpVerified'] == true ||
+        deliveredAt.isNotEmpty) {
+      return 'Delivered';
+    }
+
+    return status.isEmpty ? 'Pending' : status;
+  }
+
+  String _displayTrackingStatus(
+    Map<String, dynamic> order,
+  ) {
+    if (_displayStatus(order) == 'Delivered') {
+      return 'Delivered';
+    }
+
+    final String trackingStatus =
+        order['trackingStatus']?.toString().trim() ?? '';
+
+    return trackingStatus.isEmpty ? 'Order Placed' : trackingStatus;
   }
 
   // =========================================================
@@ -1199,10 +1458,7 @@ class _OrderHistoryPageState
         _toDouble(order['driverLng']);
 
     final String trackingStatus =
-        order['trackingStatus']
-                ?.toString()
-                .trim() ??
-            'Order Placed';
+        _displayTrackingStatus(order);
 
     final String lastUpdated =
         order['driverLocationUpdatedAt']
@@ -1388,10 +1644,7 @@ class _OrderHistoryPageState
             true;
 
     final String status =
-        order['status']
-                ?.toString()
-                .trim() ??
-            'Pending';
+        _displayStatus(order);
 
     final String method =
         order['deliveryConfirmationMethod']
@@ -1816,9 +2069,9 @@ class _OrderHistoryPageState
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'My Orders',
-          style: TextStyle(
+        title: Text(
+          widget.krishiOnly ? 'Krishi My Orders' : 'My Orders',
+          style: const TextStyle(
             fontWeight: FontWeight.bold,
           ),
         ),
@@ -1895,16 +2148,10 @@ class _OrderHistoryPageState
                       );
 
                       final String status =
-                          (order['status'] ??
-                                  'Pending')
-                              .toString();
+                          _displayStatus(order);
 
-                      final String
-                          trackingStatus =
-                          (order[
-                                      'trackingStatus'] ??
-                                  'Order Placed')
-                              .toString();
+                      final String trackingStatus =
+                          _displayTrackingStatus(order);
 
                       final double?
                           customerLat =
