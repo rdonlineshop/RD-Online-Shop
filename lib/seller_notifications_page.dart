@@ -1,7 +1,11 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
+import 'seller_order_page.dart';
 
 class SellerNotificationsPage extends StatefulWidget {
   const SellerNotificationsPage({super.key});
@@ -18,6 +22,26 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
   Set<String> _readKeys = <String>{};
   bool _isLoading = true;
   String _loadError = '';
+
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
+      _krishiPoolSubscription;
+
+  final Map<
+      String,
+      StreamSubscription<
+          QuerySnapshot<
+              Map<String, dynamic>>>> _pickupRequestSubscriptions =
+      <String,
+          StreamSubscription<
+              QuerySnapshot<
+                  Map<String, dynamic>>>>{};
+
+  final Map<String, List<Map<String, dynamic>>>
+      _pickupNotificationsByOrder =
+      <String, List<Map<String, dynamic>>>{};
+
+  List<Map<String, dynamic>> _pickupNotifications =
+      <Map<String, dynamic>>[];
 
   @override
   void initState() {
@@ -47,6 +71,10 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
         _readKeys = saved.toSet();
         _isLoading = false;
       });
+
+      _startPickupRequestNotifications(
+        user.uid,
+      );
     } catch (error) {
       if (!mounted) {
         return;
@@ -57,6 +85,257 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
         _isLoading = false;
       });
     }
+  }
+
+  void _startPickupRequestNotifications(
+    String sellerId,
+  ) {
+    if (sellerId.trim().isEmpty) {
+      return;
+    }
+
+    _krishiPoolSubscription =
+        FirebaseFirestore.instance
+            .collection(
+              'krishi_delivery_pool',
+            )
+            .where(
+              'sellerId',
+              isEqualTo: sellerId,
+            )
+            .snapshots()
+            .listen(
+      (
+        QuerySnapshot<Map<String, dynamic>>
+            snapshot,
+      ) {
+        final Set<String> activeOrderIds =
+            snapshot.docs
+                .map(
+                  (
+                    QueryDocumentSnapshot<
+                            Map<String, dynamic>>
+                        document,
+                  ) =>
+                      document.id,
+                )
+                .toSet();
+
+        final List<String> removedOrderIds =
+            _pickupRequestSubscriptions.keys
+                .where(
+                  (String orderId) =>
+                      !activeOrderIds.contains(
+                    orderId,
+                  ),
+                )
+                .toList();
+
+        for (final String orderId
+            in removedOrderIds) {
+          final StreamSubscription<
+                  QuerySnapshot<
+                      Map<String, dynamic>>>?
+              subscription =
+              _pickupRequestSubscriptions
+                  .remove(
+            orderId,
+          );
+
+          if (subscription != null) {
+            unawaited(
+              subscription.cancel(),
+            );
+          }
+
+          _pickupNotificationsByOrder
+              .remove(
+            orderId,
+          );
+        }
+
+        for (final QueryDocumentSnapshot<
+                Map<String, dynamic>>
+            document in snapshot.docs) {
+          if (_pickupRequestSubscriptions
+              .containsKey(
+            document.id,
+          )) {
+            continue;
+          }
+
+          _listenToPickupRequests(
+            document.id,
+          );
+        }
+
+        _refreshPickupNotifications();
+      },
+      onError: (Object _) {
+        // Admin notifications stay available even if the
+        // Krishi pickup feed cannot be refreshed.
+      },
+    );
+  }
+
+  void _listenToPickupRequests(
+    String orderId,
+  ) {
+    _pickupRequestSubscriptions[orderId] =
+        FirebaseFirestore.instance
+            .collection(
+              'krishi_delivery_pool',
+            )
+            .doc(orderId)
+            .collection(
+              'pickup_requests',
+            )
+            .snapshots()
+            .listen(
+      (
+        QuerySnapshot<Map<String, dynamic>>
+            snapshot,
+      ) {
+        final List<Map<String, dynamic>>
+            pending = snapshot.docs
+                .where(
+                  (
+                    QueryDocumentSnapshot<
+                            Map<String, dynamic>>
+                        document,
+                  ) {
+                    final Map<String, dynamic>
+                        data =
+                        document.data();
+
+                    return data[
+                                'requestedBy'] ==
+                            'driver' &&
+                        data['status'] ==
+                            'pending_seller';
+                  },
+                )
+                .map(
+                  (
+                    QueryDocumentSnapshot<
+                            Map<String, dynamic>>
+                        document,
+                  ) {
+                    final Map<String, dynamic>
+                        data =
+                        Map<String, dynamic>.from(
+                      document.data(),
+                    );
+
+                    final String driverId =
+                        data['driverId']
+                                ?.toString()
+                                .trim() ??
+                            document.id;
+
+                    final String driverName =
+                        data['driverName']
+                                ?.toString()
+                                .trim() ??
+                            'Delivery Person';
+
+                    final DateTime? requestDate =
+                        _dateFromValue(
+                              data['createdAt'],
+                            ) ??
+                            _dateFromValue(
+                              data['updatedAt'],
+                            );
+
+                    final String requestStamp =
+                        requestDate
+                                ?.millisecondsSinceEpoch
+                                .toString() ??
+                            'active';
+
+                    return <String, dynamic>{
+                      ...data,
+                      'notificationId':
+                          'pickup:$orderId:$driverId:$requestStamp',
+                      'title':
+                          'Delivery Pickup Request',
+                      'message':
+                          '$driverName requested pickup for Order $orderId. Open My Orders to Accept or Reject.',
+                      'contentType':
+                          'pickup_request',
+                      'orderId':
+                          orderId,
+                      'driverId':
+                          driverId,
+                      'createdAt':
+                          data['createdAt'] ??
+                              data['updatedAt'],
+                      'sourceLabel':
+                          'Krishi Delivery',
+                    };
+                  },
+                )
+                .toList();
+
+        _pickupNotificationsByOrder[
+                orderId] =
+            pending;
+
+        _refreshPickupNotifications();
+      },
+      onError: (Object _) {
+        _pickupNotificationsByOrder[
+                orderId] =
+            <Map<String, dynamic>>[];
+
+        _refreshPickupNotifications();
+      },
+    );
+  }
+
+  void _refreshPickupNotifications() {
+    final List<Map<String, dynamic>>
+        next =
+        _pickupNotificationsByOrder.values
+            .expand(
+              (
+                List<Map<String, dynamic>>
+                    items,
+              ) =>
+                  items,
+            )
+            .toList();
+
+    if (!mounted) {
+      return;
+    }
+
+    setState(() {
+      _pickupNotifications =
+          next;
+    });
+  }
+
+  @override
+  void dispose() {
+    unawaited(
+      _krishiPoolSubscription
+              ?.cancel() ??
+          Future<void>.value(),
+    );
+
+    for (final StreamSubscription<
+            QuerySnapshot<
+                Map<String, dynamic>>>
+        subscription
+        in _pickupRequestSubscriptions
+            .values) {
+      unawaited(
+        subscription.cancel(),
+      );
+    }
+
+    super.dispose();
   }
 
   Future<void> _saveReadKeys(Set<String> keys) async {
@@ -167,12 +446,17 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
   List<Map<String, dynamic>> _mergeNotifications(
     List<Map<String, dynamic>> broadcast,
     List<Map<String, dynamic>> targeted,
+    List<Map<String, dynamic>> pickupRequests,
   ) {
     final Map<String, Map<String, dynamic>> unique =
         <String, Map<String, dynamic>>{};
 
     for (final Map<String, dynamic> notification
-        in <Map<String, dynamic>>[...broadcast, ...targeted]) {
+        in <Map<String, dynamic>>[
+          ...broadcast,
+          ...targeted,
+          ...pickupRequests,
+        ]) {
       final String id =
           notification['notificationId']?.toString().trim() ?? '';
 
@@ -263,6 +547,12 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
         notification['mediaUrl']?.toString().trim() ?? '';
     final String actionUrl =
         notification['actionUrl']?.toString().trim() ?? '';
+    final String contentType =
+        notification['contentType']?.toString().trim() ?? '';
+    final bool pickupRequest =
+        contentType == 'pickup_request';
+
+    bool openOrders = false;
 
     await showDialog<void>(
       context: context,
@@ -297,6 +587,21 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
             ),
           ),
           actions: <Widget>[
+            if (pickupRequest)
+              TextButton.icon(
+                onPressed: () {
+                  openOrders = true;
+                  Navigator.pop(
+                    dialogContext,
+                  );
+                },
+                icon: const Icon(
+                  Icons.receipt_long_rounded,
+                ),
+                label: const Text(
+                  'Open My Orders',
+                ),
+              ),
             FilledButton(
               onPressed: () => Navigator.pop(dialogContext),
               child: const Text('OK'),
@@ -305,6 +610,16 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
         );
       },
     );
+
+    if (openOrders && mounted) {
+      await Navigator.push<void>(
+        context,
+        MaterialPageRoute<void>(
+          builder: (_) =>
+              const SellerOrderPage(),
+        ),
+      );
+    }
   }
 
   IconData _iconForType(String type) {
@@ -317,6 +632,8 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
         return Icons.info_rounded;
       case 'announcement':
         return Icons.campaign_rounded;
+      case 'pickup_request':
+        return Icons.delivery_dining_rounded;
       default:
         return Icons.notifications_rounded;
     }
@@ -332,6 +649,8 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
         return Colors.indigo;
       case 'announcement':
         return Colors.red;
+      case 'pickup_request':
+        return Colors.green;
       default:
         return Colors.deepPurple;
     }
@@ -348,6 +667,12 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
         notification['message']?.toString().trim() ?? '';
     final String type =
         notification['contentType']?.toString().trim() ?? 'general';
+    final String rawSourceLabel =
+        notification['sourceLabel']?.toString().trim() ?? '';
+    final String sourceLabel =
+        rawSourceLabel.isEmpty
+            ? 'RD Online Shop'
+            : rawSourceLabel;
     final bool unread = !_readKeys.contains(id);
     final DateTime? date = _notificationDate(notification);
     final Color color = _colorForType(type);
@@ -431,7 +756,7 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
                       runSpacing: 4,
                       children: <Widget>[
                         Text(
-                          'RD Online Shop',
+                          sourceLabel,
                           style: TextStyle(
                             color: color,
                             fontSize: 11.5,
@@ -486,7 +811,7 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
             ),
             SizedBox(height: 6),
             Text(
-              'Admin announcements and seller-specific notices will appear here.',
+              'Admin announcements and Delivery Person pickup requests will appear here.',
               textAlign: TextAlign.center,
               style: TextStyle(color: Colors.grey),
             ),
@@ -627,6 +952,7 @@ class _SellerNotificationsPageState extends State<SellerNotificationsPage> {
                 _mergeNotifications(
               broadcast,
               targeted,
+              _pickupNotifications,
             );
 
             return _notificationList(notifications);

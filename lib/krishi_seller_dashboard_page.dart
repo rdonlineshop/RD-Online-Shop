@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
@@ -643,20 +645,8 @@ class KrishiSellerDashboardPage extends StatelessWidget {
         ),
         centerTitle: false,
         actions: <Widget>[
-          IconButton(
-            tooltip: 'Notifications',
-            onPressed: () {
-              Navigator.push<void>(
-                context,
-                MaterialPageRoute<void>(
-                  builder: (_) =>
-                      const SellerNotificationsPage(),
-                ),
-              );
-            },
-            icon: const Icon(
-              Icons.notifications_none_rounded,
-            ),
+          _KrishiSellerNotificationButton(
+            sellerId: user.uid,
           ),
           IconButton(
             tooltip: 'Logout',
@@ -789,7 +779,7 @@ class KrishiSellerDashboardPage extends StatelessWidget {
                     color: Colors.red,
                     title: 'Notifications',
                     subtitle:
-                        'Admin announcements and Krishi seller notices',
+                        'Admin announcements and Delivery Person pickup requests',
                     onTap: () {
                       Navigator.push<void>(
                         context,
@@ -885,3 +875,370 @@ class KrishiSellerDashboardPage extends StatelessWidget {
     );
   }
 }
+
+class _KrishiSellerNotificationButton
+    extends StatefulWidget {
+  const _KrishiSellerNotificationButton({
+    required this.sellerId,
+  });
+
+  final String sellerId;
+
+  @override
+  State<_KrishiSellerNotificationButton>
+      createState() =>
+          _KrishiSellerNotificationButtonState();
+}
+
+class _KrishiSellerNotificationButtonState
+    extends State<_KrishiSellerNotificationButton> {
+  StreamSubscription<
+          QuerySnapshot<
+              Map<String, dynamic>>>?
+      _poolSubscription;
+
+  final Map<
+      String,
+      StreamSubscription<
+          QuerySnapshot<
+              Map<String, dynamic>>>> _requestSubscriptions =
+      <String,
+          StreamSubscription<
+              QuerySnapshot<
+                  Map<String, dynamic>>>>{};
+
+  final Map<String, int>
+      _pendingByOrder =
+      <String, int>{};
+
+  int _pendingCount = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    _start();
+  }
+
+  @override
+  void didUpdateWidget(
+    covariant _KrishiSellerNotificationButton
+        oldWidget,
+  ) {
+    super.didUpdateWidget(
+      oldWidget,
+    );
+
+    if (oldWidget.sellerId !=
+        widget.sellerId) {
+      unawaited(
+        _restart(),
+      );
+    }
+  }
+
+  void _start() {
+    final String sellerId =
+        widget.sellerId.trim();
+
+    if (sellerId.isEmpty) {
+      return;
+    }
+
+    _poolSubscription =
+        FirebaseFirestore.instance
+            .collection(
+              'krishi_delivery_pool',
+            )
+            .where(
+              'sellerId',
+              isEqualTo: sellerId,
+            )
+            .snapshots()
+            .listen(
+      (
+        QuerySnapshot<Map<String, dynamic>>
+            snapshot,
+      ) {
+        final Set<String> orderIds =
+            snapshot.docs
+                .map(
+                  (
+                    QueryDocumentSnapshot<
+                            Map<String, dynamic>>
+                        document,
+                  ) =>
+                      document.id,
+                )
+                .toSet();
+
+        final List<String> removed =
+            _requestSubscriptions.keys
+                .where(
+                  (String orderId) =>
+                      !orderIds.contains(
+                    orderId,
+                  ),
+                )
+                .toList();
+
+        for (final String orderId
+            in removed) {
+          final StreamSubscription<
+                  QuerySnapshot<
+                      Map<String, dynamic>>>?
+              subscription =
+              _requestSubscriptions
+                  .remove(
+            orderId,
+          );
+
+          if (subscription != null) {
+            unawaited(
+              subscription.cancel(),
+            );
+          }
+
+          _pendingByOrder.remove(
+            orderId,
+          );
+        }
+
+        for (final QueryDocumentSnapshot<
+                Map<String, dynamic>>
+            document in snapshot.docs) {
+          if (_requestSubscriptions
+              .containsKey(
+            document.id,
+          )) {
+            continue;
+          }
+
+          _listenToOrder(
+            document.id,
+          );
+        }
+
+        _refreshCount();
+      },
+      onError: (Object _) {
+        // Keep the dashboard usable if the optional badge cannot refresh.
+      },
+    );
+  }
+
+  void _listenToOrder(
+    String orderId,
+  ) {
+    _requestSubscriptions[orderId] =
+        FirebaseFirestore.instance
+            .collection(
+              'krishi_delivery_pool',
+            )
+            .doc(orderId)
+            .collection(
+              'pickup_requests',
+            )
+            .snapshots()
+            .listen(
+      (
+        QuerySnapshot<Map<String, dynamic>>
+            snapshot,
+      ) {
+        final int pending =
+            snapshot.docs
+                .where(
+                  (
+                    QueryDocumentSnapshot<
+                            Map<String, dynamic>>
+                        document,
+                  ) {
+                    final Map<String, dynamic>
+                        data =
+                        document.data();
+
+                    return data[
+                                'requestedBy'] ==
+                            'driver' &&
+                        data['status'] ==
+                            'pending_seller';
+                  },
+                )
+                .length;
+
+        _pendingByOrder[orderId] =
+            pending;
+
+        _refreshCount();
+      },
+      onError: (Object _) {
+        _pendingByOrder[orderId] =
+            0;
+
+        _refreshCount();
+      },
+    );
+  }
+
+  void _refreshCount() {
+    final int next =
+        _pendingByOrder.values.fold<int>(
+      0,
+      (
+        int total,
+        int value,
+      ) =>
+          total + value,
+    );
+
+    if (!mounted ||
+        next == _pendingCount) {
+      return;
+    }
+
+    setState(() {
+      _pendingCount = next;
+    });
+  }
+
+  Future<void> _restart() async {
+    await _cancelSubscriptions();
+
+    _pendingByOrder.clear();
+
+    if (mounted) {
+      setState(() {
+        _pendingCount = 0;
+      });
+    }
+
+    _start();
+  }
+
+  Future<void>
+      _cancelSubscriptions() async {
+    final StreamSubscription<
+            QuerySnapshot<
+                Map<String, dynamic>>>?
+        poolSubscription =
+        _poolSubscription;
+
+    if (poolSubscription != null) {
+      await poolSubscription.cancel();
+    }
+
+    _poolSubscription = null;
+
+    final List<Future<void>>
+        cancellations =
+        _requestSubscriptions.values
+            .map(
+              (
+                StreamSubscription<
+                        QuerySnapshot<
+                            Map<String,
+                                dynamic>>>
+                    subscription,
+              ) =>
+                  subscription.cancel(),
+            )
+            .toList();
+
+    _requestSubscriptions.clear();
+
+    if (cancellations.isNotEmpty) {
+      await Future.wait(
+        cancellations,
+      );
+    }
+  }
+
+  @override
+  void dispose() {
+    unawaited(
+      _cancelSubscriptions(),
+    );
+
+    super.dispose();
+  }
+
+  @override
+  Widget build(
+    BuildContext context,
+  ) {
+    final String badgeText =
+        _pendingCount > 99
+            ? '99+'
+            : _pendingCount
+                .toString();
+
+    return IconButton(
+      tooltip: _pendingCount > 0
+          ? 'Notifications - $_pendingCount pickup request${_pendingCount == 1 ? '' : 's'}'
+          : 'Notifications',
+      onPressed: () {
+        Navigator.push<void>(
+          context,
+          MaterialPageRoute<void>(
+            builder: (_) =>
+                const SellerNotificationsPage(),
+          ),
+        );
+      },
+      icon: Stack(
+        clipBehavior:
+            Clip.none,
+        children: <Widget>[
+          const Icon(
+            Icons
+                .notifications_none_rounded,
+          ),
+          if (_pendingCount > 0)
+            Positioned(
+              top: -7,
+              right: -9,
+              child: Container(
+                constraints:
+                    const BoxConstraints(
+                  minWidth: 18,
+                  minHeight: 18,
+                ),
+                padding:
+                    const EdgeInsets.symmetric(
+                  horizontal: 5,
+                  vertical: 1,
+                ),
+                decoration:
+                    BoxDecoration(
+                  color: Colors.red,
+                  borderRadius:
+                      BorderRadius.circular(
+                    20,
+                  ),
+                  border:
+                      Border.all(
+                    color:
+                        Colors.white,
+                    width: 1.5,
+                  ),
+                ),
+                alignment:
+                    Alignment.center,
+                child: Text(
+                  badgeText,
+                  style:
+                      const TextStyle(
+                    color:
+                        Colors.white,
+                    fontSize: 10,
+                    fontWeight:
+                        FontWeight.w900,
+                  ),
+                ),
+              ),
+            ),
+        ],
+      ),
+    );
+  }
+}
+
