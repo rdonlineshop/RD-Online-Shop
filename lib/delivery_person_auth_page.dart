@@ -1134,24 +1134,32 @@ class _DeliveryPersonAuthPageState
         centerTitle: true,
       ),
 
-      body: Center(
-        child: SingleChildScrollView(
-          padding:
-              const EdgeInsets.all(20),
-          child: ConstrainedBox(
-            constraints:
-                const BoxConstraints(
-              maxWidth: 520,
+      body: LayoutBuilder(
+        builder: (
+          BuildContext context,
+          BoxConstraints constraints,
+        ) {
+          final bool isDesktop = constraints.maxWidth >= 800;
+          final double horizontalPadding = isDesktop ? 56 : 20;
+
+          return SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              isDesktop ? 42 : 20,
+              horizontalPadding,
+              28,
             ),
-            child: Form(
+            child: SizedBox(
+              width: double.infinity,
+              child: Form(
               key: _formKey,
               child: Column(
                 children: <Widget>[
-                  const CircleAvatar(
-                    radius: 44,
+                  CircleAvatar(
+                    radius: isDesktop ? 54 : 44,
                     child: Icon(
                       Icons.local_shipping,
-                      size: 48,
+                      size: isDesktop ? 58 : 48,
                     ),
                   ),
 
@@ -1161,13 +1169,12 @@ class _DeliveryPersonAuthPageState
 
                   Text(
                     _isRegistering
-                        ? 'Create Delivery Person Account'
-                        : 'Delivery Person Login',
+                        ? 'Create NRD Delivery Person Account'
+                        : 'NRD Delivery Person Login',
                     textAlign:
                         TextAlign.center,
-                    style:
-                        const TextStyle(
-                      fontSize: 24,
+                    style: TextStyle(
+                      fontSize: isDesktop ? 32 : 24,
                       fontWeight:
                           FontWeight.bold,
                     ),
@@ -1179,11 +1186,12 @@ class _DeliveryPersonAuthPageState
 
                   Text(
                     _isRegistering
-                        ? 'Register to receive RD Online Shop delivery orders.'
+                        ? 'Register to receive NRD Online Shop delivery orders.'
                         : 'Login to see your assigned orders and share live location.',
                     textAlign:
                         TextAlign.center,
                     style: TextStyle(
+                      fontSize: isDesktop ? 16 : 14,
                       color:
                           Colors.grey.shade700,
                     ),
@@ -1546,7 +1554,7 @@ class _DeliveryPersonAuthPageState
                   SizedBox(
                     width:
                         double.infinity,
-                    height: 54,
+                    height: isDesktop ? 60 : 54,
                     child:
                         FilledButton.icon(
                       onPressed:
@@ -1622,7 +1630,8 @@ class _DeliveryPersonAuthPageState
               ),
             ),
           ),
-        ),
+        );
+        },
       ),
     );
   }

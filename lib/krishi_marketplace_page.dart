@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 
 import 'cart_page.dart';
@@ -19,6 +20,9 @@ class _KrishiMarketplacePageState
   final TextEditingController _searchController =
       TextEditingController();
 
+  final ScrollController _categoryScrollController =
+      ScrollController();
+
   String _selectedCategory = 'All';
 
   static const List<String> _categories = <String>[
@@ -37,6 +41,8 @@ class _KrishiMarketplacePageState
     'Nursery & Plants',
     'Fertilizer & Compost',
     'Animal Feed',
+    'Meat Farm',
+    'Animal, Poultry and Fish Farm',
     'Agriculture Tools',
     'Other Agriculture',
   ];
@@ -73,6 +79,10 @@ class _KrishiMarketplacePageState
         'assets/categories/krishi_default_fertilizer_compost.jpg',
     'Animal Feed':
         'assets/categories/krishi_default_animal_feed.jpg',
+    'Meat Farm':
+        'assets/categories/krishi_default_meat_farm.jpg',
+    'Animal, Poultry and Fish Farm':
+        'assets/categories/krishi_default_animal_poultry_fish_farm.jpg',
     'Agriculture Tools':
         'assets/categories/krishi_default_agriculture_tools.jpg',
     'Other Agriculture':
@@ -143,6 +153,25 @@ class _KrishiMarketplacePageState
     }
     if (normalized.contains('feed')) {
       return _defaultProductImages['Animal Feed']!;
+    }
+    if (normalized.contains('animal') ||
+        normalized.contains('poultry') ||
+        normalized.contains('fish farm') ||
+        normalized.contains('live animal') ||
+        normalized.contains('live poultry') ||
+        normalized.contains('live fish')) {
+      return _defaultProductImages['Animal, Poultry and Fish Farm']!;
+    }
+    if (normalized.contains('meat') ||
+        normalized.contains('livestock') ||
+        normalized.contains('goat') ||
+        normalized.contains('sheep') ||
+        normalized.contains('pig') ||
+        normalized.contains('pork') ||
+        normalized.contains('chicken') ||
+        normalized.contains('buffalo') ||
+        normalized.contains('cattle')) {
+      return _defaultProductImages['Meat Farm']!;
     }
     if (normalized.contains('tool')) {
       return _defaultProductImages['Agriculture Tools']!;
@@ -1223,8 +1252,40 @@ class _KrishiMarketplacePageState
     );
   }
 
+  void _handleCategoryPointerSignal(
+    PointerSignalEvent event,
+  ) {
+    if (event is! PointerScrollEvent ||
+        !_categoryScrollController.hasClients) {
+      return;
+    }
+
+    final double delta = event.scrollDelta.dy.abs() >=
+            event.scrollDelta.dx.abs()
+        ? event.scrollDelta.dy
+        : event.scrollDelta.dx;
+
+    if (delta == 0) {
+      return;
+    }
+
+    final ScrollPosition position =
+        _categoryScrollController.position;
+
+    final double target =
+        (_categoryScrollController.offset + delta)
+            .clamp(
+              position.minScrollExtent,
+              position.maxScrollExtent,
+            )
+            .toDouble();
+
+    _categoryScrollController.jumpTo(target);
+  }
+
   @override
   void dispose() {
+    _categoryScrollController.dispose();
     _searchController.dispose();
     super.dispose();
   }
@@ -1354,18 +1415,45 @@ class _KrishiMarketplacePageState
             ),
           ),
           SizedBox(
-            height: 118,
-            child: ListView.builder(
-              scrollDirection: Axis.horizontal,
-              padding: const EdgeInsets.symmetric(
-                horizontal: 10,
-                vertical: 8,
-              ),
-              itemCount: _categories.length,
-              itemBuilder: (
+            height: 126,
+            child: LayoutBuilder(
+              builder: (
                 BuildContext context,
-                int index,
+                BoxConstraints constraints,
               ) {
+                Widget categoryList =
+                    ScrollConfiguration(
+                  behavior:
+                      const MaterialScrollBehavior()
+                          .copyWith(
+                    dragDevices:
+                        <PointerDeviceKind>{
+                      PointerDeviceKind.touch,
+                      PointerDeviceKind.mouse,
+                      PointerDeviceKind.trackpad,
+                      PointerDeviceKind.stylus,
+                    },
+                  ),
+                  child: ListView.builder(
+                      controller:
+                          _categoryScrollController,
+                      scrollDirection:
+                          Axis.horizontal,
+                      physics:
+                          const BouncingScrollPhysics(),
+                      padding:
+                          const EdgeInsets.fromLTRB(
+                        10,
+                        8,
+                        10,
+                        14,
+                      ),
+                      itemCount:
+                          _categories.length,
+                      itemBuilder: (
+                        BuildContext context,
+                        int index,
+                      ) {
                 final String category =
                     _categories[index];
                 final bool selected =
@@ -1455,6 +1543,17 @@ class _KrishiMarketplacePageState
                     ),
                   ),
                 );
+                      },
+                    ),
+                );
+
+                categoryList = Listener(
+                  onPointerSignal:
+                      _handleCategoryPointerSignal,
+                  child: categoryList,
+                );
+
+                return categoryList;
               },
             ),
           ),

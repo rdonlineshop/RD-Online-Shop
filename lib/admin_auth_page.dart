@@ -253,101 +253,136 @@ class _AdminAuthPageState extends State<AdminAuthPage> {
         title: const Text('Admin Login'),
         centerTitle: true,
       ),
-      body: Center(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.all(24),
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 460),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                children: <Widget>[
-                  const Icon(
-                    Icons.admin_panel_settings,
-                    size: 82,
-                    color: Colors.blue,
-                  ),
-                  const SizedBox(height: 18),
-                  const Text(
-                    'RD Online Shop Admin',
-                    style: TextStyle(
-                      fontSize: 23,
-                      fontWeight: FontWeight.bold,
+      body: LayoutBuilder(
+        builder: (
+          BuildContext context,
+          BoxConstraints constraints,
+        ) {
+          final bool isDesktop = constraints.maxWidth >= 800;
+          final double horizontalPadding = isDesktop ? 56 : 20;
+
+          return SingleChildScrollView(
+            padding: EdgeInsets.fromLTRB(
+              horizontalPadding,
+              isDesktop ? 52 : 24,
+              horizontalPadding,
+              32,
+            ),
+            child: SizedBox(
+              width: double.infinity,
+              child: Form(
+                key: _formKey,
+                child: Column(
+                  children: <Widget>[
+                    Icon(
+                      Icons.admin_panel_settings,
+                      size: isDesktop ? 104 : 82,
+                      color: Colors.blue,
                     ),
-                  ),
-                  const SizedBox(height: 24),
-                  TextFormField(
-                    controller: _emailController,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: const InputDecoration(
-                      labelText: 'Admin Email',
-                      prefixIcon: Icon(Icons.email_outlined),
-                      border: OutlineInputBorder(),
+                    SizedBox(height: isDesktop ? 22 : 18),
+                    Text(
+                      'NRD Online Shop Admin',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: isDesktop ? 32 : 23,
+                        fontWeight: FontWeight.bold,
+                      ),
                     ),
-                    validator: (String? value) {
-                      final String email = value?.trim() ?? '';
-                      if (email.isEmpty || !email.contains('@')) {
-                        return 'Enter a valid Admin email.';
-                      }
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 16),
-                  TextFormField(
-                    controller: _passwordController,
-                    obscureText: _hidePassword,
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      prefixIcon: const Icon(Icons.lock_outline),
-                      border: const OutlineInputBorder(),
-                      suffixIcon: IconButton(
-                        onPressed: () {
-                          setState(() {
-                            _hidePassword = !_hidePassword;
-                          });
-                        },
-                        icon: Icon(
-                          _hidePassword
-                              ? Icons.visibility
-                              : Icons.visibility_off,
+                    const SizedBox(height: 8),
+                    Text(
+                      'Sign in to open the NRD Admin Dashboard.',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(
+                        fontSize: isDesktop ? 16 : 14,
+                        color: Colors.grey.shade700,
+                      ),
+                    ),
+                    SizedBox(height: isDesktop ? 34 : 24),
+                    TextFormField(
+                      controller: _emailController,
+                      keyboardType: TextInputType.emailAddress,
+                      decoration: InputDecoration(
+                        labelText: 'Admin Email',
+                        prefixIcon: const Icon(Icons.email_outlined),
+                        border: const OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: isDesktop ? 22 : 16,
+                        ),
+                      ),
+                      validator: (String? value) {
+                        final String email = value?.trim() ?? '';
+                        if (email.isEmpty || !email.contains('@')) {
+                          return 'Enter a valid Admin email.';
+                        }
+                        return null;
+                      },
+                    ),
+                    const SizedBox(height: 18),
+                    TextFormField(
+                      controller: _passwordController,
+                      obscureText: _hidePassword,
+                      decoration: InputDecoration(
+                        labelText: 'Password',
+                        prefixIcon: const Icon(Icons.lock_outline),
+                        border: const OutlineInputBorder(),
+                        contentPadding: EdgeInsets.symmetric(
+                          horizontal: 18,
+                          vertical: isDesktop ? 22 : 16,
+                        ),
+                        suffixIcon: IconButton(
+                          onPressed: () {
+                            setState(() {
+                              _hidePassword = !_hidePassword;
+                            });
+                          },
+                          icon: Icon(
+                            _hidePassword
+                                ? Icons.visibility
+                                : Icons.visibility_off,
+                          ),
+                        ),
+                      ),
+                      validator: (String? value) {
+                        if ((value ?? '').length < 6) {
+                          return 'Password must contain at least 6 characters.';
+                        }
+                        return null;
+                      },
+                      onFieldSubmitted: (_) {
+                        _login();
+                      },
+                    ),
+                    SizedBox(height: isDesktop ? 28 : 22),
+                    SizedBox(
+                      width: double.infinity,
+                      height: isDesktop ? 60 : 52,
+                      child: FilledButton.icon(
+                        onPressed: _isLoading ? null : _login,
+                        icon: _isLoading
+                            ? const SizedBox(
+                                width: 20,
+                                height: 20,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(Icons.login),
+                        label: Text(
+                          _isLoading ? 'Checking Admin...' : 'Admin Login',
+                          style: TextStyle(
+                            fontSize: isDesktop ? 16 : 14,
+                            fontWeight: FontWeight.w700,
+                          ),
                         ),
                       ),
                     ),
-                    validator: (String? value) {
-                      if ((value ?? '').length < 6) {
-                        return 'Password must contain at least 6 characters.';
-                      }
-                      return null;
-                    },
-                    onFieldSubmitted: (_) {
-                      _login();
-                    },
-                  ),
-                  const SizedBox(height: 22),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: FilledButton.icon(
-                      onPressed: _isLoading ? null : _login,
-                      icon: _isLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child: CircularProgressIndicator(
-                                strokeWidth: 2,
-                              ),
-                            )
-                          : const Icon(Icons.login),
-                      label: Text(
-                        _isLoading ? 'Checking Admin...' : 'Admin Login',
-                      ),
-                    ),
-                  ),
-                ],
+                  ],
+                ),
               ),
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
