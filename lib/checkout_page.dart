@@ -8,6 +8,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'data/cart_data.dart';
+import 'customer_auth_page.dart';
 import 'order_data.dart';
 import 'order_history_page.dart';
 import 'payments/esewa_payment_page.dart';
@@ -636,55 +637,57 @@ class _CheckoutPageState
 
   Future<void> _ensureCustomerCheckoutSession() async {
     final FirebaseAuth auth = FirebaseAuth.instance;
-    final User? currentUser = auth.currentUser;
 
-    // No Firebase session yet -> start/restore the normal guest
-    // customer session used by Order Data.
-    if (currentUser == null) {
-      await switchToGuestCustomerSession(
-        preferredCustomerId:
-            await getSavedCustomerId(),
+    Future<User?> registeredCustomer() async {
+      final User? user = auth.currentUser;
+
+      if (user == null || user.isAnonymous) {
+        return null;
+      }
+
+      final DocumentSnapshot<Map<String, dynamic>> customerSnapshot =
+          await FirebaseFirestore.instance
+              .collection('customers')
+              .doc(user.uid)
+              .get();
+
+      final Map<String, dynamic> customer =
+          customerSnapshot.data() ?? <String, dynamic>{};
+
+      final bool validCustomer =
+          customerSnapshot.exists &&
+          customer['role']?.toString().trim() == 'customer' &&
+          customer['isActive'] != false;
+
+      return validCustomer ? user : null;
+    }
+
+    User? customerUser = await registeredCustomer();
+
+    if (customerUser == null) {
+      if (!mounted) {
+        throw StateError(
+          'Customer Email login is required before placing an order.',
+        );
+      }
+
+      await Navigator.push<bool>(
+        context,
+        MaterialPageRoute<bool>(
+          builder: (_) => const CustomerAuthPage(),
+        ),
       );
-      return;
+
+      customerUser = await registeredCustomer();
     }
 
-    // Anonymous users are already customer/guest sessions.
-    if (currentUser.isAnonymous) {
-      await getOrCreateCustomerId();
-      return;
-    }
-
-    // A registered customer may checkout without switching accounts.
-    final DocumentSnapshot<Map<String, dynamic>> customerSnapshot =
-        await FirebaseFirestore.instance
-            .collection('customers')
-            .doc(currentUser.uid)
-            .get();
-
-    final Map<String, dynamic> customer =
-        customerSnapshot.data() ?? <String, dynamic>{};
-
-    final bool isRegisteredCustomer =
-        customerSnapshot.exists &&
-            customer['role']?.toString().trim() == 'customer' &&
-            customer['isActive'] == true;
-
-    if (isRegisteredCustomer) {
-      await activateRegisteredCustomerSession(
-        currentUser,
+    if (customerUser == null) {
+      throw StateError(
+        'Customer Email login is required before placing an order.',
       );
-      return;
     }
 
-    // Seller/Admin/Delivery/Ride-driver sessions cannot create a customer
-    // order under the current Firestore rules. Checkout is a customer action,
-    // so switch cleanly to the preserved guest customer identity first.
-    final String? savedCustomerId =
-        await getSavedCustomerId();
-
-    await switchToGuestCustomerSession(
-      preferredCustomerId: savedCustomerId,
-    );
+    await activateRegisteredCustomerSession(customerUser);
   }
 
   // =========================================================
@@ -1213,11 +1216,14 @@ class _CheckoutPageState
         return;
       }
 
+      final String message = error
+          .toString()
+          .replaceFirst('Bad state: ', '')
+          .replaceFirst('Exception: ', '');
+
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Could not start customer checkout session: $error',
-          ),
+          content: Text(message),
         ),
       );
       return;
