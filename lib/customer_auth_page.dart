@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:google_sign_in/google_sign_in.dart';
 
 import 'order_data.dart';
 
@@ -8,26 +10,25 @@ class CustomerAuthPage extends StatefulWidget {
   const CustomerAuthPage({super.key});
 
   @override
-  State<CustomerAuthPage> createState() =>
-      _CustomerAuthPageState();
+  State<CustomerAuthPage> createState() => _CustomerAuthPageState();
 }
 
 class _CustomerAuthPageState extends State<CustomerAuthPage> {
-  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  static const Color _nrdRed = Color(0xFFE50914);
 
-  final TextEditingController _nameController =
-      TextEditingController();
-  final TextEditingController _phoneController =
-      TextEditingController();
-  final TextEditingController _emailController =
-      TextEditingController();
-  final TextEditingController _passwordController =
-      TextEditingController();
-
-  bool _isRegistering = false;
-  bool _isLoading = false;
-  bool _hidePassword = true;
   bool _checkingSavedSession = true;
+  bool _isSigningIn = false;
+  bool _googleInitialized = false;
+
+  bool get _supportsNativeGoogleSignIn {
+    if (kIsWeb) {
+      return false;
+    }
+
+    return defaultTargetPlatform == TargetPlatform.android ||
+        defaultTargetPlatform == TargetPlatform.iOS ||
+        defaultTargetPlatform == TargetPlatform.macOS;
+  }
 
   @override
   void initState() {
@@ -36,6 +37,77 @@ class _CustomerAuthPageState extends State<CustomerAuthPage> {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _restoreSavedCustomerSession();
     });
+  }
+
+  Future<Map<String, dynamic>?> _customerDocument(User user) async {
+    if (user.isAnonymous) {
+      return null;
+    }
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> snapshot =
+          await FirebaseFirestore.instance
+              .collection('customers')
+              .doc(user.uid)
+              .get();
+
+      if (!snapshot.exists) {
+        return null;
+      }
+
+      final Map<String, dynamic> data =
+          snapshot.data() ?? <String, dynamic>{};
+
+      if (data['role']?.toString().trim() != 'customer' ||
+          data['isActive'] == false) {
+        return null;
+      }
+
+      return data;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> _restoreSavedCustomerSession() async {
+    final User? user = FirebaseAuth.instance.currentUser;
+
+    if (user == null || user.isAnonymous) {
+      _finishSavedSessionCheck();
+      return;
+    }
+
+    final Map<String, dynamic>? customer = await _customerDocument(user);
+
+    if (customer == null) {
+      _finishSavedSessionCheck();
+      return;
+    }
+
+    try {
+      await activateRegisteredCustomerSession(user);
+
+      await FirebaseFirestore.instance
+          .collection('customers')
+          .doc(user.uid)
+          .set(
+        <String, dynamic>{
+          'authUid': user.uid,
+          'email': user.email?.trim().toLowerCase() ?? '',
+          'lastLoginAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+        SetOptions(merge: true),
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      Navigator.pop(context, true);
+    } catch (_) {
+      _finishSavedSessionCheck();
+    }
   }
 
   void _finishSavedSessionCheck() {
@@ -48,331 +120,247 @@ class _CustomerAuthPageState extends State<CustomerAuthPage> {
     });
   }
 
-  Future<void> _restoreSavedCustomerSession() async {
-    final FirebaseAuth auth = FirebaseAuth.instance;
-    final User? user = auth.currentUser;
-
-    if (user == null || user.isAnonymous) {
-      _finishSavedSessionCheck();
+  void _showMessage(String message) {
+    if (!mounted) {
       return;
     }
-
-    try {
-      final DocumentSnapshot<Map<String, dynamic>>
-          customerDocument =
-          await FirebaseFirestore.instance
-              .collection('customers')
-              .doc(user.uid)
-              .get();
-
-      if (!customerDocument.exists) {
-        // Another RD role may currently be signed in. Do not sign it out just
-        // because the Customer entry page was opened.
-        _finishSavedSessionCheck();
-        return;
-      }
-
-      final Map<String, dynamic> customer =
-          customerDocument.data() ??
-              <String, dynamic>{};
-
-      final String role =
-          customer['role']?.toString().trim() ?? '';
-
-      if (role != 'customer' ||
-          customer['isActive'] == false) {
-        _finishSavedSessionCheck();
-        return;
-      }
-
-      await activateRegisteredCustomerSession(user);
-
-      await FirebaseFirestore.instance
-          .collection('customers')
-          .doc(user.uid)
-          .set(
-        <String, dynamic>{
-          'lastLoginAt':
-              FieldValue.serverTimestamp(),
-          'updatedAt':
-              FieldValue.serverTimestamp(),
-        },
-        SetOptions(merge: true),
-      );
-
-      if (!mounted) {
-        return;
-      }
-
-      // CustomerAuthPage is normally opened from Home/Profile.
-      // A valid saved customer session closes this page immediately.
-      if (Navigator.of(context).canPop()) {
-        Navigator.pop(context, true);
-      } else {
-        _finishSavedSessionCheck();
-      }
-    } catch (_) {
-      _finishSavedSessionCheck();
-    }
-  }
-
-  @override
-  void dispose() {
-    _nameController.dispose();
-    _phoneController.dispose();
-    _emailController.dispose();
-    _passwordController.dispose();
-    super.dispose();
-  }
-
-  void _showMessage(String message) {
-    if (!mounted) return;
 
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(content: Text(message)),
     );
   }
 
-  String _authMessage(FirebaseAuthException error) {
-    switch (error.code) {
-      case 'email-already-in-use':
-        return 'This email is already registered. Please login.';
-      case 'invalid-email':
-        return 'Please enter a valid email address.';
-      case 'weak-password':
-        return 'Password must contain at least 6 characters.';
-      case 'wrong-password':
-      case 'invalid-credential':
-        return 'Email or password is incorrect.';
-      case 'user-not-found':
-        return 'Customer account was not found.';
-      case 'too-many-requests':
-        return 'Too many attempts. Please try again later.';
-      case 'network-request-failed':
-        return 'Please check your internet connection.';
-      default:
-        return error.message ?? 'Authentication failed.';
+  Future<void> _initializeGoogleSignIn() async {
+    if (_googleInitialized) {
+      return;
     }
-  }
 
-  Future<void> _restoreGuestSession(
-    String previousCustomerId,
-  ) async {
-    try {
-      await switchToGuestCustomerSession(
-        preferredCustomerId:
-            previousCustomerId.trim().isEmpty
-                ? null
-                : previousCustomerId,
+    if (!_supportsNativeGoogleSignIn) {
+      throw UnsupportedError(
+        'Google account sign-in is currently available in the Android/iOS app.',
       );
-    } catch (_) {
-      // Login/Register error message is more useful to the customer.
     }
+
+    await GoogleSignIn.instance.initialize();
+    _googleInitialized = true;
   }
 
-  Future<void> _submit() async {
-    if (_isLoading ||
-        !(_formKey.currentState?.validate() ?? false)) {
+  Future<UserCredential> _firebaseGoogleSignIn(
+    AuthCredential credential,
+    User? previousFirebaseUser,
+  ) async {
+    // Preserve an anonymous customer UID when possible. This keeps orders that
+    // were created before the customer connected a Google account attached to
+    // the same Firebase identity.
+    if (previousFirebaseUser?.isAnonymous == true) {
+      try {
+        return await previousFirebaseUser!.linkWithCredential(credential);
+      } on FirebaseAuthException catch (error) {
+        // The selected Google account may already belong to an existing
+        // Firebase customer. Sign in to that existing account instead.
+        if (error.code != 'credential-already-in-use' &&
+            error.code != 'email-already-in-use' &&
+            error.code != 'provider-already-linked') {
+          rethrow;
+        }
+      }
+    }
+
+    return FirebaseAuth.instance.signInWithCredential(credential);
+  }
+
+  Future<void> _ensureCustomerProfile({
+    required User user,
+    required GoogleSignInAccount googleAccount,
+    required String previousCustomerId,
+  }) async {
+    final DocumentReference<Map<String, dynamic>> customerRef =
+        FirebaseFirestore.instance.collection('customers').doc(user.uid);
+
+    final DocumentSnapshot<Map<String, dynamic>> existing =
+        await customerRef.get();
+
+    final Map<String, dynamic> existingData =
+        existing.data() ?? <String, dynamic>{};
+
+    String customerId =
+        existingData['customerId']?.toString().trim() ?? '';
+
+    // Keep the existing hidden compatibility ID when present. If this account
+    // is being connected from an older guest session, preserve that ID so the
+    // current device can keep its historical My Orders link.
+    if (customerId.isEmpty) {
+      customerId = previousCustomerId.trim().isNotEmpty
+          ? previousCustomerId.trim()
+          : user.uid;
+    }
+
+    final String email =
+        (user.email ?? googleAccount.email).trim().toLowerCase();
+
+    final String displayName =
+        (user.displayName ?? googleAccount.displayName ?? '').trim();
+
+    final Map<String, dynamic> data = <String, dynamic>{
+      'authUid': user.uid,
+      'customerId': customerId,
+      'email': email,
+      'name': displayName,
+      'photoUrl': user.photoURL ?? googleAccount.photoUrl ?? '',
+      'role': 'customer',
+      'isActive': true,
+      'accountType': 'google',
+      'authProvider': 'google.com',
+      'updatedAt': FieldValue.serverTimestamp(),
+      'lastLoginAt': FieldValue.serverTimestamp(),
+    };
+
+    if (!existing.exists) {
+      data['createdAt'] = FieldValue.serverTimestamp();
+    }
+
+    await customerRef.set(
+      data,
+      SetOptions(merge: true),
+    );
+  }
+
+  Future<void> _continueWithGoogle() async {
+    if (_isSigningIn) {
+      return;
+    }
+
+    if (!_supportsNativeGoogleSignIn) {
+      _showMessage(
+        'Google account sign-in is tested from the Android mobile app. Please run NRD on your phone for this login.',
+      );
       return;
     }
 
     setState(() {
-      _isLoading = true;
+      _isSigningIn = true;
     });
 
     final FirebaseAuth auth = FirebaseAuth.instance;
-    final String email =
-        _emailController.text.trim().toLowerCase();
-    final String password = _passwordController.text;
-
-    // Keep the current guest RD customer identity before changing Firebase
-    // authentication. Registration will attach this permanent ID to the
-    // new email/password account so existing My Orders stay linked.
+    final User? beforeLogin = auth.currentUser;
     final String previousCustomerId =
         (await getSavedCustomerId())?.trim() ?? '';
 
     try {
-      UserCredential credential;
+      await _initializeGoogleSignIn();
 
-      if (_isRegistering) {
-        final AuthCredential emailCredential =
-            EmailAuthProvider.credential(
-          email: email,
-          password: password,
-        );
+      // If Admin, Seller or Delivery is currently authenticated, do not link
+      // the Google customer credential to that role account by accident.
+      if (beforeLogin != null && !beforeLogin.isAnonymous) {
+        final Map<String, dynamic>? customer =
+            await _customerDocument(beforeLogin);
 
-        final User? currentUser = auth.currentUser;
-
-        if (currentUser?.isAnonymous == true) {
-          // Best path: upgrade the anonymous guest account in-place.
-          // Firebase UID stays the same.
-          credential =
-              await currentUser!.linkWithCredential(
-            emailCredential,
-          );
-        } else {
-          // Explicit customer registration action. If another role is logged
-          // in, sign it out before creating the customer account.
-          if (currentUser != null) {
-            await auth.signOut();
-          }
-
-          credential =
-              await auth.createUserWithEmailAndPassword(
-            email: email,
-            password: password,
-          );
-        }
-
-        final User user = credential.user!;
-
-        final String permanentCustomerId =
-            previousCustomerId.isNotEmpty
-                ? previousCustomerId
-                : user.uid;
-
-        await FirebaseFirestore.instance
-            .collection('customers')
-            .doc(user.uid)
-            .set(
-          <String, dynamic>{
-            'authUid': user.uid,
-            'customerId': permanentCustomerId,
-            'name': _nameController.text.trim(),
-            'phone': _phoneController.text.trim(),
-            'email': email,
-            'address': '',
-            'role': 'customer',
-            'isActive': true,
-            'accountType': 'registered',
-            'createdAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-            'lastLoginAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-
-        await activateRegisteredCustomerSession(user);
-      } else {
-        // Customer login is an explicit role switch.
-        if (auth.currentUser != null) {
+        if (customer == null) {
           await auth.signOut();
         }
-
-        credential =
-            await auth.signInWithEmailAndPassword(
-          email: email,
-          password: password,
-        );
-
-        final User user = credential.user!;
-
-        final DocumentSnapshot<Map<String, dynamic>>
-            customerDocument =
-            await FirebaseFirestore.instance
-                .collection('customers')
-                .doc(user.uid)
-                .get();
-
-        final Map<String, dynamic> customer =
-            customerDocument.data() ??
-                <String, dynamic>{};
-
-        if (!customerDocument.exists ||
-            customer['role']?.toString().trim() !=
-                'customer' ||
-            customer['isActive'] == false) {
-          await _restoreGuestSession(
-            previousCustomerId,
-          );
-
-          _showMessage(
-            'This account is not registered as an active customer.',
-          );
-          return;
-        }
-
-        await FirebaseFirestore.instance
-            .collection('customers')
-            .doc(user.uid)
-            .set(
-          <String, dynamic>{
-            'authUid': user.uid,
-            'email': email,
-            'lastLoginAt': FieldValue.serverTimestamp(),
-            'updatedAt': FieldValue.serverTimestamp(),
-          },
-          SetOptions(merge: true),
-        );
-
-        await activateRegisteredCustomerSession(user);
       }
 
-      if (!mounted) return;
+      // google_sign_in 7.x recommends signing out before requesting another
+      // interactive account so the account chooser behaves consistently.
+      try {
+        await GoogleSignIn.instance.signOut();
+      } catch (_) {
+        // Continue to the interactive chooser.
+      }
+
+      final GoogleSignInAccount googleAccount =
+          await GoogleSignIn.instance.authenticate();
+
+      final GoogleSignInAuthentication googleAuth =
+          googleAccount.authentication;
+
+      final String? idToken = googleAuth.idToken;
+
+      if (idToken == null || idToken.trim().isEmpty) {
+        throw StateError(
+          'Google did not return an ID token. Check Firebase Google Sign-In configuration.',
+        );
+      }
+
+      final OAuthCredential credential =
+          GoogleAuthProvider.credential(idToken: idToken);
+
+      final User? linkCandidate =
+          beforeLogin?.isAnonymous == true ? beforeLogin : null;
+
+      final UserCredential result =
+          await _firebaseGoogleSignIn(credential, linkCandidate);
+
+      final User? user = result.user;
+
+      if (user == null) {
+        throw StateError('Google customer login did not return a Firebase user.');
+      }
+
+      await _ensureCustomerProfile(
+        user: user,
+        googleAccount: googleAccount,
+        previousCustomerId: previousCustomerId,
+      );
+
+      await activateRegisteredCustomerSession(user);
+
+      if (!mounted) {
+        return;
+      }
 
       Navigator.pop(context, true);
+    } on GoogleSignInException catch (error) {
+      if (error.code == GoogleSignInExceptionCode.canceled) {
+        _showMessage('Google account selection was cancelled.');
+      } else if (error.code ==
+          GoogleSignInExceptionCode.clientConfigurationError) {
+        _showMessage(
+          'Google Sign-In configuration is incomplete. Check Android SHA-1/SHA-256 and Firebase Google provider settings.',
+        );
+      } else {
+        _showMessage(
+          error.description?.trim().isNotEmpty == true
+              ? error.description!.trim()
+              : 'Could not sign in with Google.',
+        );
+      }
     } on FirebaseAuthException catch (error) {
-      // If login/create signed out the previous session before failing,
-      // restore the customer's guest identity so My Orders do not disappear.
-      if (FirebaseAuth.instance.currentUser == null) {
-        await _restoreGuestSession(
-          previousCustomerId,
-        );
+      String message = error.message ?? error.code;
+
+      if (error.code == 'operation-not-allowed') {
+        message =
+            'Google Sign-In is not enabled in Firebase Authentication.';
+      } else if (error.code == 'account-exists-with-different-credential') {
+        message =
+            'This email already has a customer account. Enable Google for the same Firebase account, then try again.';
       }
 
-      _showMessage(_authMessage(error));
+      _showMessage(message);
     } catch (error) {
-      if (FirebaseAuth.instance.currentUser == null) {
-        await _restoreGuestSession(
-          previousCustomerId,
-        );
-      }
+      final String message = error
+          .toString()
+          .replaceFirst('Bad state: ', '')
+          .replaceFirst('Exception: ', '')
+          .replaceFirst('Unsupported operation: ', '');
 
-      _showMessage(
-        'Could not open customer account: $error',
-      );
+      _showMessage(message);
     } finally {
       if (mounted) {
         setState(() {
-          _isLoading = false;
+          _isSigningIn = false;
+          _checkingSavedSession = false;
         });
       }
     }
   }
 
-  Future<void> _resetPassword() async {
-    final String email =
-        _emailController.text.trim().toLowerCase();
-
-    if (email.isEmpty) {
-      _showMessage(
-        'Enter your customer email first.',
-      );
-      return;
-    }
-
-    try {
-      await FirebaseAuth.instance
-          .sendPasswordResetEmail(
-        email: email,
-      );
-
-      _showMessage(
-        'Password reset email sent.',
-      );
-    } on FirebaseAuthException catch (error) {
-      _showMessage(_authMessage(error));
-    }
-  }
-
   @override
   Widget build(BuildContext context) {
-    const Color rdRed = Color(0xFFE50914);
-
     if (_checkingSavedSession) {
       return Scaffold(
         appBar: AppBar(
-          title: const Text('Customer Account'),
+          title: const Text('NRD Customer'),
           centerTitle: true,
         ),
         body: const Center(
@@ -382,11 +370,9 @@ class _CustomerAuthPageState extends State<CustomerAuthPage> {
               CircularProgressIndicator(),
               SizedBox(height: 14),
               Text(
-                'Checking saved Customer account...',
+                'Checking your saved customer account...',
                 textAlign: TextAlign.center,
-                style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                ),
+                style: TextStyle(fontWeight: FontWeight.w700),
               ),
             ],
           ),
@@ -396,245 +382,145 @@ class _CustomerAuthPageState extends State<CustomerAuthPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text(
-          _isRegistering
-              ? 'Customer Register'
-              : 'Customer Login',
+        title: const Text(
+          'NRD Customer',
+          style: TextStyle(fontWeight: FontWeight.w900),
         ),
         centerTitle: true,
       ),
       body: Center(
         child: ConstrainedBox(
-          constraints:
-              const BoxConstraints(maxWidth: 520),
+          constraints: const BoxConstraints(maxWidth: 520),
           child: SingleChildScrollView(
-            padding: const EdgeInsets.all(20),
-            child: Form(
-              key: _formKey,
-              child: Column(
-                children: <Widget>[
-                  Container(
-                    width: 96,
-                    height: 96,
-                    decoration: BoxDecoration(
-                      shape: BoxShape.circle,
-                      color: Colors.black,
-                      border: Border.all(
-                        color: rdRed,
-                        width: 3,
+            padding: const EdgeInsets.all(22),
+            child: Column(
+              children: <Widget>[
+                Container(
+                  width: 104,
+                  height: 104,
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.black,
+                    border: Border.all(
+                      color: _nrdRed,
+                      width: 3,
+                    ),
+                  ),
+                  child: const Icon(
+                    Icons.person_rounded,
+                    size: 62,
+                    color: _nrdRed,
+                  ),
+                ),
+                const SizedBox(height: 18),
+                const Text(
+                  'Continue with your Google account',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 24,
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+                const SizedBox(height: 9),
+                Text(
+                  'No Customer ID to remember. No Gmail address or Gmail password needs to be typed inside NRD.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    height: 1.4,
+                  ),
+                ),
+                const SizedBox(height: 28),
+                SizedBox(
+                  width: double.infinity,
+                  height: 56,
+                  child: FilledButton(
+                    onPressed: _isSigningIn
+                        ? null
+                        : _continueWithGoogle,
+                    style: FilledButton.styleFrom(
+                      backgroundColor: Colors.white,
+                      foregroundColor: Colors.black87,
+                      side: BorderSide(
+                        color: Colors.grey.shade300,
                       ),
+                      elevation: 1,
                     ),
-                    child: const Icon(
-                      Icons.person,
-                      size: 58,
-                      color: rdRed,
+                    child: _isSigningIn
+                        ? const SizedBox(
+                            width: 24,
+                            height: 24,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2.5,
+                            ),
+                          )
+                        : const Row(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: <Widget>[
+                              CircleAvatar(
+                                radius: 15,
+                                backgroundColor: Colors.white,
+                                child: Text(
+                                  'G',
+                                  style: TextStyle(
+                                    color: Color(0xFF4285F4),
+                                    fontSize: 21,
+                                    fontWeight: FontWeight.w900,
+                                  ),
+                                ),
+                              ),
+                              SizedBox(width: 12),
+                              Text(
+                                'Continue with Google',
+                                style: TextStyle(
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                  ),
+                ),
+                const SizedBox(height: 18),
+                Container(
+                  width: double.infinity,
+                  padding: const EdgeInsets.all(14),
+                  decoration: BoxDecoration(
+                    color: _nrdRed.withValues(alpha: 0.06),
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(
+                      color: _nrdRed.withValues(alpha: 0.20),
                     ),
                   ),
-                  const SizedBox(height: 14),
-                  Text(
-                    _isRegistering
-                        ? 'Create your RD customer account'
-                        : 'Login to keep your orders safe',
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                    ),
+                  child: const Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Icon(
+                        Icons.security_rounded,
+                        color: _nrdRed,
+                      ),
+                      SizedBox(width: 10),
+                      Expanded(
+                        child: Text(
+                          'Your Google password is handled by Google. NRD only receives the authenticated Firebase customer account used for My Orders, Krishi orders and tracking.',
+                          style: TextStyle(height: 1.35),
+                        ),
+                      ),
+                    ],
                   ),
-                  const SizedBox(height: 7),
-                  Text(
-                    _isRegistering
-                        ? 'Your current RD orders will stay linked to this account.'
-                        : 'Use the same account on another device to access your saved orders.',
+                ),
+                if (!_supportsNativeGoogleSignIn) ...<Widget>[
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Google account sign-in should be tested on the Android mobile app. The official Google Sign-In Flutter plugin does not provide the same native chooser on Windows.',
                     textAlign: TextAlign.center,
                     style: TextStyle(
-                      color: Colors.grey.shade700,
-                    ),
-                  ),
-                  const SizedBox(height: 24),
-                  if (_isRegistering) ...<Widget>[
-                    TextFormField(
-                      controller: _nameController,
-                      textInputAction:
-                          TextInputAction.next,
-                      decoration:
-                          const InputDecoration(
-                        labelText: 'Full Name',
-                        prefixIcon:
-                            Icon(Icons.person),
-                        border:
-                            OutlineInputBorder(),
-                      ),
-                      validator: (String? value) {
-                        if (value == null ||
-                            value.trim().isEmpty) {
-                          return 'Enter your full name.';
-                        }
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                    TextFormField(
-                      controller: _phoneController,
-                      keyboardType:
-                          TextInputType.phone,
-                      textInputAction:
-                          TextInputAction.next,
-                      decoration:
-                          const InputDecoration(
-                        labelText: 'Phone Number',
-                        prefixIcon:
-                            Icon(Icons.phone),
-                        border:
-                            OutlineInputBorder(),
-                      ),
-                      validator: (String? value) {
-                        final String phone =
-                            value?.trim() ?? '';
-
-                        if (phone.isEmpty) {
-                          return 'Enter your phone number.';
-                        }
-
-                        if (normalizeOrderRecoveryPhone(
-                              phone,
-                            ).length <
-                            6) {
-                          return 'Enter a valid phone number.';
-                        }
-
-                        return null;
-                      },
-                    ),
-                    const SizedBox(height: 14),
-                  ],
-                  TextFormField(
-                    controller: _emailController,
-                    keyboardType:
-                        TextInputType.emailAddress,
-                    textInputAction:
-                        TextInputAction.next,
-                    autocorrect: false,
-                    decoration:
-                        const InputDecoration(
-                      labelText: 'Customer Email',
-                      prefixIcon:
-                          Icon(Icons.email),
-                      border: OutlineInputBorder(),
-                    ),
-                    validator: (String? value) {
-                      final String email =
-                          value?.trim() ?? '';
-
-                      if (email.isEmpty ||
-                          !email.contains('@') ||
-                          !email.contains('.')) {
-                        return 'Enter a valid email address.';
-                      }
-
-                      return null;
-                    },
-                  ),
-                  const SizedBox(height: 14),
-                  TextFormField(
-                    controller: _passwordController,
-                    obscureText: _hidePassword,
-                    onFieldSubmitted: (_) =>
-                        _submit(),
-                    decoration: InputDecoration(
-                      labelText: 'Password',
-                      prefixIcon:
-                          const Icon(Icons.lock),
-                      border:
-                          const OutlineInputBorder(),
-                      suffixIcon: IconButton(
-                        onPressed: () {
-                          setState(() {
-                            _hidePassword =
-                                !_hidePassword;
-                          });
-                        },
-                        icon: Icon(
-                          _hidePassword
-                              ? Icons.visibility
-                              : Icons.visibility_off,
-                        ),
-                      ),
-                    ),
-                    validator: (String? value) {
-                      if (value == null ||
-                          value.length < 6) {
-                        return 'Password must contain at least 6 characters.';
-                      }
-
-                      return null;
-                    },
-                  ),
-                  if (!_isRegistering)
-                    Align(
-                      alignment:
-                          Alignment.centerRight,
-                      child: TextButton(
-                        onPressed: _isLoading
-                            ? null
-                            : _resetPassword,
-                        child: const Text(
-                          'Forgot Password?',
-                        ),
-                      ),
-                    ),
-                  const SizedBox(height: 12),
-                  SizedBox(
-                    width: double.infinity,
-                    height: 52,
-                    child: FilledButton.icon(
-                      style: FilledButton.styleFrom(
-                        backgroundColor: rdRed,
-                        foregroundColor:
-                            Colors.white,
-                      ),
-                      onPressed:
-                          _isLoading ? null : _submit,
-                      icon: _isLoading
-                          ? const SizedBox(
-                              width: 20,
-                              height: 20,
-                              child:
-                                  CircularProgressIndicator(
-                                strokeWidth: 2,
-                                color: Colors.white,
-                              ),
-                            )
-                          : Icon(
-                              _isRegistering
-                                  ? Icons.person_add
-                                  : Icons.login,
-                            ),
-                      label: Text(
-                        _isRegistering
-                            ? 'Create Account'
-                            : 'Customer Login',
-                      ),
-                    ),
-                  ),
-                  const SizedBox(height: 12),
-                  TextButton(
-                    onPressed: _isLoading
-                        ? null
-                        : () {
-                            setState(() {
-                              _isRegistering =
-                                  !_isRegistering;
-                            });
-                          },
-                    child: Text(
-                      _isRegistering
-                          ? 'Already have an account? Login'
-                          : 'New customer? Create Account',
+                      color: Colors.orange,
+                      fontWeight: FontWeight.w700,
                     ),
                   ),
                 ],
-              ),
+              ],
             ),
           ),
         ),

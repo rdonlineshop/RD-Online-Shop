@@ -12,7 +12,12 @@
           "package_name": "com.example.rd_online_shop_new"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "993981240325-6apav1bd090jetbhia67493apf8j3s0q.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAB5jsBZ6FbN6eQaCyp7zJ_Y8fIgGqgGr8"
@@ -20,7 +25,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "993981240325-6apav1bd090jetbhia67493apf8j3s0q.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "993981240325-2mcekbtfdvk1h404sckift1oubhvmm62.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.rdOnlineShopNew"
+              }
+            }
+          ]
         }
       }
     },
@@ -31,7 +48,20 @@
           "package_name": "com.rdnepal.app"
         }
       },
-      "oauth_client": [],
+      "oauth_client": [
+        {
+          "client_id": "993981240325-jctl1lfaliu1t9fg3urib6t4euba5odb.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.rdnepal.app",
+            "certificate_hash": "d4040586f9733133f301d016c2efab9004ca85ba"
+          }
+        },
+        {
+          "client_id": "993981240325-6apav1bd090jetbhia67493apf8j3s0q.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
       "api_key": [
         {
           "current_key": "AIzaSyAB5jsBZ6FbN6eQaCyp7zJ_Y8fIgGqgGr8"
@@ -39,7 +69,19 @@
       ],
       "services": {
         "appinvite_service": {
-          "other_platform_oauth_client": []
+          "other_platform_oauth_client": [
+            {
+              "client_id": "993981240325-6apav1bd090jetbhia67493apf8j3s0q.apps.googleusercontent.com",
+              "client_type": 3
+            },
+            {
+              "client_id": "993981240325-2mcekbtfdvk1h404sckift1oubhvmm62.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.example.rdOnlineShopNew"
+              }
+            }
+          ]
         }
       }
     }

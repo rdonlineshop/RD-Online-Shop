@@ -238,8 +238,8 @@ class _CustomerDashboardPageState
                               const SizedBox(height: 4),
                               Text(
                                 _customerLoggedIn
-                                    ? 'Orders are linked to your Customer Email account.'
-                                    : 'Login with your Customer Email to see and track your orders.',
+                                    ? 'Orders are linked to your Google customer account.'
+                                    : 'Continue with Google to see and track your orders.',
                                 style: const TextStyle(
                                   color: Colors.white70,
                                   fontSize: 12,
@@ -266,7 +266,7 @@ class _CustomerDashboardPageState
                                     Icons.login_rounded,
                                     size: 18,
                                   ),
-                                  label: const Text('Customer Login'),
+                                  label: const Text('Continue with Google'),
                                   style: OutlinedButton.styleFrom(
                                     foregroundColor: Colors.white,
                                     side: const BorderSide(
@@ -342,7 +342,7 @@ class _CustomerDashboardPageState
                         SizedBox(width: 10),
                         Expanded(
                           child: Text(
-                            'Your orders are linked to your Customer Email account. No separate Customer ID is required. If Seller, Admin or Delivery was used, login again with the same Customer Email to open My Orders.',
+                            'Your orders are linked to your Google customer account. No separate Customer ID is required. If Seller, Admin or Delivery was used, continue with the same Google account to open My Orders.',
                           ),
                         ),
                       ],

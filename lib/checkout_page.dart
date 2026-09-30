@@ -667,7 +667,7 @@ class _CheckoutPageState
     if (customerUser == null) {
       if (!mounted) {
         throw StateError(
-          'Customer Email login is required before placing an order.',
+          'Google customer login is required before placing an order.',
         );
       }
 
@@ -683,7 +683,7 @@ class _CheckoutPageState
 
     if (customerUser == null) {
       throw StateError(
-        'Customer Email login is required before placing an order.',
+        'Google customer login is required before placing an order.',
       );
     }
 
@@ -1206,7 +1206,7 @@ class _CheckoutPageState
           content: Text(
             error.code == 'operation-not-allowed'
                 ? 'Customer guest login is not enabled in Firebase Authentication. Enable Anonymous sign-in before placing guest orders.'
-                : 'Could not start customer checkout session: ${error.message ?? error.code}',
+                : 'Could not start Google customer checkout session: ${error.message ?? error.code}',
           ),
         ),
       );
