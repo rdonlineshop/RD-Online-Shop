@@ -41,6 +41,116 @@ class _KrishiMarketplacePageState
     'Other Agriculture',
   ];
 
+  static const Map<String, String> _defaultProductImages =
+      <String, String>{
+    'All':
+        'assets/categories/krishi_default_all.jpg',
+    'Vegetables':
+        'assets/categories/krishi_default_vegetables.jpg',
+    'Fruits':
+        'assets/categories/krishi_default_fruits.jpg',
+    'Grains & Cereals':
+        'assets/categories/krishi_default_grains_cereals.jpg',
+    'Pulses & Beans':
+        'assets/categories/krishi_default_pulses_beans.jpg',
+    'Seeds':
+        'assets/categories/krishi_default_seeds.jpg',
+    'Spices':
+        'assets/categories/krishi_default_spices.jpg',
+    'Herbs':
+        'assets/categories/krishi_default_herbs.jpg',
+    'Dairy':
+        'assets/categories/krishi_default_dairy.jpg',
+    'Eggs':
+        'assets/categories/krishi_default_eggs.jpg',
+    'Honey':
+        'assets/categories/krishi_default_honey.jpg',
+    'Organic Products':
+        'assets/categories/krishi_default_organic_products.jpg',
+    'Nursery & Plants':
+        'assets/categories/krishi_default_nursery_plants.jpg',
+    'Fertilizer & Compost':
+        'assets/categories/krishi_default_fertilizer_compost.jpg',
+    'Animal Feed':
+        'assets/categories/krishi_default_animal_feed.jpg',
+    'Agriculture Tools':
+        'assets/categories/krishi_default_agriculture_tools.jpg',
+    'Other Agriculture':
+        'assets/categories/krishi_default_other_agriculture.jpg',
+  };
+
+  String _defaultProductImage(
+    Map<String, dynamic> product,
+  ) {
+    final String category =
+        product['category']?.toString().trim() ?? '';
+
+    final String? exact =
+        _defaultProductImages[category];
+
+    if (exact != null) {
+      return exact;
+    }
+
+    final String normalized =
+        category.toLowerCase();
+
+    if (normalized.contains('vegetable')) {
+      return _defaultProductImages['Vegetables']!;
+    }
+    if (normalized.contains('fruit')) {
+      return _defaultProductImages['Fruits']!;
+    }
+    if (normalized.contains('grain') ||
+        normalized.contains('cereal') ||
+        normalized.contains('rice')) {
+      return _defaultProductImages['Grains & Cereals']!;
+    }
+    if (normalized.contains('pulse') ||
+        normalized.contains('bean') ||
+        normalized.contains('lentil')) {
+      return _defaultProductImages['Pulses & Beans']!;
+    }
+    if (normalized.contains('seed')) {
+      return _defaultProductImages['Seeds']!;
+    }
+    if (normalized.contains('spice')) {
+      return _defaultProductImages['Spices']!;
+    }
+    if (normalized.contains('herb')) {
+      return _defaultProductImages['Herbs']!;
+    }
+    if (normalized.contains('dairy') ||
+        normalized.contains('milk')) {
+      return _defaultProductImages['Dairy']!;
+    }
+    if (normalized.contains('egg')) {
+      return _defaultProductImages['Eggs']!;
+    }
+    if (normalized.contains('honey')) {
+      return _defaultProductImages['Honey']!;
+    }
+    if (normalized.contains('organic')) {
+      return _defaultProductImages['Organic Products']!;
+    }
+    if (normalized.contains('nursery') ||
+        normalized.contains('plant')) {
+      return _defaultProductImages['Nursery & Plants']!;
+    }
+    if (normalized.contains('fertilizer') ||
+        normalized.contains('compost')) {
+      return _defaultProductImages['Fertilizer & Compost']!;
+    }
+    if (normalized.contains('feed')) {
+      return _defaultProductImages['Animal Feed']!;
+    }
+    if (normalized.contains('tool')) {
+      return _defaultProductImages['Agriculture Tools']!;
+    }
+
+    return _defaultProductImages['Other Agriculture']!;
+  }
+
   bool _isKrishiProduct(
     Map<String, dynamic> data,
   ) {
@@ -895,6 +1005,14 @@ class _KrishiMarketplacePageState
     final List<String> images =
         _images(product);
 
+    // Product cards keep the Seller's real uploaded photo.
+    // The category photo is used only when a product has no photo.
+    if (images.isEmpty) {
+      images.add(
+        _defaultProductImage(product),
+      );
+    }
+
     final String unit = _unit(product);
     final double? stock = _stock(product);
     final bool outOfStock =
@@ -934,9 +1052,7 @@ class _KrishiMarketplacePageState
                 fit: StackFit.expand,
                 children: <Widget>[
                   _imageWidget(
-                    images.isEmpty
-                        ? null
-                        : images.first,
+                    images.first,
                   ),
                   if (organic)
                     Positioned(
@@ -1238,43 +1354,106 @@ class _KrishiMarketplacePageState
             ),
           ),
           SizedBox(
-            height: 52,
-            child:
-                ListView.separated(
-              scrollDirection:
-                  Axis.horizontal,
-              padding:
-                  const EdgeInsets
-                      .symmetric(
-                horizontal: 14,
-                vertical: 6,
+            height: 118,
+            child: ListView.builder(
+              scrollDirection: Axis.horizontal,
+              padding: const EdgeInsets.symmetric(
+                horizontal: 10,
+                vertical: 8,
               ),
-              itemCount:
-                  _categories.length,
-              separatorBuilder:
-                  (_, __) =>
-                      const SizedBox(
-                width: 8,
-              ),
+              itemCount: _categories.length,
               itemBuilder: (
                 BuildContext context,
                 int index,
               ) {
                 final String category =
                     _categories[index];
+                final bool selected =
+                    _selectedCategory == category;
+                final String imagePath =
+                    _defaultProductImages[category] ??
+                        _defaultProductImages['All']!;
 
-                return ChoiceChip(
-                  selected:
-                      _selectedCategory ==
-                          category,
-                  label:
-                      Text(category),
-                  onSelected: (_) {
+                return InkWell(
+                  borderRadius: BorderRadius.circular(44),
+                  onTap: () {
                     setState(() {
-                      _selectedCategory =
-                          category;
+                      _selectedCategory = category;
                     });
                   },
+                  child: Container(
+                    width: 88,
+                    margin: const EdgeInsets.symmetric(
+                      horizontal: 3,
+                    ),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: <Widget>[
+                        AnimatedContainer(
+                          duration: const Duration(
+                            milliseconds: 180,
+                          ),
+                          width: 68,
+                          height: 68,
+                          padding: const EdgeInsets.all(3),
+                          decoration: BoxDecoration(
+                            color: Colors.white,
+                            shape: BoxShape.circle,
+                            border: Border.all(
+                              color: selected
+                                  ? Colors.green
+                                  : Colors.grey.shade300,
+                              width: selected ? 3 : 1,
+                            ),
+                            boxShadow: const <BoxShadow>[
+                              BoxShadow(
+                                color: Colors.black12,
+                                blurRadius: 6,
+                                offset: Offset(0, 2),
+                              ),
+                            ],
+                          ),
+                          child: ClipOval(
+                            child: Image.asset(
+                              imagePath,
+                              fit: BoxFit.cover,
+                              errorBuilder: (
+                                BuildContext context,
+                                Object error,
+                                StackTrace? stackTrace,
+                              ) {
+                                return const ColoredBox(
+                                  color: Color(0xFFE8F5E9),
+                                  child: Icon(
+                                    Icons.agriculture_rounded,
+                                    color: Colors.green,
+                                    size: 30,
+                                  ),
+                                );
+                              },
+                            ),
+                          ),
+                        ),
+                        const SizedBox(height: 5),
+                        Text(
+                          category,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          textAlign: TextAlign.center,
+                          style: TextStyle(
+                            fontSize: 10.5,
+                            height: 1.05,
+                            fontWeight: selected
+                                ? FontWeight.w800
+                                : FontWeight.w600,
+                            color: selected
+                                ? Colors.green.shade800
+                                : Colors.black87,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
                 );
               },
             ),
