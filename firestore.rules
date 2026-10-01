@@ -501,6 +501,76 @@ service cloud.firestore {
     }
 
 
+
+    // ============================================================
+    // RD RIDE COMMISSION PAYMENTS
+    // ============================================================
+    // Ride Drivers submit only their own NRD commission payment.
+    // Admin verifies/rejects it. A pending request never reduces the
+    // outstanding commission until Admin approves it.
+    match /ride_commission_payments/{paymentId} {
+      allow read: if isAdmin()
+        || (signedIn()
+          && resource.data.driverId == request.auth.uid);
+
+      allow create: if signedIn()
+        && request.resource.data.paymentId == paymentId
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.currency is string
+        && request.resource.data.currency.size() > 0
+        && request.resource.data.method is string
+        && request.resource.data.method.size() > 0
+        && request.resource.data.method.size() <= 40
+        && request.resource.data.reference is string
+        && request.resource.data.reference.size() > 0
+        && request.resource.data.reference.size() <= 120
+        && request.resource.data.note is string
+        && request.resource.data.note.size() <= 300
+        && request.resource.data.status == 'pending_admin_review'
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.keys().hasOnly([
+          'paymentId',
+          'driverId',
+          'amount',
+          'currency',
+          'method',
+          'reference',
+          'note',
+          'status',
+          'createdAt',
+          'updatedAt'
+        ]);
+
+      allow update: if isAdmin()
+        && request.resource.data.paymentId == resource.data.paymentId
+        && request.resource.data.driverId == resource.data.driverId
+        && request.resource.data.amount == resource.data.amount
+        && request.resource.data.currency == resource.data.currency
+        && request.resource.data.method == resource.data.method
+        && request.resource.data.reference == resource.data.reference
+        && request.resource.data.note == resource.data.note
+        && resource.data.status == 'pending_admin_review'
+        && request.resource.data.status in ['approved', 'rejected']
+        && request.resource.data.reviewedAt is timestamp
+        && request.resource.data.reviewedByUid is string
+        && request.resource.data.reviewNote is string
+        && request.resource.data.reviewNote.size() <= 300
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'reviewedAt',
+          'reviewedByUid',
+          'reviewNote',
+          'updatedAt'
+        ]);
+
+      allow delete: if isAdmin();
+    }
+
+
     // ============================================================
     // RD RIDE BUSINESS SETTINGS
     // ============================================================

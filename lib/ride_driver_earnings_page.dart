@@ -1,6 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
 
+import 'services/ride_commission_service.dart';
+
 
 class _RideIncomeSummary {
   const _RideIncomeSummary({
@@ -228,6 +230,675 @@ class RideDriverEarningsSummaryCard extends StatelessWidget {
   }
 }
 
+
+class _CommissionPaymentSubmission {
+  const _CommissionPaymentSubmission({
+    required this.method,
+    required this.reference,
+    required this.note,
+  });
+
+  final String method;
+  final String reference;
+  final String note;
+}
+
+class _RideCommissionSettlementCard extends StatefulWidget {
+  const _RideCommissionSettlementCard({
+    required this.driverId,
+    required this.entries,
+  });
+
+  final String driverId;
+  final List<_RideIncomeEntry> entries;
+
+  @override
+  State<_RideCommissionSettlementCard> createState() =>
+      _RideCommissionSettlementCardState();
+}
+
+class _RideCommissionSettlementCardState
+    extends State<_RideCommissionSettlementCard> {
+  final RideCommissionService _commissionService = RideCommissionService();
+  bool _submitting = false;
+
+  double _paymentAmount(Map<String, dynamic> data) {
+    return _toDouble(data['amount']) ?? 0.0;
+  }
+
+  DateTime _paymentTime(Map<String, dynamic> data) {
+    for (final String key in <String>[
+      'createdAt',
+      'reviewedAt',
+      'updatedAt',
+    ]) {
+      final dynamic value = data[key];
+      if (value is Timestamp) {
+        return value.toDate().toLocal();
+      }
+    }
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  Widget _commissionPeriodBox(String label, double amount) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.black12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            label,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            'Rs. ${amount.toStringAsFixed(2)}',
+            style: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _submitPayment(
+    RideCommissionSettings settings,
+    double pendingAmount,
+  ) async {
+    if (_submitting || pendingAmount <= 0) {
+      return;
+    }
+
+    final _CommissionPaymentSubmission? submission =
+        await showDialog<_CommissionPaymentSubmission>(
+      context: context,
+      builder: (_) => _CommissionPaymentDialog(
+        settings: settings,
+        amount: pendingAmount,
+      ),
+    );
+
+    if (submission == null || !mounted) {
+      return;
+    }
+
+    setState(() => _submitting = true);
+
+    try {
+      final CollectionReference<Map<String, dynamic>> collection =
+          FirebaseFirestore.instance.collection('ride_commission_payments');
+      final DocumentReference<Map<String, dynamic>> ref = collection.doc();
+
+      await ref.set(
+        <String, dynamic>{
+          'paymentId': ref.id,
+          'driverId': widget.driverId.trim(),
+          'amount': pendingAmount,
+          'currency': 'Rs.',
+          'method': submission.method,
+          'reference': submission.reference,
+          'note': submission.note,
+          'status': 'pending_admin_review',
+          'createdAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Commission payment submitted. Waiting for Admin verification.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not submit commission payment: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _submitting = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final DateTime now = DateTime.now();
+    final DateTime startOfToday = DateTime(now.year, now.month, now.day);
+    final DateTime startOfWeek = startOfToday.subtract(
+      Duration(days: startOfToday.weekday - DateTime.monday),
+    );
+    final DateTime startOfMonth = DateTime(now.year, now.month);
+
+    double commissionSince(DateTime start) => widget.entries
+        .where((_RideIncomeEntry entry) => !entry.completedAt.isBefore(start))
+        .fold<double>(
+          0.0,
+          (double sum, _RideIncomeEntry entry) => sum + entry.commission,
+        );
+
+    final double todayCommission = commissionSince(startOfToday);
+    final double weekCommission = commissionSince(startOfWeek);
+    final double monthCommission = commissionSince(startOfMonth);
+    final double totalCommission = widget.entries.fold<double>(
+      0.0,
+      (double sum, _RideIncomeEntry entry) => sum + entry.commission,
+    );
+
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('ride_commission_payments')
+          .where('driverId', isEqualTo: widget.driverId.trim())
+          .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> paymentSnapshot,
+      ) {
+        if (paymentSnapshot.hasError) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'Could not load commission settlement: '
+                '${paymentSnapshot.error}',
+              ),
+            ),
+          );
+        }
+
+        final List<QueryDocumentSnapshot<Map<String, dynamic>>> payments =
+            paymentSnapshot.data?.docs ??
+                <QueryDocumentSnapshot<Map<String, dynamic>>>[];
+
+        double approved = 0.0;
+        double underReview = 0.0;
+
+        for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in payments) {
+          final Map<String, dynamic> data = doc.data();
+          final String status =
+              data['status']?.toString().trim().toLowerCase() ?? '';
+          final double amount = _paymentAmount(data);
+
+          if (status == 'approved') {
+            approved += amount;
+          } else if (status == 'pending_admin_review') {
+            underReview += amount;
+          }
+        }
+
+        final double pending =
+            (totalCommission - approved).clamp(0.0, double.infinity).toDouble();
+
+        final List<QueryDocumentSnapshot<Map<String, dynamic>>> history =
+            List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(payments)
+              ..sort(
+                (
+                  QueryDocumentSnapshot<Map<String, dynamic>> a,
+                  QueryDocumentSnapshot<Map<String, dynamic>> b,
+                ) =>
+                    _paymentTime(b.data()).compareTo(_paymentTime(a.data())),
+              );
+
+        return StreamBuilder<RideCommissionSettings>(
+          stream: _commissionService.watchSettings(),
+          builder: (
+            BuildContext context,
+            AsyncSnapshot<RideCommissionSettings> settingsSnapshot,
+          ) {
+            final RideCommissionSettings settings =
+                settingsSnapshot.data ??
+                    const RideCommissionSettings(
+                      commissionPercent: RideCommissionService.fallbackPercent,
+                      esewaNumber: '',
+                      khaltiNumber: '',
+                      bankName: '',
+                      bankAccountHolder: '',
+                      bankAccountNumber: '',
+                      paymentQrUrl: '',
+                    );
+
+            final bool canSubmit = pending > 0 &&
+                underReview <= 0 &&
+                settings.hasReceivingAccount &&
+                !_submitting;
+
+            return Card(
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.stretch,
+                  children: <Widget>[
+                    const Row(
+                      children: <Widget>[
+                        Icon(Icons.percent_rounded),
+                        SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            'NRD Commission Settlement',
+                            style: TextStyle(
+                              fontSize: 19,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 8),
+                    Text(
+                      'Customers pay the Ride Driver directly. '
+                      'Only the NRD commission is paid to Admin from here.',
+                      style: TextStyle(
+                        color: Colors.grey.shade700,
+                        fontWeight: FontWeight.w700,
+                        height: 1.35,
+                      ),
+                    ),
+                    const SizedBox(height: 14),
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: _commissionPeriodBox(
+                            'Today Commission',
+                            todayCommission,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _commissionPeriodBox(
+                            'This Week',
+                            weekCommission,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: _commissionPeriodBox(
+                            'This Month',
+                            monthCommission,
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: _commissionPeriodBox(
+                            'All-Time Commission',
+                            totalCommission,
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 14),
+                    _moneyRow('Commission Approved / Paid', approved),
+                    _moneyRow('Under Admin Review', underReview),
+                    const Divider(height: 22),
+                    _moneyRow(
+                      'Total Pending Commission',
+                      pending,
+                      bold: true,
+                    ),
+                    const SizedBox(height: 14),
+                    if (!settings.hasReceivingAccount)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          'NRD receiving account is not configured yet. '
+                          'Admin must add eSewa, Khalti, Bank, or Payment QR '
+                          'from Ride Commission settings.',
+                          style: TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      )
+                    else if (underReview > 0)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.orange.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: Text(
+                          'Rs. ${underReview.toStringAsFixed(2)} is waiting '
+                          'for Admin verification. Submit another payment only '
+                          'after this request is approved or rejected.',
+                          style: const TextStyle(fontWeight: FontWeight.w700),
+                        ),
+                      )
+                    else if (pending <= 0)
+                      Container(
+                        padding: const EdgeInsets.all(12),
+                        decoration: BoxDecoration(
+                          color: Colors.green.withValues(alpha: 0.10),
+                          borderRadius: BorderRadius.circular(12),
+                        ),
+                        child: const Text(
+                          'No pending NRD commission.',
+                          style: TextStyle(
+                            color: Colors.green,
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ),
+                    const SizedBox(height: 12),
+                    FilledButton.icon(
+                      onPressed: canSubmit
+                          ? () => _submitPayment(settings, pending)
+                          : null,
+                      icon: _submitting
+                          ? const SizedBox(
+                              width: 18,
+                              height: 18,
+                              child: CircularProgressIndicator(strokeWidth: 2),
+                            )
+                          : const Icon(Icons.payments_rounded),
+                      label: Text(
+                        _submitting
+                            ? 'Submitting...'
+                            : pending <= 0
+                                ? 'Commission Settled'
+                                : 'Pay Pending Commission to NRD',
+                      ),
+                    ),
+                    if (history.isNotEmpty) ...<Widget>[
+                      const SizedBox(height: 20),
+                      const Text(
+                        'Commission Payment History',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w900,
+                          fontSize: 16,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      ...history.take(5).map(
+                        (
+                          QueryDocumentSnapshot<Map<String, dynamic>> doc,
+                        ) {
+                          final Map<String, dynamic> data = doc.data();
+                          final String status = data['status']
+                                  ?.toString()
+                                  .trim()
+                                  .toLowerCase() ??
+                              '';
+                          final String method =
+                              data['method']?.toString().trim() ?? '-';
+                          final String reference =
+                              data['reference']?.toString().trim() ?? '-';
+                          final double amount = _paymentAmount(data);
+
+                          return Container(
+                            margin: const EdgeInsets.only(top: 8),
+                            padding: const EdgeInsets.all(12),
+                            decoration: BoxDecoration(
+                              border: Border.all(color: Colors.black12),
+                              borderRadius: BorderRadius.circular(12),
+                            ),
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Row(
+                                  children: <Widget>[
+                                    Expanded(
+                                      child: Text(
+                                        'Rs. ${amount.toStringAsFixed(2)} • '
+                                        '$method',
+                                        style: const TextStyle(
+                                          fontWeight: FontWeight.w900,
+                                        ),
+                                      ),
+                                    ),
+                                    Text(
+                                      status == 'approved'
+                                          ? 'PAID'
+                                          : status == 'rejected'
+                                              ? 'REJECTED'
+                                              : 'PENDING',
+                                      style: TextStyle(
+                                        fontWeight: FontWeight.w900,
+                                        color: status == 'approved'
+                                            ? Colors.green
+                                            : status == 'rejected'
+                                                ? Colors.red
+                                                : Colors.orange,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                                const SizedBox(height: 4),
+                                Text('Reference: $reference'),
+                                Text(_dateTimeText(_paymentTime(data))),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+            );
+          },
+        );
+      },
+    );
+  }
+}
+
+class _CommissionPaymentDialog extends StatefulWidget {
+  const _CommissionPaymentDialog({
+    required this.settings,
+    required this.amount,
+  });
+
+  final RideCommissionSettings settings;
+  final double amount;
+
+  @override
+  State<_CommissionPaymentDialog> createState() =>
+      _CommissionPaymentDialogState();
+}
+
+class _CommissionPaymentDialogState extends State<_CommissionPaymentDialog> {
+  final TextEditingController _referenceController = TextEditingController();
+  final TextEditingController _noteController = TextEditingController();
+  String? _method;
+
+  @override
+  void initState() {
+    super.initState();
+    final List<String> methods = _methods();
+    if (methods.isNotEmpty) {
+      _method = methods.first;
+    }
+  }
+
+  @override
+  void dispose() {
+    _referenceController.dispose();
+    _noteController.dispose();
+    super.dispose();
+  }
+
+  List<String> _methods() {
+    final List<String> result = <String>[];
+    if (widget.settings.esewaNumber.trim().isNotEmpty) {
+      result.add('eSewa');
+    }
+    if (widget.settings.khaltiNumber.trim().isNotEmpty) {
+      result.add('Khalti');
+    }
+    if (widget.settings.bankAccountNumber.trim().isNotEmpty) {
+      result.add('Bank Transfer');
+    }
+    if (widget.settings.paymentQrUrl.trim().isNotEmpty) {
+      result.add('Payment QR');
+    }
+    return result;
+  }
+
+  String _methodDetails(String method) {
+    switch (method) {
+      case 'eSewa':
+        return widget.settings.esewaNumber;
+      case 'Khalti':
+        return widget.settings.khaltiNumber;
+      case 'Bank Transfer':
+        return <String>[
+          widget.settings.bankName,
+          widget.settings.bankAccountHolder,
+          widget.settings.bankAccountNumber,
+        ].where((String value) => value.trim().isNotEmpty).join(' • ');
+      case 'Payment QR':
+        return 'Scan the NRD QR below and pay the exact pending amount.';
+      default:
+        return '';
+    }
+  }
+
+  void _submit() {
+    final String reference = _referenceController.text.trim();
+    if ((_method ?? '').isEmpty || reference.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Select a payment method and enter the reference ID.'),
+        ),
+      );
+      return;
+    }
+
+    Navigator.pop(
+      context,
+      _CommissionPaymentSubmission(
+        method: _method!,
+        reference: reference,
+        note: _noteController.text.trim(),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final List<String> methods = _methods();
+    final String selectedMethod = _method ?? '';
+
+    return AlertDialog(
+      title: const Text('Pay NRD Commission'),
+      content: SizedBox(
+        width: 460,
+        child: SingleChildScrollView(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Text(
+                'Amount to pay: Rs. ${widget.amount.toStringAsFixed(2)}',
+                style: const TextStyle(
+                  fontSize: 18,
+                  fontWeight: FontWeight.w900,
+                ),
+              ),
+              const SizedBox(height: 14),
+              DropdownButtonFormField<String>(
+                initialValue: selectedMethod.isEmpty ? null : selectedMethod,
+                items: methods
+                    .map(
+                      (String method) => DropdownMenuItem<String>(
+                        value: method,
+                        child: Text(method),
+                      ),
+                    )
+                    .toList(),
+                onChanged: (String? value) => setState(() => _method = value),
+                decoration: const InputDecoration(
+                  labelText: 'Payment Method',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              if (selectedMethod.isNotEmpty) ...<Widget>[
+                const SizedBox(height: 12),
+                SelectableText(
+                  _methodDetails(selectedMethod),
+                  style: const TextStyle(fontWeight: FontWeight.w800),
+                ),
+              ],
+              if (widget.settings.paymentQrUrl.trim().isNotEmpty) ...<Widget>[
+                const SizedBox(height: 14),
+                ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: Image.network(
+                    widget.settings.paymentQrUrl,
+                    height: 220,
+                    fit: BoxFit.contain,
+                    errorBuilder: (_, __, ___) => const SizedBox(
+                      height: 90,
+                      child: Center(
+                        child: Text('Could not load NRD payment QR.'),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+              const SizedBox(height: 14),
+              TextField(
+                controller: _referenceController,
+                decoration: const InputDecoration(
+                  labelText: 'Transaction / Reference ID',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 12),
+              TextField(
+                controller: _noteController,
+                maxLength: 300,
+                maxLines: 2,
+                decoration: const InputDecoration(
+                  labelText: 'Note (optional)',
+                  border: OutlineInputBorder(),
+                ),
+              ),
+              const SizedBox(height: 8),
+              const Text(
+                'After submission, the amount remains pending until Admin '
+                'verifies the payment.',
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ],
+          ),
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          onPressed: methods.isEmpty ? null : _submit,
+          icon: const Icon(Icons.send_rounded),
+          label: const Text('Submit for Verification'),
+        ),
+      ],
+    );
+  }
+}
+
+
 class RideDriverEarningsPage extends StatelessWidget {
   const RideDriverEarningsPage({
     required this.driverId,
@@ -337,6 +1008,11 @@ class RideDriverEarningsPage extends StatelessWidget {
                                 ],
                               ),
                             ),
+                          ),
+                          const SizedBox(height: 16),
+                          _RideCommissionSettlementCard(
+                            driverId: cleanDriverId,
+                            entries: entries,
                           ),
                           const SizedBox(height: 16),
                           const Text(

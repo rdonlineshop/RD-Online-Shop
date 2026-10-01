@@ -1,4 +1,5 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
 enum _RideReportFilter {
@@ -110,39 +111,6 @@ class _AdminRideEarningsPageState
     return true;
   }
 
-  double _driverPaid(Map<String, dynamic> data) {
-    final String status = data['driverSettlementStatus']
-            ?.toString()
-            .trim()
-            .toLowerCase() ??
-        '';
-
-    if (status != 'paid') {
-      return 0.0;
-    }
-
-    final double? paid =
-        _number(data['driverPaidAmount']);
-
-    if (paid == null || paid < 0) {
-      return 0.0;
-    }
-
-    final double payable = _driverPayable(data);
-
-    if (paid > payable) {
-      return payable;
-    }
-
-    return paid;
-  }
-
-  double _readyToPay(Map<String, dynamic> data) {
-    final double remaining =
-        _driverPayable(data) - _driverPaid(data);
-
-    return remaining < 0 ? 0.0 : remaining;
-  }
 
   DateTime _dayStart(DateTime value) {
     return DateTime(value.year, value.month, value.day);
@@ -478,20 +446,7 @@ class _AdminRideEarningsPageState
             validMoneyRides,
             _driverPayable,
           );
-
-          final Map<String, double> paid =
-              _sumByCurrency(
-            validMoneyRides,
-            _driverPaid,
-          );
-
-          final Map<String, double> ready =
-              _sumByCurrency(
-            validMoneyRides,
-            _readyToPay,
-          );
-
-          return Center(
+return Center(
             child: ConstrainedBox(
               constraints:
                   const BoxConstraints(maxWidth: 1100),
@@ -574,7 +529,7 @@ class _AdminRideEarningsPageState
                               icon: Icons
                                   .shopping_bag_outlined,
                               title:
-                                  'Settlement Gross',
+                                  'Customer Fare (Paid Direct to Driver)',
                               value: _money(gross),
                             ),
                           ),
@@ -583,7 +538,7 @@ class _AdminRideEarningsPageState
                             child: _summaryCard(
                               icon:
                                   Icons.percent_rounded,
-                              title: 'RD Commission',
+                              title: 'RD Commission Generated',
                               value:
                                   _money(commission),
                               emphasize: true,
@@ -595,27 +550,8 @@ class _AdminRideEarningsPageState
                               icon: Icons
                                   .account_balance_wallet_outlined,
                               title:
-                                  'Driver Payable',
+                                  'Driver Net Earnings',
                               value: _money(payable),
-                            ),
-                          ),
-                          SizedBox(
-                            width: itemWidth,
-                            child: _summaryCard(
-                              icon: Icons
-                                  .payments_outlined,
-                              title: 'Driver Paid',
-                              value: _money(paid),
-                            ),
-                          ),
-                          SizedBox(
-                            width: itemWidth,
-                            child: _summaryCard(
-                              icon:
-                                  Icons.schedule_rounded,
-                              title: 'Ready to Pay',
-                              value: _money(ready),
-                              emphasize: true,
                             ),
                           ),
                           SizedBox(
@@ -696,6 +632,8 @@ class _AdminRideEarningsPageState
                         child: _historyCard(ride),
                       ),
                     ),
+                  const SizedBox(height: 26),
+                  _commissionPaymentRequestsSection(),
                 ],
               ),
             ),
@@ -703,6 +641,413 @@ class _AdminRideEarningsPageState
         },
       ),
     );
+  }
+
+
+  Widget _commissionPaymentRequestsSection() {
+    return StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('ride_commission_payments')
+          .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot,
+      ) {
+        if (snapshot.hasError) {
+          return _warningBox(
+            'Could not load Ride Driver commission payments: '
+            '${snapshot.error}',
+          );
+        }
+
+        if (!snapshot.hasData) {
+          return const Card(
+            child: Padding(
+              padding: EdgeInsets.all(24),
+              child: Center(child: CircularProgressIndicator()),
+            ),
+          );
+        }
+
+        final List<QueryDocumentSnapshot<Map<String, dynamic>>> payments =
+            List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
+          snapshot.data!.docs,
+        )..sort(
+                (
+                  QueryDocumentSnapshot<Map<String, dynamic>> a,
+                  QueryDocumentSnapshot<Map<String, dynamic>> b,
+                ) {
+                  final DateTime aTime =
+                      _date(a.data()['createdAt']) ??
+                          DateTime.fromMillisecondsSinceEpoch(0);
+                  final DateTime bTime =
+                      _date(b.data()['createdAt']) ??
+                          DateTime.fromMillisecondsSinceEpoch(0);
+                  return bTime.compareTo(aTime);
+                },
+              );
+
+        double pending = 0.0;
+        double approved = 0.0;
+
+        for (final QueryDocumentSnapshot<Map<String, dynamic>> doc in payments) {
+          final Map<String, dynamic> data = doc.data();
+          final double amount = _number(data['amount']) ?? 0.0;
+          final String status =
+              data['status']?.toString().trim().toLowerCase() ?? '';
+
+          if (status == 'approved') {
+            approved += amount;
+          } else if (status == 'pending_admin_review') {
+            pending += amount;
+          }
+        }
+
+        return Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const Text(
+              'Ride Driver Commission Payments',
+              style: TextStyle(
+                fontSize: 25,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              'Customers pay Ride Drivers directly. This section is only for '
+              'the NRD commission that Ride Drivers send to Admin.',
+              style: TextStyle(
+                color: Colors.grey.shade700,
+                fontWeight: FontWeight.w700,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 14),
+            LayoutBuilder(
+              builder: (
+                BuildContext context,
+                BoxConstraints constraints,
+              ) {
+                final bool wide = constraints.maxWidth >= 700;
+                final double width = wide
+                    ? (constraints.maxWidth - 12) / 2
+                    : constraints.maxWidth;
+                return Wrap(
+                  spacing: 12,
+                  runSpacing: 12,
+                  children: <Widget>[
+                    SizedBox(
+                      width: width,
+                      child: _summaryCard(
+                        icon: Icons.schedule_rounded,
+                        title: 'Pending Verification',
+                        value: 'Rs. ${pending.toStringAsFixed(2)}',
+                        emphasize: true,
+                      ),
+                    ),
+                    SizedBox(
+                      width: width,
+                      child: _summaryCard(
+                        icon: Icons.verified_rounded,
+                        title: 'Commission Approved / Received',
+                        value: 'Rs. ${approved.toStringAsFixed(2)}',
+                      ),
+                    ),
+                  ],
+                );
+              },
+            ),
+            const SizedBox(height: 14),
+            if (payments.isEmpty)
+              _message(
+                icon: Icons.payments_outlined,
+                title: 'No commission payments yet',
+                message:
+                    'Ride Driver commission payment requests will appear here.',
+              )
+            else
+              ...payments.map(_commissionPaymentCard),
+          ],
+        );
+      },
+    );
+  }
+
+  Widget _commissionPaymentCard(
+    QueryDocumentSnapshot<Map<String, dynamic>> payment,
+  ) {
+    final Map<String, dynamic> data = payment.data();
+    final String driverId = data['driverId']?.toString().trim() ?? '';
+    final String method = data['method']?.toString().trim() ?? '-';
+    final String reference = data['reference']?.toString().trim() ?? '-';
+    final String note = data['note']?.toString().trim() ?? '';
+    final String status =
+        data['status']?.toString().trim().toLowerCase() ?? '';
+    final double amount = _number(data['amount']) ?? 0.0;
+    final DateTime? createdAt = _date(data['createdAt']);
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    'Rs. ${amount.toStringAsFixed(2)} • $method',
+                    style: const TextStyle(
+                      fontSize: 17,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                Text(
+                  status == 'approved'
+                      ? 'APPROVED'
+                      : status == 'rejected'
+                          ? 'REJECTED'
+                          : 'PENDING',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    color: status == 'approved'
+                        ? Colors.green
+                        : status == 'rejected'
+                            ? Colors.red
+                            : Colors.orange,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            _detailRow('Driver ID', driverId.isEmpty ? '-' : driverId),
+            _detailRow('Reference', reference),
+            _detailRow('Submitted', _dateTimeText(createdAt)),
+            if (note.isNotEmpty) _detailRow('Note', note),
+            if (status == 'rejected' &&
+                (data['reviewNote']?.toString().trim() ?? '').isNotEmpty)
+              _detailRow(
+                'Admin Note',
+                data['reviewNote'].toString().trim(),
+              ),
+            if (status == 'pending_admin_review') ...<Widget>[
+              const SizedBox(height: 8),
+              Row(
+                children: <Widget>[
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () => _rejectCommissionPayment(payment),
+                      icon: const Icon(Icons.close_rounded),
+                      label: const Text('Reject'),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () => _approveCommissionPayment(payment),
+                      icon: const Icon(Icons.verified_rounded),
+                      label: const Text('Approve Payment'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<double> _driverOutstandingCommission(String driverId) async {
+    if (driverId.trim().isEmpty) {
+      return 0.0;
+    }
+
+    final QuerySnapshot<Map<String, dynamic>> rideSnapshot =
+        await FirebaseFirestore.instance
+            .collection('ride_requests')
+            .where('driverId', isEqualTo: driverId.trim())
+            .get();
+
+    double generated = 0.0;
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> ride
+        in rideSnapshot.docs) {
+      final Map<String, dynamic> data = ride.data();
+      if ((data['status']?.toString().trim().toLowerCase() ?? '') !=
+          'completed') {
+        continue;
+      }
+      generated += _number(data['finalRdCommission']) ?? 0.0;
+    }
+
+    final QuerySnapshot<Map<String, dynamic>> paymentSnapshot =
+        await FirebaseFirestore.instance
+            .collection('ride_commission_payments')
+            .where('driverId', isEqualTo: driverId.trim())
+            .get();
+
+    double approved = 0.0;
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> payment
+        in paymentSnapshot.docs) {
+      final Map<String, dynamic> data = payment.data();
+      if ((data['status']?.toString().trim().toLowerCase() ?? '') ==
+          'approved') {
+        approved += _number(data['amount']) ?? 0.0;
+      }
+    }
+
+    return (generated - approved).clamp(0.0, double.infinity).toDouble();
+  }
+
+  Future<void> _approveCommissionPayment(
+    QueryDocumentSnapshot<Map<String, dynamic>> payment,
+  ) async {
+    final Map<String, dynamic> data = payment.data();
+    if ((data['status']?.toString().trim().toLowerCase() ?? '') !=
+        'pending_admin_review') {
+      return;
+    }
+
+    final String driverId = data['driverId']?.toString().trim() ?? '';
+    final double amount = _number(data['amount']) ?? 0.0;
+    final double outstanding = await _driverOutstandingCommission(driverId);
+
+    if (!mounted) {
+      return;
+    }
+
+    if (amount <= 0 || amount > outstanding + 0.05) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Cannot approve. Current unpaid commission is '
+            'Rs. ${outstanding.toStringAsFixed(2)}.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) => AlertDialog(
+            title: const Text('Approve Commission Payment?'),
+            content: Text(
+              'Driver: $driverId\n'
+              'Amount: Rs. ${amount.toStringAsFixed(2)}\n'
+              'Method: ${data['method'] ?? '-'}\n'
+              'Reference: ${data['reference'] ?? '-'}\n\n'
+              'Approve only after confirming the money arrived in the '
+              'NRD receiving account.',
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Cancel'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                icon: const Icon(Icons.verified_rounded),
+                label: const Text('Approve'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed) {
+      return;
+    }
+
+    try {
+      await payment.reference.update(
+        <String, dynamic>{
+          'status': 'approved',
+          'reviewedAt': FieldValue.serverTimestamp(),
+          'reviewedByUid': FirebaseAuth.instance.currentUser?.uid ?? '',
+          'reviewNote': '',
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Commission payment approved.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not approve payment: $error')),
+      );
+    }
+  }
+
+  Future<void> _rejectCommissionPayment(
+    QueryDocumentSnapshot<Map<String, dynamic>> payment,
+  ) async {
+    final TextEditingController reasonController = TextEditingController();
+    final String? reason = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: const Text('Reject Commission Payment?'),
+        content: TextField(
+          controller: reasonController,
+          maxLength: 300,
+          maxLines: 3,
+          decoration: const InputDecoration(
+            labelText: 'Reason / correction needed',
+            border: OutlineInputBorder(),
+          ),
+        ),
+        actions: <Widget>[
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Cancel'),
+          ),
+          FilledButton(
+            onPressed: () =>
+                Navigator.pop(dialogContext, reasonController.text.trim()),
+            child: const Text('Reject'),
+          ),
+        ],
+      ),
+    );
+    reasonController.dispose();
+
+    if (reason == null) {
+      return;
+    }
+
+    try {
+      await payment.reference.update(
+        <String, dynamic>{
+          'status': 'rejected',
+          'reviewedAt': FieldValue.serverTimestamp(),
+          'reviewedByUid': FirebaseAuth.instance.currentUser?.uid ?? '',
+          'reviewNote': reason,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Commission payment rejected.')),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not reject payment: $error')),
+      );
+    }
   }
 
   Widget _filterChip(
@@ -825,8 +1170,6 @@ class _AdminRideEarningsPageState
     final double fare = _finalFare(data);
     final double commission = _rdCommission(data);
     final double payable = _driverPayable(data);
-    final double paid = _driverPaid(data);
-    final double ready = _readyToPay(data);
     final double percent =
         _number(data['rdCommissionPercent']) ?? 0.0;
 
@@ -835,13 +1178,6 @@ class _AdminRideEarningsPageState
 
     final bool valid =
         _hasValidFinalSettlement(data);
-
-    final String settlementStatus =
-        data['driverSettlementStatus']
-                ?.toString()
-                .trim()
-                .toLowerCase() ??
-            '';
 
     return Card(
       elevation: 1.5,
@@ -924,24 +1260,9 @@ class _AdminRideEarningsPageState
               emphasize: true,
             ),
             _detailRow(
-              'Driver Payable',
+              'Driver Net Earnings',
               '$currency '
               '${payable.toStringAsFixed(2)}',
-            ),
-            _detailRow(
-              'Driver Paid',
-              '$currency ${paid.toStringAsFixed(2)}',
-            ),
-            _detailRow(
-              'Ready to Pay',
-              '$currency ${ready.toStringAsFixed(2)}',
-              emphasize: true,
-            ),
-            _detailRow(
-              'Settlement Status',
-              settlementStatus == 'paid'
-                  ? 'PAID'
-                  : 'NOT PAID',
             ),
           ],
         ),
