@@ -4,6 +4,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
+import 'package:qr_flutter/qr_flutter.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'ride_chat_page.dart';
@@ -325,6 +326,22 @@ class RideCustomerTrackingPage extends StatelessWidget {
                 request['tripStartOtpRequired'] == true) ...<Widget>[
               const SizedBox(height: 14),
               _tripStartOtpCard(),
+            ],
+            if (status == 'in_progress' &&
+                request['paymentStage']?.toString().trim() != 'not_started' &&
+                request['paymentStage']?.toString().trim().isNotEmpty == true)
+              ...<Widget>[
+              const SizedBox(height: 14),
+              _ridePaymentCard(
+                request: request,
+                driver: driver,
+              ),
+            ],
+            if (status == 'in_progress' &&
+                request['paymentStatus']?.toString().trim() == 'received' &&
+                request['rideCompletionRequired'] == true) ...<Widget>[
+              const SizedBox(height: 14),
+              _rideCompletionCard(),
             ],
             const SizedBox(height: 14),
             Card(
@@ -1138,6 +1155,268 @@ return await Geolocator.getCurrentPosition(
     );
   }
 
+
+  Widget _ridePaymentCard({
+    required Map<String, dynamic> request,
+    required Map<String, dynamic> driver,
+  }) {
+    final String currency =
+        request['currency']?.toString().trim().isNotEmpty == true
+            ? request['currency'].toString().trim()
+            : 'Rs.';
+    final double amount = _toDouble(request['paymentFare']) ??
+        _toDouble(request['liveFare']) ??
+        _toDouble(request['estimatedFare']) ??
+        0.0;
+    final String paymentStatus =
+        request['paymentStatus']?.toString().trim().toLowerCase() ?? '';
+    final String paymentMethod =
+        request['paymentMethod']?.toString().trim().toLowerCase() ?? '';
+    final String qrUrl =
+        driver['paymentQrUrl']?.toString().trim() ?? '';
+    final bool received = paymentStatus == 'received';
+
+    return Card(
+      elevation: 1.5,
+      child: Padding(
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                CircleAvatar(
+                  backgroundColor: (received ? Colors.green : Colors.orange)
+                      .withValues(alpha: 0.12),
+                  child: Icon(
+                    received
+                        ? Icons.verified_rounded
+                        : Icons.payments_rounded,
+                    color: received ? Colors.green : Colors.orange,
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: Text(
+                    received
+                        ? 'Payment Received by Driver'
+                        : 'Pay Ride Driver',
+                    style: const TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Text(
+              '$currency ${amount.toStringAsFixed(0)}',
+              style: const TextStyle(
+                fontSize: 28,
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            const SizedBox(height: 6),
+            Text(
+              received
+                  ? 'Driver confirmed the payment'
+                      '${paymentMethod.isEmpty ? '' : ' • ${paymentMethod == 'cash' ? 'Cash' : 'Online QR'}'}. '
+                      'Use the final confirmation code or QR below to close this ride.'
+                  : 'Pay the Ride Driver directly. You can pay cash, or scan the driver payment QR below for online payment. '
+                      'The Driver must confirm receipt before final ride confirmation becomes valid.',
+              style: TextStyle(
+                color: received ? Colors.green.shade800 : Colors.blueGrey,
+                fontWeight: FontWeight.w700,
+                height: 1.4,
+              ),
+            ),
+            if (!received) ...<Widget>[
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(13),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF7F8FA),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Row(
+                  children: <Widget>[
+                    Icon(Icons.payments_outlined),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Cash: hand the fare directly to the Ride Driver.',
+                        style: TextStyle(fontWeight: FontWeight.w800),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              if (qrUrl.isNotEmpty) ...<Widget>[
+                const Text(
+                  'Online Payment • Driver QR',
+                  style: TextStyle(
+                    fontWeight: FontWeight.w900,
+                    fontSize: 16,
+                  ),
+                ),
+                const SizedBox(height: 8),
+                Center(
+                  child: Container(
+                    constraints: const BoxConstraints(
+                      maxWidth: 300,
+                      maxHeight: 300,
+                    ),
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      border: Border.all(color: Colors.black12),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: Image.network(
+                      qrUrl,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const Padding(
+                        padding: EdgeInsets.all(24),
+                        child: Text(
+                          'Driver payment QR could not be loaded. Please pay cash.',
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(height: 8),
+                const Text(
+                  'Scan this QR with your payment app. Payment goes directly to the Ride Driver, not to NRD Admin.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.blueGrey,
+                    fontSize: 12,
+                    height: 1.35,
+                  ),
+                ),
+              ] else
+                const Text(
+                  'Online payment QR is not set by this Ride Driver. Please pay cash.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    color: Colors.orange,
+                    fontWeight: FontWeight.w800,
+                  ),
+                ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _rideCompletionCard() {
+    final String cleanRideId = rideRequestId.trim();
+
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: FirebaseFirestore.instance
+          .collection('ride_requests')
+          .doc(cleanRideId)
+          .collection('private')
+          .doc('completion')
+          .snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> snapshot,
+      ) {
+        if (snapshot.hasError) {
+          return Card(
+            child: Padding(
+              padding: const EdgeInsets.all(16),
+              child: Text(
+                'Final ride confirmation is temporarily unavailable: '
+                '${snapshot.error}',
+                textAlign: TextAlign.center,
+              ),
+            ),
+          );
+        }
+
+        final Map<String, dynamic> data =
+            snapshot.data?.data() ?? <String, dynamic>{};
+        final String otp =
+            data['rideCompletionOtp']?.toString().trim() ?? '';
+        final String qrPayload =
+            data['rideCompletionQrPayload']?.toString().trim() ?? '';
+
+        return Card(
+          elevation: 1.5,
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                const Row(
+                  children: <Widget>[
+                    CircleAvatar(
+                      backgroundColor: Color(0xFFE8F5E9),
+                      child: Icon(
+                        Icons.verified_user_rounded,
+                        color: Colors.green,
+                      ),
+                    ),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Final Ride Confirmation',
+                        style: TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                const Text(
+                  'Payment is confirmed. Give the 6-digit code to the driver, or let the driver scan this QR. '
+                  'The ride becomes Completed only after this final confirmation.',
+                  style: TextStyle(
+                    color: Colors.blueGrey,
+                    height: 1.4,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                Center(
+                  child: Text(
+                    otp.isEmpty ? 'Loading code...' : otp,
+                    style: const TextStyle(
+                      fontSize: 30,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 7,
+                    ),
+                  ),
+                ),
+                if (qrPayload.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 16),
+                  Center(
+                    child: Container(
+                      color: Colors.white,
+                      padding: const EdgeInsets.all(10),
+                      child: QrImageView(
+                        data: qrPayload,
+                        size: 220,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
+
   Widget _tripStartOtpCard() {
     final String cleanRideId = rideRequestId.trim();
 
@@ -1555,27 +1834,43 @@ return await Geolocator.getCurrentPosition(
     final bool inProgress =
         status == 'in_progress' || status == 'started';
     final bool completed = status == 'completed';
+    final String paymentStage =
+        request['paymentStage']?.toString().trim().toLowerCase() ??
+            'not_started';
+    final bool paymentOpen =
+        inProgress && paymentStage != 'not_started';
+    final double? paymentFare = _toDouble(request['paymentFare']);
+    final double? paymentDistanceKm =
+        _toDouble(request['paymentDistanceKm']);
 
     final String mainLabel = completed
         ? 'Final Fare'
-        : inProgress
-            ? 'Live Fare'
-            : 'Estimated Fare';
+        : paymentOpen
+            ? 'Ride Fare to Pay'
+            : inProgress
+                ? 'Live Fare'
+                : 'Estimated Fare';
     final double? mainFare = completed
         ? (finalFare ?? liveFare ?? estimatedFare)
-        : inProgress
-            ? (liveFare ?? estimatedFare)
-            : estimatedFare;
+        : paymentOpen
+            ? (paymentFare ?? liveFare ?? estimatedFare)
+            : inProgress
+                ? (liveFare ?? estimatedFare)
+                : estimatedFare;
     final double? shownDistance = completed
         ? (finalDistanceKm ?? actualDistanceKm ?? routeDistanceKm)
-        : inProgress
-            ? actualDistanceKm
-            : routeDistanceKm;
+        : paymentOpen
+            ? (paymentDistanceKm ?? actualDistanceKm)
+            : inProgress
+                ? actualDistanceKm
+                : routeDistanceKm;
     final String distanceLabel = completed
         ? 'Final Distance'
-        : inProgress
-            ? 'Actual Distance • LIVE'
-            : 'Estimated Distance';
+        : paymentOpen
+            ? 'Ride Distance'
+            : inProgress
+                ? 'Actual Distance • LIVE'
+                : 'Estimated Distance';
 
     return Card(
       elevation: 1.5,
@@ -1606,7 +1901,7 @@ return await Geolocator.getCurrentPosition(
                           fontWeight: FontWeight.w900,
                         ),
                       ),
-                      if (inProgress)
+                      if (inProgress && !paymentOpen)
                         const Text(
                           'Updates automatically from the driver GPS.',
                           style: TextStyle(
@@ -1618,7 +1913,7 @@ return await Geolocator.getCurrentPosition(
                     ],
                   ),
                 ),
-                if (inProgress)
+                if (inProgress && !paymentOpen)
                   Container(
                     padding: const EdgeInsets.symmetric(
                       horizontal: 9,

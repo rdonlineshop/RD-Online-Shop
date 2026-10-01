@@ -410,6 +410,8 @@ service cloud.firestore {
             'vehicleType',
             'vehicleNumber',
             'photoUrl',
+            'paymentQrUrl',
+            'paymentQrUpdatedAt',
             'isOnline',
             'latitude',
             'longitude',
@@ -438,6 +440,17 @@ service cloud.firestore {
           && (
             !('notificationsEnabled' in request.resource.data)
             || request.resource.data.notificationsEnabled is bool
+          )
+          && (
+            !('paymentQrUrl' in request.resource.data)
+            || (
+              request.resource.data.paymentQrUrl is string
+              && request.resource.data.paymentQrUrl.size() <= 4096
+            )
+          )
+          && (
+            !('paymentQrUpdatedAt' in request.resource.data)
+            || request.resource.data.paymentQrUpdatedAt is timestamp
           )
           && (
             request.resource.data.isOnline == false
@@ -614,6 +627,51 @@ service cloud.firestore {
           && request.resource.data.vehicleType == resource.data.vehicleType
           && request.resource.data.pickupAddress == resource.data.pickupAddress
           && request.resource.data.destinationAddress == resource.data.destinationAddress;
+      }
+
+      function rideCompletionPrivateExists() {
+        return exists(
+          /databases/$(database)/documents/ride_requests/$(rideRequestId)/private/completion
+        );
+      }
+
+      function rideCompletionPrivateData() {
+        return get(
+          /databases/$(database)/documents/ride_requests/$(rideRequestId)/private/completion
+        ).data;
+      }
+
+      function rideCompletionConfirmationExistsAfter() {
+        return existsAfter(
+          /databases/$(database)/documents/ride_requests/$(rideRequestId)/completion_confirmations/current
+        );
+      }
+
+      function rideCompletionConfirmationAfterData() {
+        return getAfter(
+          /databases/$(database)/documents/ride_requests/$(rideRequestId)/completion_confirmations/current
+        ).data;
+      }
+
+      function validRideCompletionConfirmation() {
+        return rideCompletionPrivateExists()
+          && rideCompletionConfirmationExistsAfter()
+          && rideCompletionConfirmationAfterData().rideRequestId == rideRequestId
+          && rideCompletionConfirmationAfterData().driverId == request.auth.uid
+          && rideCompletionConfirmationAfterData().method in ['code', 'qr']
+          && (
+            (
+              rideCompletionConfirmationAfterData().method == 'code'
+              && rideCompletionConfirmationAfterData().proof
+                == rideCompletionPrivateData().rideCompletionOtp
+            )
+            ||
+            (
+              rideCompletionConfirmationAfterData().method == 'qr'
+              && rideCompletionConfirmationAfterData().proof
+                == rideCompletionPrivateData().rideCompletionQrPayload
+            )
+          );
       }
 
       allow read: if isAdmin()
@@ -806,6 +864,56 @@ service cloud.firestore {
             || (
               resource.data.status == 'in_progress'
               && resource.data.driverResponse == 'accepted'
+              && resource.data.get('paymentStage', 'not_started') == 'not_started'
+              && request.resource.data.status == 'in_progress'
+              && request.resource.data.driverResponse == 'accepted'
+              && request.resource.data.paymentStage == 'awaiting_payment'
+              && request.resource.data.paymentStatus
+                == 'awaiting_customer_payment'
+              && request.resource.data.paymentFare is number
+              && request.resource.data.paymentFare >= 0
+              && request.resource.data.paymentFare == resource.data.liveFare
+              && request.resource.data.paymentDistanceKm is number
+              && request.resource.data.paymentDistanceKm >= 0
+              && request.resource.data.paymentDistanceKm
+                == resource.data.actualDistanceKm
+              && request.resource.data.paymentRequestedAt is timestamp
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'paymentStage',
+                'paymentStatus',
+                'paymentFare',
+                'paymentDistanceKm',
+                'paymentRequestedAt',
+                'updatedAt'
+              ])
+            )
+            || (
+              resource.data.status == 'in_progress'
+              && resource.data.driverResponse == 'accepted'
+              && resource.data.get('paymentStage', '') == 'awaiting_payment'
+              && resource.data.get('paymentStatus', '')
+                == 'awaiting_customer_payment'
+              && request.resource.data.status == 'in_progress'
+              && request.resource.data.driverResponse == 'accepted'
+              && request.resource.data.paymentStage == 'payment_received'
+              && request.resource.data.paymentStatus == 'received'
+              && request.resource.data.paymentMethod in ['cash', 'online_qr']
+              && request.resource.data.paymentReceivedAt is timestamp
+              && request.resource.data.paymentConfirmedByDriverId
+                == request.auth.uid
+              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                'paymentStage',
+                'paymentStatus',
+                'paymentMethod',
+                'paymentReceivedAt',
+                'paymentConfirmedByDriverId',
+                'updatedAt'
+              ])
+            )
+            || (
+              resource.data.status == 'in_progress'
+              && resource.data.driverResponse == 'accepted'
+              && resource.data.get('paymentStage', 'not_started') == 'not_started'
               && request.resource.data.status == 'in_progress'
               && request.resource.data.driverResponse == 'accepted'
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -825,6 +933,9 @@ service cloud.firestore {
             || (
               resource.data.status == 'in_progress'
               && resource.data.driverResponse == 'accepted'
+              && resource.data.get('paymentStage', '') == 'payment_received'
+              && resource.data.get('paymentStatus', '') == 'received'
+              && validRideCompletionConfirmation()
               && request.resource.data.status == 'completed'
               && request.resource.data.driverResponse == 'accepted'
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -834,12 +945,20 @@ service cloud.firestore {
                 'finalFare',
                 'finalRdCommission',
                 'driverNetIncome',
+                'rideCompletionVerifiedAt',
+                'rideCompletionMethod',
                 'updatedAt'
               ])
+              && request.resource.data.rideCompletionVerifiedAt is timestamp
+              && request.resource.data.rideCompletionMethod
+                == rideCompletionConfirmationAfterData().method
               && request.resource.data.finalDistanceKm is number
               && request.resource.data.finalDistanceKm >= 0
+              && request.resource.data.finalDistanceKm
+                == resource.data.paymentDistanceKm
               && request.resource.data.finalFare is number
               && request.resource.data.finalFare >= 0
+              && request.resource.data.finalFare == resource.data.paymentFare
               && request.resource.data.finalRdCommission is number
               && request.resource.data.finalRdCommission >= 0
               && request.resource.data.driverNetIncome is number
@@ -876,17 +995,30 @@ service cloud.firestore {
             && parentRide().customerAuthUid == request.auth.uid);
 
         allow create: if signedIn()
-          && privateDoc == 'customer'
           && parentRideAfterCreate().customerAuthUid == request.auth.uid
           && request.resource.data.rideRequestId == rideRequestId
-          && request.resource.data.tripStartOtp is string
-          && request.resource.data.tripStartOtp.matches('^[0-9]{6}$');
+          && (
+            (
+              privateDoc == 'customer'
+              && request.resource.data.tripStartOtp is string
+              && request.resource.data.tripStartOtp.matches('^[0-9]{6}$')
+            )
+            ||
+            (
+              privateDoc == 'completion'
+              && request.resource.data.rideCompletionOtp is string
+              && request.resource.data.rideCompletionOtp.matches('^[0-9]{6}$')
+              && request.resource.data.rideCompletionQrPayload is string
+              && request.resource.data.rideCompletionQrPayload.size() >= 20
+              && request.resource.data.rideCompletionQrPayload.size() <= 200
+            )
+          );
 
         allow update: if isAdmin();
 
-        // After the driver successfully verifies the OTP, the real 6-digit
-        // value is deleted in the same batch. Only the parent verification
-        // timestamp remains as evidence.
+        // Start OTP and final completion proof stay private from the driver.
+        // The driver may only delete the matching private proof in the same
+        // verified transition where it is no longer needed.
         allow delete: if isAdmin()
           || (
             signedIn()
@@ -899,15 +1031,81 @@ service cloud.firestore {
             && parentRideAfterCreate().driverId == request.auth.uid
             && (
               (
-                parentRideAfterCreate().status == 'in_progress'
+                privateDoc == 'customer'
+                && parentRideAfterCreate().status == 'in_progress'
                 && parentRideAfterCreate().tripStartOtpVerifiedAt is timestamp
               )
               || (
-                parentRideAfterCreate().status == 'cancelled'
+                privateDoc in ['customer', 'completion']
+                && parentRideAfterCreate().status == 'cancelled'
                 && parentRideAfterCreate().cancelledBy == 'driver'
               )
             )
+          )
+          || (
+            isActiveRideDriver()
+            && privateDoc == 'completion'
+            && parentRideAfterCreate().driverId == request.auth.uid
+            && parentRideAfterCreate().status == 'completed'
+            && parentRideAfterCreate().rideCompletionVerifiedAt is timestamp
           );
+      }
+
+      // Driver submits the customer-provided final code/QR without being able
+      // to read the private proof. Rules compare it to the customer-private
+      // completion document.
+      match /completion_confirmations/{confirmationId} {
+        function confirmationRide() {
+          return get(
+            /databases/$(database)/documents/ride_requests/$(rideRequestId)
+          ).data;
+        }
+
+        function completionPrivate() {
+          return get(
+            /databases/$(database)/documents/ride_requests/$(rideRequestId)/private/completion
+          ).data;
+        }
+
+        allow read: if isAdmin()
+          || (signedIn()
+            && confirmationRide().customerAuthUid == request.auth.uid)
+          || (signedIn()
+            && confirmationRide().driverId == request.auth.uid);
+
+        allow create: if confirmationId == 'current'
+          && isActiveRideDriver()
+          && confirmationRide().driverId == request.auth.uid
+          && confirmationRide().status == 'in_progress'
+          && confirmationRide().get('paymentStatus', '') == 'received'
+          && request.resource.data.rideRequestId == rideRequestId
+          && request.resource.data.driverId == request.auth.uid
+          && request.resource.data.method in ['code', 'qr']
+          && request.resource.data.proof is string
+          && request.resource.data.createdAt is timestamp
+          && (
+            (
+              request.resource.data.method == 'code'
+              && request.resource.data.proof
+                == completionPrivate().rideCompletionOtp
+            )
+            ||
+            (
+              request.resource.data.method == 'qr'
+              && request.resource.data.proof
+                == completionPrivate().rideCompletionQrPayload
+            )
+          )
+          && request.resource.data.keys().hasOnly([
+            'rideRequestId',
+            'driverId',
+            'method',
+            'proof',
+            'createdAt'
+          ]);
+
+        allow update: if false;
+        allow delete: if isAdmin();
       }
 
       // Private real-time chat between the customer and the assigned Ride

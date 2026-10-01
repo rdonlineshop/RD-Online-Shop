@@ -213,6 +213,11 @@ class RideRequestService {
         _rideRequests.doc();
     final DocumentReference<Map<String, dynamic>> customerPrivateRef =
         ref.collection('private').doc('customer');
+    final DocumentReference<Map<String, dynamic>> completionPrivateRef =
+        ref.collection('private').doc('completion');
+    final String rideCompletionOtp = _generateTripStartOtp();
+    final String rideCompletionQrPayload =
+        'NRD_RIDE_COMPLETE|${ref.id}|$rideCompletionOtp';
     final WriteBatch batch = _firestore.batch();
 
     batch.set(
@@ -293,6 +298,20 @@ class RideRequestService {
         'tripStartOtpHash': tripStartOtpHash,
         'tripStartOtpVerifiedAt': null,
 
+        // Customer -> Ride Driver payment and final ride confirmation.
+        // The real completion OTP/QR stays in the customer-private document.
+        'paymentStage': 'not_started',
+        'paymentStatus': 'not_started',
+        'paymentFare': null,
+        'paymentDistanceKm': null,
+        'paymentMethod': null,
+        'paymentRequestedAt': null,
+        'paymentReceivedAt': null,
+        'paymentConfirmedByDriverId': null,
+        'rideCompletionRequired': true,
+        'rideCompletionVerifiedAt': null,
+        'rideCompletionMethod': null,
+
         // Tracking foundation
         'tripStartedAt': null,
         'tripCompletedAt': null,
@@ -320,6 +339,16 @@ class RideRequestService {
       <String, dynamic>{
         'rideRequestId': ref.id,
         'tripStartOtp': tripStartOtp,
+        'createdAt': FieldValue.serverTimestamp(),
+      },
+    );
+
+    batch.set(
+      completionPrivateRef,
+      <String, dynamic>{
+        'rideRequestId': ref.id,
+        'rideCompletionOtp': rideCompletionOtp,
+        'rideCompletionQrPayload': rideCompletionQrPayload,
         'createdAt': FieldValue.serverTimestamp(),
       },
     );
@@ -369,6 +398,8 @@ class RideRequestService {
         _rideRequests.doc(cleanId);
     final DocumentReference<Map<String, dynamic>> privateRef =
         rideRef.collection('private').doc('customer');
+    final DocumentReference<Map<String, dynamic>> completionPrivateRef =
+        rideRef.collection('private').doc('completion');
 
     return _firestore.runTransaction<RideCancellationResult>(
       (Transaction transaction) async {
@@ -418,8 +449,9 @@ class RideRequestService {
           },
         );
 
-        // The real Trip Start OTP is no longer needed after cancellation.
+        // Private start/final confirmation proofs are no longer needed.
         transaction.delete(privateRef);
+        transaction.delete(completionPrivateRef);
 
         return RideCancellationResult(
           previousStatus: status,
@@ -453,6 +485,8 @@ class RideRequestService {
         _rideRequests.doc(cleanId);
     final DocumentReference<Map<String, dynamic>> privateRef =
         rideRef.collection('private').doc('customer');
+    final DocumentReference<Map<String, dynamic>> completionPrivateRef =
+        rideRef.collection('private').doc('completion');
     final DocumentReference<Map<String, dynamic>> driverRef =
         _firestore.collection('ride_drivers').doc(user.uid);
 
@@ -510,6 +544,7 @@ class RideRequestService {
         );
 
         transaction.delete(privateRef);
+        transaction.delete(completionPrivateRef);
 
         return RideCancellationResult(
           previousStatus: status,

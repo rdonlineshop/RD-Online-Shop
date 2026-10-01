@@ -12,6 +12,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:mobile_scanner/mobile_scanner.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'ride_chat_page.dart';
@@ -175,7 +176,20 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
           }
         }
 
-        unawaited(_startLiveLocationTracking(nextRideId));
+        final Map<String, dynamic> activeData =
+            activeRide?.data() ?? <String, dynamic>{};
+        final String activeStatus =
+            activeData['status']?.toString().trim().toLowerCase() ?? '';
+        final String paymentStage =
+            activeData['paymentStage']?.toString().trim().toLowerCase() ??
+                'not_started';
+
+        if (activeStatus == 'in_progress' &&
+            paymentStage != 'not_started') {
+          unawaited(_stopLiveLocationTracking());
+        } else {
+          unawaited(_startLiveLocationTracking(nextRideId));
+        }
       },
       onError: (_) {
         // The visible StreamBuilders show Firestore errors to the user.
@@ -1526,7 +1540,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
     }
   }
 
-  Future<void> _completeTrip(
+  Future<void> _prepareRidePayment(
     QueryDocumentSnapshot<Map<String, dynamic>> request,
   ) async {
     if (_updatingRideStatus) {
@@ -1537,9 +1551,10 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
           context: context,
           builder: (BuildContext dialogContext) {
             return AlertDialog(
-              title: const Text('Complete Trip?'),
+              title: const Text('Reached Destination?'),
               content: const Text(
-                'Confirm only after the passenger has reached the destination.',
+                'This freezes the ride fare and opens Cash / Online payment for the customer. '
+                'The ride will not be marked Completed yet.',
               ),
               actions: <Widget>[
                 TextButton(
@@ -1548,8 +1563,8 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                 ),
                 FilledButton.icon(
                   onPressed: () => Navigator.pop(dialogContext, true),
-                  icon: const Icon(Icons.flag_rounded),
-                  label: const Text('Complete'),
+                  icon: const Icon(Icons.payments_rounded),
+                  label: const Text('Collect Payment'),
                 ),
               ],
             );
@@ -1561,9 +1576,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       return;
     }
 
-    setState(() {
-      _updatingRideStatus = true;
-    });
+    setState(() => _updatingRideStatus = true);
 
     try {
       final Position? finalPosition = await _getCurrentPosition();
@@ -1584,6 +1597,251 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
           _toDouble(latestData['liveFare']) ??
               _toDouble(latestData['estimatedFare']) ??
               0.0;
+
+      await request.reference.update(
+        <String, dynamic>{
+          'paymentStage': 'awaiting_payment',
+          'paymentStatus': 'awaiting_customer_payment',
+          'paymentFare': finalFare,
+          'paymentDistanceKm': finalDistanceKm,
+          'paymentRequestedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      await _stopLiveLocationTracking();
+
+      if (!mounted) {
+        return;
+      }
+
+      final String currency =
+          latestData['currency']?.toString().trim().isNotEmpty == true
+              ? latestData['currency'].toString().trim()
+              : 'Rs.';
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Fare frozen at $currency ${finalFare.toStringAsFixed(0)}. '
+            'Collect Cash or Online QR payment, then confirm receipt.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not open ride payment: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _updatingRideStatus = false);
+      }
+    }
+  }
+
+  Future<void> _confirmRidePayment(
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
+    String method,
+  ) async {
+    if (_updatingRideStatus) {
+      return;
+    }
+
+    final String cleanMethod = method.trim().toLowerCase();
+    if (!<String>['cash', 'online_qr'].contains(cleanMethod)) {
+      return;
+    }
+
+    if (cleanMethod == 'online_qr') {
+      final DocumentSnapshot<Map<String, dynamic>> driverSnapshot =
+          await _driverRef.get();
+      final String paymentQrUrl =
+          driverSnapshot.data()?['paymentQrUrl']?.toString().trim() ?? '';
+      if (paymentQrUrl.isEmpty) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text(
+                'Online Payment QR is not saved. Open Earnings and upload your Customer Payment QR first.',
+              ),
+            ),
+          );
+        }
+        return;
+      }
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    final bool confirmed = await showDialog<bool>(
+          context: context,
+          builder: (BuildContext dialogContext) => AlertDialog(
+            title: Text(
+              cleanMethod == 'cash'
+                  ? 'Cash Received?'
+                  : 'Online Payment Received?',
+            ),
+            content: Text(
+              cleanMethod == 'cash'
+                  ? 'Confirm only after you have received the full ride fare in cash.'
+                  : 'Check your payment app/account first. Confirm only after the customer payment has actually arrived.',
+            ),
+            actions: <Widget>[
+              TextButton(
+                onPressed: () => Navigator.pop(dialogContext, false),
+                child: const Text('Not Yet'),
+              ),
+              FilledButton.icon(
+                onPressed: () => Navigator.pop(dialogContext, true),
+                icon: const Icon(Icons.verified_rounded),
+                label: const Text('Payment Received'),
+              ),
+            ],
+          ),
+        ) ??
+        false;
+
+    if (!confirmed || !mounted) {
+      return;
+    }
+
+    setState(() => _updatingRideStatus = true);
+    try {
+      await request.reference.update(
+        <String, dynamic>{
+          'paymentStage': 'payment_received',
+          'paymentStatus': 'received',
+          'paymentMethod': cleanMethod,
+          'paymentReceivedAt': FieldValue.serverTimestamp(),
+          'paymentConfirmedByDriverId': _driverId,
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text(
+              'Payment confirmed. Ask the customer for the Final Ride code or scan their Final Ride QR.',
+            ),
+          ),
+        );
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not confirm payment: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _updatingRideStatus = false);
+      }
+    }
+  }
+
+  Future<void> _enterRideCompletionCode(
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
+  ) async {
+    final String? code = await showDialog<String>(
+      context: context,
+      barrierDismissible: false,
+      builder: (_) => const _RideCompletionOtpDialog(),
+    );
+
+    if (code == null || !mounted) {
+      return;
+    }
+
+    await _completeTripWithProof(
+      request,
+      method: 'code',
+      proof: code.trim(),
+    );
+  }
+
+  bool get _supportsRideCompletionScanner {
+    if (foundation.kIsWeb) {
+      return false;
+    }
+    return foundation.defaultTargetPlatform ==
+            foundation.TargetPlatform.android ||
+        foundation.defaultTargetPlatform == foundation.TargetPlatform.iOS;
+  }
+
+  Future<void> _scanRideCompletionQr(
+    QueryDocumentSnapshot<Map<String, dynamic>> request,
+  ) async {
+    if (!_supportsRideCompletionScanner) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'QR scanning is available on Android/iPhone. Use the 6-digit Final Ride code on this device.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final String? payload = await Navigator.push<String>(
+      context,
+      MaterialPageRoute<String>(
+        builder: (_) => const _RideCompletionScannerPage(),
+      ),
+    );
+
+    if (payload == null || payload.trim().isEmpty || !mounted) {
+      return;
+    }
+
+    await _completeTripWithProof(
+      request,
+      method: 'qr',
+      proof: payload.trim(),
+    );
+  }
+
+  Future<void> _completeTripWithProof(
+    QueryDocumentSnapshot<Map<String, dynamic>> request, {
+    required String method,
+    required String proof,
+  }) async {
+    if (_updatingRideStatus) {
+      return;
+    }
+
+    if (proof.trim().isEmpty) {
+      return;
+    }
+
+    setState(() => _updatingRideStatus = true);
+
+    try {
+      final DocumentSnapshot<Map<String, dynamic>> latestSnapshot =
+          await request.reference.get();
+      final Map<String, dynamic> latestData =
+          latestSnapshot.data() ?? request.data();
+
+      final String paymentStatus =
+          latestData['paymentStatus']?.toString().trim().toLowerCase() ?? '';
+      if (paymentStatus != 'received') {
+        throw StateError(
+          'Confirm Customer payment before completing the ride.',
+        );
+      }
+
+      final double finalDistanceKm =
+          _toDouble(latestData['paymentDistanceKm']) ??
+              _toDouble(latestData['actualDistanceKm']) ??
+              0.0;
+      final double finalFare =
+          _toDouble(latestData['paymentFare']) ??
+              _toDouble(latestData['liveFare']) ??
+              0.0;
       final double rdCommissionPercent =
           _toDouble(latestData['rdCommissionPercent']) ?? 0.0;
       final double finalRdCommission =
@@ -1593,7 +1851,23 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
               .clamp(0.0, finalFare)
               .toDouble();
 
+      final DocumentReference<Map<String, dynamic>> confirmationRef =
+          request.reference.collection('completion_confirmations').doc('current');
+      final DocumentReference<Map<String, dynamic>> privateCompletionRef =
+          request.reference.collection('private').doc('completion');
+
       final WriteBatch batch = FirebaseFirestore.instance.batch();
+
+      batch.set(
+        confirmationRef,
+        <String, dynamic>{
+          'rideRequestId': request.id,
+          'driverId': _driverId,
+          'method': method,
+          'proof': proof.trim(),
+          'createdAt': FieldValue.serverTimestamp(),
+        },
+      );
 
       batch.update(
         request.reference,
@@ -1604,9 +1878,13 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
           'finalFare': finalFare,
           'finalRdCommission': finalRdCommission,
           'driverNetIncome': driverNetIncome,
+          'rideCompletionVerifiedAt': FieldValue.serverTimestamp(),
+          'rideCompletionMethod': method,
           'updatedAt': FieldValue.serverTimestamp(),
         },
       );
+
+      batch.delete(privateCompletionRef);
 
       batch.update(
         _driverRef,
@@ -1632,7 +1910,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            'Trip completed. Final ${finalDistanceKm.toStringAsFixed(2)} km • '
+            'Ride completed securely • '
             '$currency ${finalFare.toStringAsFixed(0)} • '
             'Net $currency ${driverNetIncome.toStringAsFixed(2)}',
           ),
@@ -1642,15 +1920,16 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
       if (!mounted) {
         return;
       }
-
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Could not complete trip: $error')),
+        SnackBar(
+          content: Text(
+            'Final confirmation failed. Check the customer code/QR and payment status. $error',
+          ),
+        ),
       );
     } finally {
       if (mounted) {
-        setState(() {
-          _updatingRideStatus = false;
-        });
+        setState(() => _updatingRideStatus = false);
       }
     }
   }
@@ -2120,6 +2399,17 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
             : (liveFare - (liveRdCommission ?? 0.0))
                 .clamp(0.0, liveFare)
                 .toDouble();
+        final String paymentStage =
+            data['paymentStage']?.toString().trim().toLowerCase() ??
+                'not_started';
+        final String paymentStatus =
+            data['paymentStatus']?.toString().trim().toLowerCase() ??
+                'not_started';
+        final double? paymentFare = _toDouble(data['paymentFare']);
+        final double? paymentDistanceKm =
+            _toDouble(data['paymentDistanceKm']);
+        final String paymentMethod =
+            data['paymentMethod']?.toString().trim().toLowerCase() ?? '';
 
         return Card(
           elevation: 2,
@@ -2323,6 +2613,7 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                   ),
                 ],
                 if (status == 'in_progress' &&
+                    paymentStage == 'not_started' &&
                     actualDistanceKm != null) ...<Widget>[
                   const Divider(height: 24),
                   _locationRow(
@@ -2331,7 +2622,9 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                     value: '${actualDistanceKm.toStringAsFixed(2)} km',
                   ),
                 ],
-                if (status == 'in_progress' && liveFare != null) ...<Widget>[
+                if (status == 'in_progress' &&
+                    paymentStage == 'not_started' &&
+                    liveFare != null) ...<Widget>[
                   const Divider(height: 24),
                   _locationRow(
                     icon: Icons.currency_rupee_rounded,
@@ -2341,7 +2634,8 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                 ],
                 if (status == 'in_progress' &&
                     liveRdCommission != null &&
-                    liveDriverIncome != null) ...<Widget>[
+                    liveDriverIncome != null &&
+                    paymentStage == 'not_started') ...<Widget>[
                   const Divider(height: 24),
                   _locationRow(
                     icon: Icons.percent_rounded,
@@ -2355,6 +2649,37 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                     label: 'Live Driver Income',
                     value:
                         '$currency ${liveDriverIncome.toStringAsFixed(2)}',
+                  ),
+                ],
+                if (status == 'in_progress' &&
+                    paymentStage != 'not_started') ...<Widget>[
+                  const Divider(height: 24),
+                  _locationRow(
+                    icon: Icons.payments_rounded,
+                    label: paymentStatus == 'received'
+                        ? 'Customer Payment'
+                        : 'Fare to Collect',
+                    value: paymentFare == null
+                        ? 'Preparing...'
+                        : '$currency ${paymentFare.toStringAsFixed(0)}',
+                  ),
+                  if (paymentDistanceKm != null) ...<Widget>[
+                    const SizedBox(height: 8),
+                    _locationRow(
+                      icon: Icons.route_rounded,
+                      label: 'Final Distance',
+                      value: '${paymentDistanceKm.toStringAsFixed(2)} km',
+                    ),
+                  ],
+                  const SizedBox(height: 8),
+                  _locationRow(
+                    icon: paymentStatus == 'received'
+                        ? Icons.verified_rounded
+                        : Icons.hourglass_top_rounded,
+                    label: 'Payment Status',
+                    value: paymentStatus == 'received'
+                        ? 'RECEIVED • ${paymentMethod == 'cash' ? 'CASH' : 'ONLINE QR'}'
+                        : 'WAITING FOR CUSTOMER PAYMENT',
                   ),
                 ],
                 const SizedBox(height: 16),
@@ -2403,16 +2728,64 @@ class _RideDriverRequestsPageState extends State<RideDriverRequestsPage> {
                       style: TextStyle(fontWeight: FontWeight.w900),
                     ),
                   ),
-                ] else
+                ] else if (paymentStage == 'not_started') ...<Widget>[
                   FilledButton.icon(
-                    onPressed:
-                        _updatingRideStatus ? null : () => _completeTrip(ride),
-                    icon: const Icon(Icons.flag_rounded),
+                    onPressed: _updatingRideStatus
+                        ? null
+                        : () => _prepareRidePayment(ride),
+                    icon: const Icon(Icons.location_on_rounded),
                     label: const Text(
-                      'Complete Trip',
+                      'Reached Destination / Collect Payment',
                       style: TextStyle(fontWeight: FontWeight.w900),
                     ),
                   ),
+                ] else if (paymentStage == 'awaiting_payment') ...<Widget>[
+                  FilledButton.icon(
+                    onPressed: _updatingRideStatus
+                        ? null
+                        : () => _confirmRidePayment(ride, 'cash'),
+                    icon: const Icon(Icons.payments_outlined),
+                    label: const Text(
+                      'Cash Received',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: _updatingRideStatus
+                        ? null
+                        : () => _confirmRidePayment(ride, 'online_qr'),
+                    icon: const Icon(Icons.qr_code_2_rounded),
+                    label: const Text(
+                      'Online QR Payment Received',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ] else ...<Widget>[
+                  FilledButton.icon(
+                    onPressed: _updatingRideStatus
+                        ? null
+                        : () => _enterRideCompletionCode(ride),
+                    icon: const Icon(Icons.password_rounded),
+                    label: const Text(
+                      'Enter Final 6-digit Code',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                  const SizedBox(height: 10),
+                  OutlinedButton.icon(
+                    onPressed: _updatingRideStatus
+                        ? null
+                        : () => _scanRideCompletionQr(ride),
+                    icon: const Icon(Icons.qr_code_scanner_rounded),
+                    label: Text(
+                      _supportsRideCompletionScanner
+                          ? 'Scan Final Ride QR'
+                          : 'Final QR Scanner • Mobile Only',
+                      style: const TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                  ),
+                ],
                 const SizedBox(height: 8),
                 const Text(
                   'Keep this screen open while driving. GPS, actual distance and live fare update together for both driver and customer.',
@@ -4471,6 +4844,155 @@ class _MessageCard extends StatelessWidget {
     );
   }
 }
+
+
+class _RideCompletionOtpDialog extends StatefulWidget {
+  const _RideCompletionOtpDialog();
+
+  @override
+  State<_RideCompletionOtpDialog> createState() =>
+      _RideCompletionOtpDialogState();
+}
+
+class _RideCompletionOtpDialogState extends State<_RideCompletionOtpDialog> {
+  final GlobalKey<FormState> _formKey = GlobalKey<FormState>();
+  final TextEditingController _controller = TextEditingController();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  void _submit() {
+    if (_formKey.currentState?.validate() != true) {
+      return;
+    }
+    Navigator.of(context).pop(_controller.text.trim());
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return AlertDialog(
+      icon: const Icon(
+        Icons.verified_user_rounded,
+        size: 42,
+      ),
+      title: const Text('Final Ride Code'),
+      content: Form(
+        key: _formKey,
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: <Widget>[
+            const Text(
+              'Ask the customer for the 6-digit Final Ride Confirmation code shown after payment is confirmed.',
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 14),
+            TextFormField(
+              controller: _controller,
+              autofocus: true,
+              keyboardType: TextInputType.number,
+              maxLength: 6,
+              textAlign: TextAlign.center,
+              style: const TextStyle(
+                fontSize: 24,
+                fontWeight: FontWeight.w900,
+                letterSpacing: 5,
+              ),
+              decoration: const InputDecoration(
+                labelText: '6-digit final code',
+                border: OutlineInputBorder(),
+                counterText: '',
+              ),
+              validator: (String? value) {
+                final String code = value?.trim() ?? '';
+                if (!RegExp(r'^\d{6}$').hasMatch(code)) {
+                  return 'Enter the 6-digit final code.';
+                }
+                return null;
+              },
+              onFieldSubmitted: (_) => _submit(),
+            ),
+          ],
+        ),
+      ),
+      actions: <Widget>[
+        TextButton(
+          onPressed: () => Navigator.of(context).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.icon(
+          onPressed: _submit,
+          icon: const Icon(Icons.flag_rounded),
+          label: const Text('Verify & Complete'),
+        ),
+      ],
+    );
+  }
+}
+
+class _RideCompletionScannerPage extends StatefulWidget {
+  const _RideCompletionScannerPage();
+
+  @override
+  State<_RideCompletionScannerPage> createState() =>
+      _RideCompletionScannerPageState();
+}
+
+class _RideCompletionScannerPageState
+    extends State<_RideCompletionScannerPage> {
+  bool _handled = false;
+
+  void _onDetect(BarcodeCapture capture) {
+    if (_handled) {
+      return;
+    }
+
+    for (final Barcode barcode in capture.barcodes) {
+      final String value = barcode.rawValue?.trim() ?? '';
+      if (value.isEmpty) {
+        continue;
+      }
+      _handled = true;
+      Navigator.of(context).pop(value);
+      return;
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Scan Final Ride QR',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+        centerTitle: true,
+      ),
+      body: SafeArea(
+        child: Column(
+          children: <Widget>[
+            const Padding(
+              padding: EdgeInsets.all(16),
+              child: Text(
+                'Scan the Final Ride Confirmation QR shown on the customer phone after payment is confirmed.',
+                textAlign: TextAlign.center,
+                style: TextStyle(fontWeight: FontWeight.w700),
+              ),
+            ),
+            Expanded(
+              child: MobileScanner(
+                onDetect: _onDetect,
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 
 class _TripStartOtpDialog extends StatefulWidget {
   const _TripStartOtpDialog();

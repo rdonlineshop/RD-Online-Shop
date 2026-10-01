@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 import 'services/ride_commission_service.dart';
 
@@ -226,6 +230,257 @@ class RideDriverEarningsSummaryCard extends StatelessWidget {
           ),
         ],
       ),
+    );
+  }
+}
+
+
+
+class _DriverCustomerPaymentQrCard extends StatefulWidget {
+  const _DriverCustomerPaymentQrCard({
+    required this.driverId,
+  });
+
+  final String driverId;
+
+  @override
+  State<_DriverCustomerPaymentQrCard> createState() =>
+      _DriverCustomerPaymentQrCardState();
+}
+
+class _DriverCustomerPaymentQrCardState
+    extends State<_DriverCustomerPaymentQrCard> {
+  static const String _cloudName = 'p83ttfym';
+  static const String _uploadPreset = 'rd_online_shop_products';
+
+  bool _uploading = false;
+
+  DocumentReference<Map<String, dynamic>> get _driverRef =>
+      FirebaseFirestore.instance
+          .collection('ride_drivers')
+          .doc(widget.driverId.trim());
+
+  Future<String> _uploadQrImage(XFile image) async {
+    final Uri uri = Uri.parse(
+      'https://api.cloudinary.com/v1_1/$_cloudName/image/upload',
+    );
+    final http.MultipartRequest request = http.MultipartRequest('POST', uri)
+      ..fields['upload_preset'] = _uploadPreset
+      ..files.add(
+        await http.MultipartFile.fromPath(
+          'file',
+          image.path,
+        ),
+      );
+
+    final http.StreamedResponse response = await request.send();
+    final String body = await response.stream.bytesToString();
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Payment QR upload failed: $body');
+    }
+
+    final dynamic decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) {
+      throw Exception('Invalid Payment QR upload response.');
+    }
+
+    final String url = decoded['secure_url']?.toString().trim() ?? '';
+    if (url.isEmpty) {
+      throw Exception('Payment QR image URL was not received.');
+    }
+
+    return url;
+  }
+
+  Future<void> _pickAndSaveQr() async {
+    if (_uploading) {
+      return;
+    }
+
+    final XFile? image = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 90,
+    );
+    if (image == null || !mounted) {
+      return;
+    }
+
+    setState(() => _uploading = true);
+    try {
+      final String url = await _uploadQrImage(image);
+      await _driverRef.update(
+        <String, dynamic>{
+          'paymentQrUrl': url,
+          'paymentQrUpdatedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'Customer payment QR saved. Customers can use it at ride completion.',
+          ),
+        ),
+      );
+    } catch (error) {
+      if (!mounted) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Could not save Payment QR: $error')),
+      );
+    } finally {
+      if (mounted) {
+        setState(() => _uploading = false);
+      }
+    }
+  }
+
+  Future<void> _removeQr() async {
+    if (_uploading) {
+      return;
+    }
+
+    setState(() => _uploading = true);
+    try {
+      await _driverRef.update(
+        <String, dynamic>{
+          'paymentQrUrl': '',
+          'paymentQrUpdatedAt': FieldValue.serverTimestamp(),
+          'updatedAt': FieldValue.serverTimestamp(),
+        },
+      );
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Could not remove Payment QR: $error')),
+        );
+      }
+    } finally {
+      if (mounted) {
+        setState(() => _uploading = false);
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return StreamBuilder<DocumentSnapshot<Map<String, dynamic>>>(
+      stream: _driverRef.snapshots(),
+      builder: (
+        BuildContext context,
+        AsyncSnapshot<DocumentSnapshot<Map<String, dynamic>>> snapshot,
+      ) {
+        final Map<String, dynamic> data =
+            snapshot.data?.data() ?? <String, dynamic>{};
+        final String qrUrl =
+            data['paymentQrUrl']?.toString().trim() ?? '';
+
+        return Card(
+          child: Padding(
+            padding: const EdgeInsets.all(16),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                const Row(
+                  children: <Widget>[
+                    Icon(Icons.qr_code_2_rounded),
+                    SizedBox(width: 10),
+                    Expanded(
+                      child: Text(
+                        'Customer Payment QR',
+                        style: TextStyle(
+                          fontSize: 19,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 8),
+                Text(
+                  'For online ride payment, the customer pays you directly. '
+                  'Upload your own payment QR here. Cash payment remains available.',
+                  style: TextStyle(
+                    color: Colors.grey.shade700,
+                    height: 1.35,
+                    fontWeight: FontWeight.w700,
+                  ),
+                ),
+                const SizedBox(height: 14),
+                if (qrUrl.isNotEmpty)
+                  Center(
+                    child: Container(
+                      constraints: const BoxConstraints(
+                        maxWidth: 280,
+                        maxHeight: 280,
+                      ),
+                      padding: const EdgeInsets.all(10),
+                      decoration: BoxDecoration(
+                        border: Border.all(color: Colors.black12),
+                        borderRadius: BorderRadius.circular(14),
+                      ),
+                      child: Image.network(
+                        qrUrl,
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) => const Padding(
+                          padding: EdgeInsets.all(24),
+                          child: Text(
+                            'Saved Payment QR could not be loaded.',
+                            textAlign: TextAlign.center,
+                          ),
+                        ),
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    padding: const EdgeInsets.all(18),
+                    decoration: BoxDecoration(
+                      color: const Color(0xFFF7F8FA),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: const Text(
+                      'No online payment QR saved yet. Customers can still pay cash.',
+                      textAlign: TextAlign.center,
+                    ),
+                  ),
+                const SizedBox(height: 12),
+                FilledButton.icon(
+                  onPressed: _uploading ? null : _pickAndSaveQr,
+                  icon: _uploading
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
+                      : const Icon(Icons.image_rounded),
+                  label: Text(
+                    _uploading
+                        ? 'Saving...'
+                        : qrUrl.isEmpty
+                            ? 'Upload Payment QR'
+                            : 'Replace Payment QR',
+                  ),
+                ),
+                if (qrUrl.isNotEmpty) ...<Widget>[
+                  const SizedBox(height: 8),
+                  OutlinedButton.icon(
+                    onPressed: _uploading ? null : _removeQr,
+                    icon: const Icon(Icons.delete_outline_rounded),
+                    label: const Text('Remove Payment QR'),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 }
@@ -951,12 +1206,26 @@ class RideDriverEarningsPage extends StatelessWidget {
                       _completedEntries(snapshot.data!);
 
                   if (entries.isEmpty) {
-                    return const Center(
-                      child: Padding(
-                        padding: EdgeInsets.all(24),
-                        child: Text(
-                          'No completed rides yet. Earnings will appear after a trip is completed.',
-                          textAlign: TextAlign.center,
+                    return Center(
+                      child: ConstrainedBox(
+                        constraints: const BoxConstraints(maxWidth: 820),
+                        child: ListView(
+                          padding: const EdgeInsets.all(16),
+                          children: <Widget>[
+                            _DriverCustomerPaymentQrCard(
+                              driverId: cleanDriverId,
+                            ),
+                            const SizedBox(height: 16),
+                            const Card(
+                              child: Padding(
+                                padding: EdgeInsets.all(24),
+                                child: Text(
+                                  'No completed rides yet. Earnings and NRD commission will appear after a trip is completed.',
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            ),
+                          ],
                         ),
                       ),
                     );
@@ -1008,6 +1277,10 @@ class RideDriverEarningsPage extends StatelessWidget {
                                 ],
                               ),
                             ),
+                          ),
+                          const SizedBox(height: 16),
+                          _DriverCustomerPaymentQrCard(
+                            driverId: cleanDriverId,
                           ),
                           const SizedBox(height: 16),
                           _RideCommissionSettlementCard(
