@@ -1,5 +1,9 @@
+import 'dart:convert';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:flutter/material.dart';
+import 'package:http/http.dart' as http;
+import 'package:image_picker/image_picker.dart';
 
 import 'services/ride_commission_service.dart';
 
@@ -13,12 +17,23 @@ class AdminRideCommissionSettingsPage extends StatefulWidget {
 
 class _AdminRideCommissionSettingsPageState
     extends State<AdminRideCommissionSettingsPage> {
+  static const String _cloudName = 'p83ttfym';
+  static const String _uploadPreset = 'rd_online_shop_products';
+
   final RideCommissionService _service = RideCommissionService();
   final TextEditingController _percentController = TextEditingController();
+  final TextEditingController _esewaController = TextEditingController();
+  final TextEditingController _khaltiController = TextEditingController();
+  final TextEditingController _bankNameController = TextEditingController();
+  final TextEditingController _bankHolderController = TextEditingController();
+  final TextEditingController _bankAccountController = TextEditingController();
 
   bool _loading = true;
   bool _saving = false;
+  bool _savingPayment = false;
+  bool _uploadingQr = false;
   double _percent = RideCommissionService.fallbackPercent;
+  String _paymentQrUrl = '';
 
   @override
   void initState() {
@@ -29,20 +44,33 @@ class _AdminRideCommissionSettingsPageState
   @override
   void dispose() {
     _percentController.dispose();
+    _esewaController.dispose();
+    _khaltiController.dispose();
+    _bankNameController.dispose();
+    _bankHolderController.dispose();
+    _bankAccountController.dispose();
     super.dispose();
   }
 
   Future<void> _load() async {
-    final double value = await _service.loadCommissionPercent();
+    final RideCommissionSettings settings = await _service.loadSettings();
     if (!mounted) {
       return;
     }
 
     setState(() {
-      _percent = value;
-      _percentController.text = value.toStringAsFixed(
-        value == value.roundToDouble() ? 0 : 2,
+      _percent = settings.commissionPercent;
+      _percentController.text = settings.commissionPercent.toStringAsFixed(
+        settings.commissionPercent == settings.commissionPercent.roundToDouble()
+            ? 0
+            : 2,
       );
+      _esewaController.text = settings.esewaNumber;
+      _khaltiController.text = settings.khaltiNumber;
+      _bankNameController.text = settings.bankName;
+      _bankHolderController.text = settings.bankAccountHolder;
+      _bankAccountController.text = settings.bankAccountNumber;
+      _paymentQrUrl = settings.paymentQrUrl;
       _loading = false;
     });
   }
@@ -77,6 +105,106 @@ class _AdminRideCommissionSettingsPageState
     } finally {
       if (mounted) {
         setState(() => _saving = false);
+      }
+    }
+  }
+
+  Future<String> _uploadPaymentQr(XFile image) async {
+    final Uri uri = Uri.parse(
+      'https://api.cloudinary.com/v1_1/$_cloudName/image/upload',
+    );
+    final http.MultipartRequest request = http.MultipartRequest('POST', uri);
+    request.fields['upload_preset'] = _uploadPreset;
+    request.files.add(
+      http.MultipartFile.fromBytes(
+        'file',
+        await image.readAsBytes(),
+        filename: image.name,
+      ),
+    );
+
+    final http.StreamedResponse response = await request.send();
+    final String body = await response.stream.bytesToString();
+
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw Exception('Payment QR upload failed: $body');
+    }
+
+    final dynamic decoded = jsonDecode(body);
+    if (decoded is! Map<String, dynamic>) {
+      throw StateError('Invalid Payment QR upload response.');
+    }
+
+    final String url = decoded['secure_url']?.toString().trim() ?? '';
+    if (url.isEmpty) {
+      throw StateError('Payment QR URL was not received.');
+    }
+    return url;
+  }
+
+  Future<void> _choosePaymentQr() async {
+    if (_uploadingQr || _savingPayment) {
+      return;
+    }
+
+    final XFile? image = await ImagePicker().pickImage(
+      source: ImageSource.gallery,
+      imageQuality: 90,
+    );
+    if (image == null || !mounted) {
+      return;
+    }
+
+    setState(() => _uploadingQr = true);
+    try {
+      final String url = await _uploadPaymentQr(image);
+      if (!mounted) {
+        return;
+      }
+      setState(() => _paymentQrUrl = url);
+      _message('NRD commission payment QR uploaded. Save the account details.');
+    } catch (error) {
+      _message('Could not upload payment QR: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _uploadingQr = false);
+      }
+    }
+  }
+
+  Future<void> _savePaymentAccount() async {
+    if (_savingPayment || _uploadingQr) {
+      return;
+    }
+
+    final bool hasAnyMethod = _esewaController.text.trim().isNotEmpty ||
+        _khaltiController.text.trim().isNotEmpty ||
+        _bankAccountController.text.trim().isNotEmpty ||
+        _paymentQrUrl.trim().isNotEmpty;
+
+    if (!hasAnyMethod) {
+      _message(
+        'Add at least one NRD receiving method: eSewa, Khalti, Bank, or Payment QR.',
+      );
+      return;
+    }
+
+    setState(() => _savingPayment = true);
+    try {
+      await _service.saveCommissionReceivingAccount(
+        esewaNumber: _esewaController.text,
+        khaltiNumber: _khaltiController.text,
+        bankName: _bankNameController.text,
+        bankAccountHolder: _bankHolderController.text,
+        bankAccountNumber: _bankAccountController.text,
+        paymentQrUrl: _paymentQrUrl,
+      );
+      _message('NRD commission receiving account saved.');
+    } catch (error) {
+      _message('Could not save payment account: $error');
+    } finally {
+      if (mounted) {
+        setState(() => _savingPayment = false);
       }
     }
   }
@@ -120,6 +248,8 @@ class _AdminRideCommissionSettingsPageState
                           sampleCommission: sampleCommission,
                           sampleDriver: sampleDriver,
                         ),
+                        const SizedBox(height: 16),
+                        _commissionReceivingAccountCard(),
                         const SizedBox(height: 16),
                         _commissionIncomeSection(),
                       ],
@@ -178,14 +308,10 @@ class _AdminRideCommissionSettingsPageState
                         ? const SizedBox(
                             width: 18,
                             height: 18,
-                            child: CircularProgressIndicator(
-                              strokeWidth: 2,
-                            ),
+                            child: CircularProgressIndicator(strokeWidth: 2),
                           )
                         : const Icon(Icons.save_rounded),
-                    label: Text(
-                      _saving ? 'Saving...' : 'Save Commission',
-                    ),
+                    label: Text(_saving ? 'Saving...' : 'Save Commission'),
                   ),
                 ),
               ],
@@ -223,6 +349,150 @@ class _AdminRideCommissionSettingsPageState
           ),
         ),
       ],
+    );
+  }
+
+  Widget _commissionReceivingAccountCard() {
+    return Card(
+      child: Padding(
+        padding: const EdgeInsets.all(18),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const Row(
+              children: <Widget>[
+                Icon(Icons.account_balance_wallet_rounded),
+                SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'NRD Commission Receiving Account',
+                    style: TextStyle(
+                      fontSize: 20,
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 8),
+            const Text(
+              'Ride Drivers will use these details from their Earnings page to pay only the pending NRD commission. Customer ride payment never comes to this account.',
+            ),
+            const SizedBox(height: 16),
+            _paymentField(
+              controller: _esewaController,
+              label: 'NRD eSewa Number / Merchant ID',
+              icon: Icons.phone_android_rounded,
+            ),
+            const SizedBox(height: 12),
+            _paymentField(
+              controller: _khaltiController,
+              label: 'NRD Khalti Number / Merchant ID',
+              icon: Icons.phone_android_rounded,
+            ),
+            const SizedBox(height: 12),
+            _paymentField(
+              controller: _bankNameController,
+              label: 'Bank Name',
+              icon: Icons.account_balance_rounded,
+            ),
+            const SizedBox(height: 12),
+            _paymentField(
+              controller: _bankHolderController,
+              label: 'Bank Account Holder',
+              icon: Icons.person_rounded,
+            ),
+            const SizedBox(height: 12),
+            _paymentField(
+              controller: _bankAccountController,
+              label: 'Bank Account Number',
+              icon: Icons.numbers_rounded,
+            ),
+            const SizedBox(height: 16),
+            if (_paymentQrUrl.isNotEmpty) ...<Widget>[
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: const Color(0xFFF7F8FA),
+                  borderRadius: BorderRadius.circular(14),
+                ),
+                child: Column(
+                  children: <Widget>[
+                    const Text(
+                      'NRD Commission Payment QR',
+                      style: TextStyle(fontWeight: FontWeight.w900),
+                    ),
+                    const SizedBox(height: 10),
+                    Image.network(
+                      _paymentQrUrl,
+                      height: 220,
+                      fit: BoxFit.contain,
+                      errorBuilder: (_, __, ___) => const SizedBox(
+                        height: 120,
+                        child: Center(child: Text('Could not load payment QR.')),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+            ],
+            OutlinedButton.icon(
+              onPressed: _uploadingQr ? null : _choosePaymentQr,
+              icon: _uploadingQr
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.qr_code_2_rounded),
+              label: Text(
+                _uploadingQr
+                    ? 'Uploading QR...'
+                    : _paymentQrUrl.isEmpty
+                        ? 'Upload NRD Payment QR'
+                        : 'Change NRD Payment QR',
+              ),
+            ),
+            const SizedBox(height: 12),
+            SizedBox(
+              height: 50,
+              child: FilledButton.icon(
+                onPressed: _savingPayment || _uploadingQr
+                    ? null
+                    : _savePaymentAccount,
+                icon: _savingPayment
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2),
+                      )
+                    : const Icon(Icons.save_rounded),
+                label: Text(
+                  _savingPayment
+                      ? 'Saving Payment Account...'
+                      : 'Save NRD Receiving Account',
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _paymentField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+  }) {
+    return TextField(
+      controller: controller,
+      decoration: InputDecoration(
+        labelText: label,
+        border: const OutlineInputBorder(),
+        prefixIcon: Icon(icon),
+      ),
     );
   }
 
