@@ -1979,6 +1979,29 @@ class _DeliveryPersonDashboardPageState
   }
 
   // =========================================================
+  // DELIVERY EARNINGS
+  // =========================================================
+
+  Future<void> _openDeliveryEarnings() async {
+    final String driverId = _deliveryPersonId.trim();
+
+    if (driverId.isEmpty) {
+      _showMessage('Delivery person login is required.');
+      return;
+    }
+
+    await Navigator.push<void>(
+      context,
+      MaterialPageRoute<void>(
+        builder: (_) => _DeliveryEarningsPage(
+          driverId: driverId,
+          driverName: _deliveryPersonName.trim(),
+        ),
+      ),
+    );
+  }
+
+  // =========================================================
   // EDIT PROFILE
   // =========================================================
 
@@ -2321,6 +2344,20 @@ class _DeliveryPersonDashboardPageState
                               ),
                             ),
                           ),
+                          const SizedBox(height: 10),
+                          SizedBox(
+                            width: double.infinity,
+                            height: 52,
+                            child: OutlinedButton.icon(
+                              onPressed: _openDeliveryEarnings,
+                              icon: const Icon(
+                                Icons.account_balance_wallet_rounded,
+                              ),
+                              label: const Text(
+                                'Delivery Earnings',
+                              ),
+                            ),
+                          ),
                           if (_isOnline) ...<Widget>[
                             const SizedBox(height: 6),
                             Row(
@@ -2475,6 +2512,604 @@ class _DeliveryPersonDashboardPageState
                     ),
                   ],
                 ),
+    );
+  }
+}
+
+
+class _DeliveryIncomeEntry {
+  const _DeliveryIncomeEntry({
+    required this.id,
+    required this.data,
+    required this.deliveredAt,
+    required this.deliveryFee,
+    required this.payoutStatus,
+  });
+
+  final String id;
+  final Map<String, dynamic> data;
+  final DateTime deliveredAt;
+  final double deliveryFee;
+  final String payoutStatus;
+}
+
+class _DeliveryIncomeSummary {
+  const _DeliveryIncomeSummary({
+    required this.amount,
+    required this.deliveries,
+  });
+
+  final double amount;
+  final int deliveries;
+}
+
+class _DeliveryEarningsPage extends StatelessWidget {
+  const _DeliveryEarningsPage({
+    required this.driverId,
+    required this.driverName,
+  });
+
+  final String driverId;
+  final String driverName;
+
+  double? _number(dynamic value) {
+    if (value is num) {
+      return value.toDouble();
+    }
+
+    final String text = value?.toString().trim() ?? '';
+    if (text.isEmpty) {
+      return null;
+    }
+
+    return double.tryParse(text.replaceAll(',', ''));
+  }
+
+  DateTime _date(dynamic value) {
+    if (value is Timestamp) {
+      return value.toDate().toLocal();
+    }
+
+    if (value is DateTime) {
+      return value.toLocal();
+    }
+
+    final DateTime? parsed = DateTime.tryParse(
+      value?.toString().trim() ?? '',
+    );
+
+    return parsed?.toLocal() ??
+        DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  DateTime _deliveredTime(Map<String, dynamic> order) {
+    for (final String key in <String>[
+      'deliveredAt',
+      'deliveryCompletedAt',
+      'completedAt',
+      'updatedAt',
+      'orderDateTime',
+    ]) {
+      final DateTime value = _date(order[key]);
+      if (value.millisecondsSinceEpoch > 0) {
+        return value;
+      }
+    }
+
+    return DateTime.fromMillisecondsSinceEpoch(0);
+  }
+
+  bool _isDelivered(Map<String, dynamic> order) {
+    final String status =
+        order['status']?.toString().trim().toLowerCase() ?? '';
+    final String trackingStatus =
+        order['trackingStatus']?.toString().trim().toLowerCase() ?? '';
+    final String deliveredAt =
+        order['deliveredAt']?.toString().trim() ?? '';
+
+    return status == 'delivered' ||
+        trackingStatus == 'delivered' ||
+        deliveredAt.isNotEmpty;
+  }
+
+  double _deliveryFee(Map<String, dynamic> order) {
+    return _number(order['delivery']) ??
+        _number(order['deliveryFee']) ??
+        _number(order['deliveryCharge']) ??
+        _number(order['shippingFee']) ??
+        0.0;
+  }
+
+  String _payoutStatus(Map<String, dynamic> order) {
+    final List<dynamic> values = <dynamic>[
+      order['deliveryPayoutStatus'],
+      order['driverPayoutStatus'],
+      order['deliveryPaymentStatus'],
+      order['payoutStatus'],
+    ];
+
+    for (final dynamic value in values) {
+      final String status = value?.toString().trim().toLowerCase() ?? '';
+      if (status.isEmpty) {
+        continue;
+      }
+
+      if (status == 'paid' ||
+          status == 'settled' ||
+          status == 'completed') {
+        return 'Paid';
+      }
+
+      if (status == 'pending' ||
+          status == 'ready' ||
+          status == 'ready to pay' ||
+          status == 'unpaid') {
+        return 'Pending';
+      }
+    }
+
+    // Existing orders do not currently write a delivery payout field.
+    // Treat delivered fee as pending until an admin/payment flow marks it paid.
+    return 'Pending';
+  }
+
+  List<_DeliveryIncomeEntry> _entries(
+    QuerySnapshot<Map<String, dynamic>> snapshot,
+  ) {
+    final List<_DeliveryIncomeEntry> entries = <_DeliveryIncomeEntry>[];
+
+    for (final QueryDocumentSnapshot<Map<String, dynamic>> document
+        in snapshot.docs) {
+      final Map<String, dynamic> order = document.data();
+
+      if (!_isDelivered(order)) {
+        continue;
+      }
+
+      entries.add(
+        _DeliveryIncomeEntry(
+          id: document.id,
+          data: order,
+          deliveredAt: _deliveredTime(order),
+          deliveryFee: _deliveryFee(order),
+          payoutStatus: _payoutStatus(order),
+        ),
+      );
+    }
+
+    entries.sort(
+      (_DeliveryIncomeEntry first, _DeliveryIncomeEntry second) =>
+          second.deliveredAt.compareTo(first.deliveredAt),
+    );
+
+    return entries;
+  }
+
+  _DeliveryIncomeSummary _summary(
+    Iterable<_DeliveryIncomeEntry> entries,
+  ) {
+    double amount = 0;
+    int deliveries = 0;
+
+    for (final _DeliveryIncomeEntry entry in entries) {
+      amount += entry.deliveryFee;
+      deliveries += 1;
+    }
+
+    return _DeliveryIncomeSummary(
+      amount: amount,
+      deliveries: deliveries,
+    );
+  }
+
+  String _dateText(DateTime value) {
+    if (value.millisecondsSinceEpoch == 0) {
+      return '-';
+    }
+
+    final String day = value.day.toString().padLeft(2, '0');
+    final String month = value.month.toString().padLeft(2, '0');
+    final String hour = value.hour.toString().padLeft(2, '0');
+    final String minute = value.minute.toString().padLeft(2, '0');
+
+    return '$day/$month/${value.year} $hour:$minute';
+  }
+
+  Widget _statCard(
+    String title,
+    double amount,
+    int deliveries,
+  ) {
+    return Container(
+      padding: const EdgeInsets.all(12),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.black12),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Text(
+            title,
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Rs. ${amount.toStringAsFixed(2)}',
+            style: const TextStyle(
+              fontSize: 17,
+              fontWeight: FontWeight.w900,
+            ),
+          ),
+          Text(
+            '$deliveries deliveries',
+            style: const TextStyle(fontSize: 11.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _moneyRow(
+    String label,
+    double amount, {
+    bool bold = false,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: Text(
+              label,
+              style: TextStyle(
+                fontWeight: bold ? FontWeight.w900 : FontWeight.w600,
+              ),
+            ),
+          ),
+          Text(
+            'Rs. ${amount.toStringAsFixed(2)}',
+            style: TextStyle(
+              fontWeight: bold ? FontWeight.w900 : FontWeight.w700,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _historyCard(_DeliveryIncomeEntry entry) {
+    final String marketplace =
+        entry.data['marketplace']?.toString().trim() ?? '';
+    final String customer =
+        entry.data['customerName']?.toString().trim() ??
+            entry.data['name']?.toString().trim() ??
+            '';
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    marketplace.isEmpty ? 'Delivery' : marketplace,
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+                Text(
+                  _dateText(entry.deliveredAt),
+                  style: const TextStyle(fontSize: 11.5),
+                ),
+              ],
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Order ID: ${entry.id}',
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 11.5),
+            ),
+            if (customer.isNotEmpty) ...<Widget>[
+              const SizedBox(height: 3),
+              Text('Customer: $customer'),
+            ],
+            const Divider(height: 22),
+            Row(
+              children: <Widget>[
+                const Expanded(
+                  child: Text('Delivery Fee'),
+                ),
+                Text(
+                  'Rs. ${entry.deliveryFee.toStringAsFixed(2)}',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w900,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            Row(
+              children: <Widget>[
+                const Expanded(
+                  child: Text('Payout Status'),
+                ),
+                Chip(
+                  label: Text(entry.payoutStatus),
+                  avatar: Icon(
+                    entry.payoutStatus == 'Paid'
+                        ? Icons.check_circle_rounded
+                        : Icons.schedule_rounded,
+                    size: 18,
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final String cleanDriverId = driverId.trim();
+
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text(
+          'Delivery Earnings',
+          style: TextStyle(fontWeight: FontWeight.w900),
+        ),
+        centerTitle: true,
+      ),
+      body: SafeArea(
+        child: cleanDriverId.isEmpty
+            ? const Center(
+                child: Text('Delivery Person ID is not available.'),
+              )
+            : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+                stream: FirebaseFirestore.instance
+                    .collection('orders')
+                    .where('driverId', isEqualTo: cleanDriverId)
+                    .snapshots(),
+                builder: (
+                  BuildContext context,
+                  AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot,
+                ) {
+                  if (snapshot.hasError) {
+                    return Center(
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Text(
+                          'Could not load Delivery Earnings.\n${snapshot.error}',
+                          textAlign: TextAlign.center,
+                        ),
+                      ),
+                    );
+                  }
+
+                  if (!snapshot.hasData) {
+                    return const Center(
+                      child: CircularProgressIndicator(),
+                    );
+                  }
+
+                  final List<_DeliveryIncomeEntry> entries =
+                      _entries(snapshot.data!);
+
+                  final DateTime now = DateTime.now();
+                  final DateTime startOfToday =
+                      DateTime(now.year, now.month, now.day);
+                  final DateTime startOfWeek = startOfToday.subtract(
+                    Duration(
+                      days: startOfToday.weekday - DateTime.monday,
+                    ),
+                  );
+                  final DateTime startOfMonth =
+                      DateTime(now.year, now.month);
+
+                  final _DeliveryIncomeSummary today = _summary(
+                    entries.where(
+                      (_DeliveryIncomeEntry entry) =>
+                          !entry.deliveredAt.isBefore(startOfToday),
+                    ),
+                  );
+                  final _DeliveryIncomeSummary week = _summary(
+                    entries.where(
+                      (_DeliveryIncomeEntry entry) =>
+                          !entry.deliveredAt.isBefore(startOfWeek),
+                    ),
+                  );
+                  final _DeliveryIncomeSummary month = _summary(
+                    entries.where(
+                      (_DeliveryIncomeEntry entry) =>
+                          !entry.deliveredAt.isBefore(startOfMonth),
+                    ),
+                  );
+                  final _DeliveryIncomeSummary total = _summary(entries);
+                  final _DeliveryIncomeSummary pending = _summary(
+                    entries.where(
+                      (_DeliveryIncomeEntry entry) =>
+                          entry.payoutStatus != 'Paid',
+                    ),
+                  );
+                  final _DeliveryIncomeSummary paid = _summary(
+                    entries.where(
+                      (_DeliveryIncomeEntry entry) =>
+                          entry.payoutStatus == 'Paid',
+                    ),
+                  );
+
+                  return Center(
+                    child: ConstrainedBox(
+                      constraints: const BoxConstraints(maxWidth: 820),
+                      child: ListView(
+                        padding: const EdgeInsets.all(16),
+                        children: <Widget>[
+                          Card(
+                            child: Padding(
+                              padding: const EdgeInsets.all(16),
+                              child: Column(
+                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                                children: <Widget>[
+                                  Row(
+                                    children: <Widget>[
+                                      const CircleAvatar(
+                                        radius: 24,
+                                        child: Icon(
+                                          Icons.account_balance_wallet_rounded,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 12),
+                                      Expanded(
+                                        child: Column(
+                                          crossAxisAlignment:
+                                              CrossAxisAlignment.start,
+                                          children: <Widget>[
+                                            const Text(
+                                              'Delivery Earnings',
+                                              style: TextStyle(
+                                                fontSize: 19,
+                                                fontWeight: FontWeight.w900,
+                                              ),
+                                            ),
+                                            Text(
+                                              driverName.isEmpty
+                                                  ? 'Delivery Person'
+                                                  : driverName,
+                                            ),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 12),
+                                  const Text(
+                                    'Only the order Delivery Fee is counted here. Product/order total is not counted as Delivery Person income.',
+                                    style: TextStyle(
+                                      fontSize: 12,
+                                      color: Colors.blueGrey,
+                                      fontWeight: FontWeight.w600,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 14),
+                                  Container(
+                                    padding: const EdgeInsets.all(14),
+                                    decoration: BoxDecoration(
+                                      color: const Color(0xFFF7F8FA),
+                                      borderRadius: BorderRadius.circular(14),
+                                    ),
+                                    child: Column(
+                                      children: <Widget>[
+                                        _moneyRow(
+                                          'Total Delivery Earnings',
+                                          total.amount,
+                                          bold: true,
+                                        ),
+                                        _moneyRow(
+                                          'Pending Payout',
+                                          pending.amount,
+                                        ),
+                                        _moneyRow(
+                                          'Paid Earnings',
+                                          paid.amount,
+                                        ),
+                                        const Divider(height: 20),
+                                        Align(
+                                          alignment: Alignment.centerLeft,
+                                          child: Text(
+                                            'Completed deliveries: ${total.deliveries}',
+                                            style: const TextStyle(
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  const SizedBox(height: 12),
+                                  Row(
+                                    children: <Widget>[
+                                      Expanded(
+                                        child: _statCard(
+                                          'Today',
+                                          today.amount,
+                                          today.deliveries,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: _statCard(
+                                          'This Week',
+                                          week.amount,
+                                          week.deliveries,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                  const SizedBox(height: 10),
+                                  Row(
+                                    children: <Widget>[
+                                      Expanded(
+                                        child: _statCard(
+                                          'This Month',
+                                          month.amount,
+                                          month.deliveries,
+                                        ),
+                                      ),
+                                      const SizedBox(width: 10),
+                                      Expanded(
+                                        child: _statCard(
+                                          'All Time',
+                                          total.amount,
+                                          total.deliveries,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ],
+                              ),
+                            ),
+                          ),
+                          const SizedBox(height: 16),
+                          const Text(
+                            'Completed Delivery History',
+                            style: TextStyle(
+                              fontSize: 18,
+                              fontWeight: FontWeight.w900,
+                            ),
+                          ),
+                          const SizedBox(height: 10),
+                          if (entries.isEmpty)
+                            const Card(
+                              child: Padding(
+                                padding: EdgeInsets.all(24),
+                                child: Text(
+                                  'No completed deliveries yet. Earnings will appear after an assigned order is marked Delivered.',
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            )
+                          else
+                            ...entries.map(_historyCard),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+      ),
     );
   }
 }
