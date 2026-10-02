@@ -70,6 +70,10 @@ class _HomePageState extends State<HomePage> {
     'assets/images/nrd_banner_4.png',
     'assets/images/nrd_banner_5.png',
     'assets/images/nrd_banner_6.png',
+    'assets/images/nrd_banner_7.png',
+    'assets/images/nrd_banner_8.png',
+    'assets/images/nrd_banner_9.png',
+    'assets/images/nrd_banner_10.png',
   ];
 
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>?
@@ -1529,192 +1533,112 @@ class _HomePageState extends State<HomePage> {
   Widget _offerBanner() {
     final bool desktop = _isDesktop(context);
 
-    if (selectedCategory == 'All') {
-      return _contentWidth(
-        Padding(
-          padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(24),
-            child: SizedBox(
-              height: desktop ? 260 : 200,
-              child: PageView.builder(
-                controller: _bannerController,
-                itemCount: _homeBanners.length,
-                onPageChanged: (int index) {
-                  _currentBannerIndex = index;
-                },
-                itemBuilder: (BuildContext context, int index) {
-                  return Image.asset(
-                    _homeBanners[index],
-                    width: double.infinity,
-                    height: double.infinity,
-                    fit: BoxFit.cover,
-                    errorBuilder: (_, __, ___) {
-                      return Image.asset(
-                        'assets/images/nrd_banner_1.png',
-                        width: double.infinity,
-                        height: double.infinity,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) {
-                          return Container(
-                            alignment: Alignment.center,
-                            color: _rdBlack,
-                            child: const Text(
-                              'NRD Online Shop',
-                              textAlign: TextAlign.center,
-                              style: TextStyle(
-                                color: Colors.white,
-                                fontWeight: FontWeight.w900,
-                                fontSize: 20,
+    return _contentWidth(
+      Padding(
+        padding: const EdgeInsets.fromLTRB(16, 8, 16, 8),
+        child: ClipRRect(
+          borderRadius: BorderRadius.circular(24),
+          child: SizedBox(
+            height: desktop ? 260 : 200,
+            child: Stack(
+              fit: StackFit.expand,
+              children: <Widget>[
+                PageView.builder(
+                  controller: _bannerController,
+                  itemCount: _homeBanners.length,
+                  onPageChanged: (int index) {
+                    if (!mounted) {
+                      return;
+                    }
+
+                    setState(() {
+                      _currentBannerIndex = index;
+                    });
+                  },
+                  itemBuilder: (BuildContext context, int index) {
+                    return Image.asset(
+                      _homeBanners[index],
+                      width: double.infinity,
+                      height: double.infinity,
+                      fit: BoxFit.cover,
+                      errorBuilder: (_, __, ___) {
+                        return Image.asset(
+                          'assets/images/nrd_banner_1.png',
+                          width: double.infinity,
+                          height: double.infinity,
+                          fit: BoxFit.cover,
+                          errorBuilder: (_, __, ___) {
+                            return Container(
+                              alignment: Alignment.center,
+                              color: _rdBlack,
+                              child: const Text(
+                                'NRD Online Shop',
+                                textAlign: TextAlign.center,
+                                style: TextStyle(
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.w900,
+                                  fontSize: 20,
+                                ),
                               ),
+                            );
+                          },
+                        );
+                      },
+                    );
+                  },
+                ),
+                Positioned(
+                  left: 0,
+                  right: 0,
+                  bottom: 12,
+                  child: IgnorePointer(
+                    child: Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: List<Widget>.generate(
+                        _homeBanners.length,
+                        (int index) {
+                          final bool active =
+                              index == _currentBannerIndex;
+
+                          return AnimatedContainer(
+                            duration: const Duration(
+                              milliseconds: 220,
+                            ),
+                            margin: const EdgeInsets.symmetric(
+                              horizontal: 3,
+                            ),
+                            width: active ? 18 : 7,
+                            height: 7,
+                            decoration: BoxDecoration(
+                              color: active
+                                  ? _rdRed
+                                  : Colors.white.withValues(
+                                      alpha: 0.88,
+                                    ),
+                              borderRadius: BorderRadius.circular(
+                                20,
+                              ),
+                              boxShadow: const <BoxShadow>[
+                                BoxShadow(
+                                  color: Colors.black26,
+                                  blurRadius: 3,
+                                ),
+                              ],
                             ),
                           );
                         },
-                      );
-                    },
-                  );
-                },
-              ),
-            ),
-          ),
-        ),
-      );
-    }
-
-    final _BannerData data = bannerData;
-    final String imagePath =
-        categoryImages[selectedCategory] ?? categoryImages['All']!;
-
-    return _contentWidth(
-      Padding(
-        padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-        child: Container(
-          height: desktop ? 180 : 175,
-          decoration: BoxDecoration(
-            borderRadius: BorderRadius.circular(24),
-            gradient: LinearGradient(
-              colors: <Color>[
-                data.startColor,
-                data.endColor,
-              ],
-              begin: Alignment.centerLeft,
-              end: Alignment.centerRight,
-            ),
-            boxShadow: const <BoxShadow>[
-              BoxShadow(
-                color: Colors.black26,
-                blurRadius: 10,
-                offset: Offset(0, 4),
-              ),
-            ],
-          ),
-          clipBehavior: Clip.antiAlias,
-          child: Stack(
-            children: <Widget>[
-              Positioned(
-                right: -18,
-                top: -18,
-                child: Container(
-                  width: 178,
-                  height: 178,
-                  decoration: BoxDecoration(
-                    color: Colors.white.withValues(alpha: 0.16),
-                    shape: BoxShape.circle,
-                  ),
-                ),
-              ),
-              Positioned(
-                right: 14,
-                top: 16,
-                bottom: 16,
-                width: 122,
-                child: Container(
-                  padding: const EdgeInsets.all(8),
-                  decoration: BoxDecoration(
-                    color: Colors.white,
-                    borderRadius: BorderRadius.circular(22),
-                    boxShadow: const <BoxShadow>[
-                      BoxShadow(
-                        color: Colors.black26,
-                        blurRadius: 8,
-                        offset: Offset(0, 3),
                       ),
-                    ],
-                  ),
-                  child: ClipRRect(
-                    borderRadius: BorderRadius.circular(16),
-                    child: Image.asset(
-                      imagePath,
-                      fit: BoxFit.cover,
-                      errorBuilder: (_, __, ___) {
-                        return Icon(
-                          data.primaryIcon,
-                          size: 58,
-                          color: data.startColor,
-                        );
-                      },
                     ),
                   ),
                 ),
-              ),
-              Positioned.fill(
-                right: 142,
-                child: Padding(
-                  padding: const EdgeInsets.fromLTRB(18, 16, 8, 14),
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(
-                        data.title,
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 23,
-                          fontWeight: FontWeight.w900,
-                        ),
-                      ),
-                      const SizedBox(height: 7),
-                      Text(
-                        data.subtitle,
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                        style: const TextStyle(
-                          color: Colors.white,
-                          fontSize: 13,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                      const SizedBox(height: 12),
-                      Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 14,
-                          vertical: 8,
-                        ),
-                        decoration: BoxDecoration(
-                          color: _rdBlack,
-                          borderRadius: BorderRadius.circular(10),
-                        ),
-                        child: const Text(
-                          'SHOP NOW',
-                          style: TextStyle(
-                            color: Colors.white,
-                            fontSize: 12,
-                            fontWeight: FontWeight.w900,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
+              ],
+            ),
           ),
         ),
       ),
     );
   }
+
 
   Widget _benefitStrip() {
     const List<(IconData, String)> items = <(IconData, String)>[

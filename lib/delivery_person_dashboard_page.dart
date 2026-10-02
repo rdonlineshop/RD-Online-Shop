@@ -2523,18 +2523,26 @@ class _DeliveryIncomeEntry {
     required this.data,
     required this.deliveredAt,
     required this.deliveryFee,
-    required this.payoutStatus,
   });
 
   final String id;
   final Map<String, dynamic> data;
   final DateTime deliveredAt;
   final double deliveryFee;
-  final String payoutStatus;
 }
 
 class _DeliveryIncomeSummary {
   const _DeliveryIncomeSummary({
+    required this.amount,
+    required this.deliveries,
+  });
+
+  final double amount;
+  final int deliveries;
+}
+
+class _DeliveryCommissionSummary {
+  const _DeliveryCommissionSummary({
     required this.amount,
     required this.deliveries,
   });
@@ -2613,50 +2621,21 @@ class _DeliveryEarningsPage extends StatelessWidget {
   }
 
   double _deliveryFee(Map<String, dynamic> order) {
-    return _number(order['delivery']) ??
-        _number(order['deliveryFee']) ??
-        _number(order['deliveryCharge']) ??
-        _number(order['shippingFee']) ??
-        0.0;
-  }
+    final double value =
+        _number(order['delivery']) ??
+            _number(order['deliveryFee']) ??
+            _number(order['deliveryCharge']) ??
+            _number(order['shippingFee']) ??
+            0.0;
 
-  String _payoutStatus(Map<String, dynamic> order) {
-    final List<dynamic> values = <dynamic>[
-      order['deliveryPayoutStatus'],
-      order['driverPayoutStatus'],
-      order['deliveryPaymentStatus'],
-      order['payoutStatus'],
-    ];
-
-    for (final dynamic value in values) {
-      final String status = value?.toString().trim().toLowerCase() ?? '';
-      if (status.isEmpty) {
-        continue;
-      }
-
-      if (status == 'paid' ||
-          status == 'settled' ||
-          status == 'completed') {
-        return 'Paid';
-      }
-
-      if (status == 'pending' ||
-          status == 'ready' ||
-          status == 'ready to pay' ||
-          status == 'unpaid') {
-        return 'Pending';
-      }
-    }
-
-    // Existing orders do not currently write a delivery payout field.
-    // Treat delivered fee as pending until an admin/payment flow marks it paid.
-    return 'Pending';
+    return value < 0 ? 0.0 : value;
   }
 
   List<_DeliveryIncomeEntry> _entries(
     QuerySnapshot<Map<String, dynamic>> snapshot,
   ) {
-    final List<_DeliveryIncomeEntry> entries = <_DeliveryIncomeEntry>[];
+    final List<_DeliveryIncomeEntry> entries =
+        <_DeliveryIncomeEntry>[];
 
     for (final QueryDocumentSnapshot<Map<String, dynamic>> document
         in snapshot.docs) {
@@ -2672,7 +2651,6 @@ class _DeliveryEarningsPage extends StatelessWidget {
           data: order,
           deliveredAt: _deliveredTime(order),
           deliveryFee: _deliveryFee(order),
-          payoutStatus: _payoutStatus(order),
         ),
       );
     }
@@ -2702,6 +2680,84 @@ class _DeliveryEarningsPage extends StatelessWidget {
     );
   }
 
+  double _commissionPercentForEntry(
+    _DeliveryIncomeEntry entry,
+    double defaultPercent,
+  ) {
+    final double value =
+        _number(entry.data['deliveryCommissionPercent']) ??
+            _number(entry.data['nrdDeliveryCommissionPercent']) ??
+            defaultPercent;
+
+    return value.clamp(0.0, 100.0).toDouble();
+  }
+
+  double _commissionForEntry(
+    _DeliveryIncomeEntry entry,
+    double defaultPercent,
+  ) {
+    final double? savedAmount =
+        _number(entry.data['deliveryCommissionAmount']) ??
+            _number(entry.data['nrdDeliveryCommission']);
+
+    if (savedAmount != null && savedAmount >= 0) {
+      return savedAmount;
+    }
+
+    final double percent =
+        _commissionPercentForEntry(entry, defaultPercent);
+
+    return entry.deliveryFee * percent / 100.0;
+  }
+
+  _DeliveryCommissionSummary _commissionSummary(
+    Iterable<_DeliveryIncomeEntry> entries,
+    double defaultPercent,
+  ) {
+    double amount = 0;
+    int deliveries = 0;
+
+    for (final _DeliveryIncomeEntry entry in entries) {
+      amount += _commissionForEntry(entry, defaultPercent);
+      deliveries += 1;
+    }
+
+    return _DeliveryCommissionSummary(
+      amount: amount,
+      deliveries: deliveries,
+    );
+  }
+
+  String _paymentStatus(Map<String, dynamic> data) {
+    return data['status']?.toString().trim().toLowerCase() ?? '';
+  }
+
+  bool _isApprovedCommissionPayment(Map<String, dynamic> data) {
+    final String status = _paymentStatus(data);
+    return status == 'approved' ||
+        status == 'paid' ||
+        status == 'settled' ||
+        status == 'completed';
+  }
+
+  bool _isPendingCommissionPayment(Map<String, dynamic> data) {
+    final String status = _paymentStatus(data);
+    return status == 'pending' ||
+        status == 'pending_admin_review' ||
+        status == 'submitted' ||
+        status == 'under_review';
+  }
+
+  double _commissionPaymentAmount(Map<String, dynamic> data) {
+    final double value =
+        _number(data['amount']) ??
+            _number(data['commissionAmount']) ??
+            _number(data['paidAmount']) ??
+            0.0;
+
+    return value < 0 ? 0.0 : value;
+  }
+
   String _dateText(DateTime value) {
     if (value.millisecondsSinceEpoch == 0) {
       return '-';
@@ -2715,9 +2771,23 @@ class _DeliveryEarningsPage extends StatelessWidget {
     return '$day/$month/${value.year} $hour:$minute';
   }
 
+  String _settingText(
+    Map<String, dynamic> settings,
+    List<String> keys,
+  ) {
+    for (final String key in keys) {
+      final String value = settings[key]?.toString().trim() ?? '';
+      if (value.isNotEmpty && value.toLowerCase() != 'null') {
+        return value;
+      }
+    }
+    return '';
+  }
+
   Widget _statCard(
     String title,
-    double amount,
+    double earningAmount,
+    double commissionAmount,
     int deliveries,
   ) {
     return Container(
@@ -2733,17 +2803,27 @@ class _DeliveryEarningsPage extends StatelessWidget {
             title,
             style: const TextStyle(
               fontSize: 12,
-              fontWeight: FontWeight.w700,
+              fontWeight: FontWeight.w800,
             ),
           ),
-          const SizedBox(height: 4),
+          const SizedBox(height: 5),
           Text(
-            'Rs. ${amount.toStringAsFixed(2)}',
+            'Earning: Rs. ${earningAmount.toStringAsFixed(2)}',
             style: const TextStyle(
-              fontSize: 17,
+              fontSize: 16,
               fontWeight: FontWeight.w900,
             ),
           ),
+          const SizedBox(height: 3),
+          Text(
+            'Commission: Rs. ${commissionAmount.toStringAsFixed(2)}',
+            style: const TextStyle(
+              fontSize: 12,
+              fontWeight: FontWeight.w800,
+              color: Colors.deepOrange,
+            ),
+          ),
+          const SizedBox(height: 3),
           Text(
             '$deliveries deliveries',
             style: const TextStyle(fontSize: 11.5),
@@ -2757,9 +2837,10 @@ class _DeliveryEarningsPage extends StatelessWidget {
     String label,
     double amount, {
     bool bold = false,
+    Color? valueColor,
   }) {
     return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
+      padding: const EdgeInsets.symmetric(vertical: 5),
       child: Row(
         children: <Widget>[
           Expanded(
@@ -2774,6 +2855,7 @@ class _DeliveryEarningsPage extends StatelessWidget {
             'Rs. ${amount.toStringAsFixed(2)}',
             style: TextStyle(
               fontWeight: bold ? FontWeight.w900 : FontWeight.w700,
+              color: valueColor,
             ),
           ),
         ],
@@ -2781,13 +2863,31 @@ class _DeliveryEarningsPage extends StatelessWidget {
     );
   }
 
-  Widget _historyCard(_DeliveryIncomeEntry entry) {
+  Widget _historyCard(
+    _DeliveryIncomeEntry entry,
+    double defaultCommissionPercent,
+  ) {
     final String marketplace =
         entry.data['marketplace']?.toString().trim() ?? '';
     final String customer =
         entry.data['customerName']?.toString().trim() ??
             entry.data['name']?.toString().trim() ??
             '';
+
+    final double commissionPercent =
+        _commissionPercentForEntry(
+      entry,
+      defaultCommissionPercent,
+    );
+    final double commissionAmount =
+        _commissionForEntry(
+      entry,
+      defaultCommissionPercent,
+    );
+    final double net =
+        (entry.deliveryFee - commissionAmount)
+            .clamp(0.0, entry.deliveryFee)
+            .toDouble();
 
     return Card(
       margin: const EdgeInsets.only(bottom: 10),
@@ -2800,7 +2900,9 @@ class _DeliveryEarningsPage extends StatelessWidget {
               children: <Widget>[
                 Expanded(
                   child: Text(
-                    marketplace.isEmpty ? 'Delivery' : marketplace,
+                    marketplace.isEmpty
+                        ? 'Delivery'
+                        : marketplace,
                     style: const TextStyle(
                       fontWeight: FontWeight.w900,
                       fontSize: 16,
@@ -2825,40 +2927,523 @@ class _DeliveryEarningsPage extends StatelessWidget {
               Text('Customer: $customer'),
             ],
             const Divider(height: 22),
-            Row(
-              children: <Widget>[
-                const Expanded(
-                  child: Text('Delivery Fee'),
-                ),
-                Text(
-                  'Rs. ${entry.deliveryFee.toStringAsFixed(2)}',
-                  style: const TextStyle(
-                    fontWeight: FontWeight.w900,
-                  ),
-                ),
-              ],
+            _moneyRow(
+              'Delivery Fee',
+              entry.deliveryFee,
+              bold: true,
             ),
-            const SizedBox(height: 6),
-            Row(
-              children: <Widget>[
-                const Expanded(
-                  child: Text('Payout Status'),
-                ),
-                Chip(
-                  label: Text(entry.payoutStatus),
-                  avatar: Icon(
-                    entry.payoutStatus == 'Paid'
-                        ? Icons.check_circle_rounded
-                        : Icons.schedule_rounded,
-                    size: 18,
-                  ),
-                ),
-              ],
+            _moneyRow(
+              'NRD Commission (${commissionPercent.toStringAsFixed(2)}%)',
+              commissionAmount,
+              valueColor: Colors.deepOrange,
+            ),
+            _moneyRow(
+              'Net Delivery Earning',
+              net,
+              bold: true,
+              valueColor: Colors.green.shade700,
             ),
           ],
         ),
       ),
     );
+  }
+
+  List<QueryDocumentSnapshot<Map<String, dynamic>>>
+      _sortedCommissionPayments(
+    QuerySnapshot<Map<String, dynamic>> snapshot,
+  ) {
+    final List<QueryDocumentSnapshot<Map<String, dynamic>>> docs =
+        List<QueryDocumentSnapshot<Map<String, dynamic>>>.from(
+      snapshot.docs,
+    );
+
+    docs.sort(
+      (
+        QueryDocumentSnapshot<Map<String, dynamic>> first,
+        QueryDocumentSnapshot<Map<String, dynamic>> second,
+      ) {
+        final DateTime firstDate =
+            _date(first.data()['submittedAt']);
+        final DateTime secondDate =
+            _date(second.data()['submittedAt']);
+        return secondDate.compareTo(firstDate);
+      },
+    );
+
+    return docs;
+  }
+
+  Widget _commissionPaymentHistoryCard(
+    QueryDocumentSnapshot<Map<String, dynamic>> document,
+  ) {
+    final Map<String, dynamic> data = document.data();
+    final double amount = _commissionPaymentAmount(data);
+    final String method =
+        data['paymentMethod']?.toString().trim() ?? '';
+    final String reference =
+        data['paymentReference']?.toString().trim() ?? '';
+    final String status =
+        data['status']?.toString().trim() ?? 'pending_admin_review';
+    final DateTime submittedAt = _date(data['submittedAt']);
+    final DateTime reviewedAt = _date(data['reviewedAt']);
+    final String reviewNote =
+        data['reviewNote']?.toString().trim() ?? '';
+    final double commissionPercentSnapshot =
+        _number(data['commissionPercentSnapshot']) ?? 0.0;
+
+    Color statusColor = Colors.orange;
+    if (_isApprovedCommissionPayment(data)) {
+      statusColor = Colors.green;
+    } else if (status.toLowerCase() == 'rejected') {
+      statusColor = Colors.red;
+    }
+
+    return Card(
+      margin: const EdgeInsets.only(bottom: 10),
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                const Expanded(
+                  child: Text(
+                    'NRD Commission Payment',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                    ),
+                  ),
+                ),
+                Chip(
+                  label: Text(
+                    status
+                        .replaceAll('_', ' ')
+                        .toUpperCase(),
+                  ),
+                  labelStyle: TextStyle(
+                    color: statusColor,
+                    fontWeight: FontWeight.w800,
+                    fontSize: 10.5,
+                  ),
+                ),
+              ],
+            ),
+            _moneyRow(
+              'Amount',
+              amount,
+              bold: true,
+            ),
+            if (method.isNotEmpty)
+              Text('Method: $method'),
+            if (reference.isNotEmpty)
+              Text('Reference: $reference'),
+            if (commissionPercentSnapshot > 0)
+              Text(
+                'Commission snapshot: '
+                '${commissionPercentSnapshot.toStringAsFixed(2)}%',
+              ),
+            if (submittedAt.millisecondsSinceEpoch > 0)
+              Text(
+                'Submitted: ${_dateText(submittedAt)}',
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontSize: 12,
+                ),
+              ),
+            if (reviewNote.isNotEmpty)
+              Text('Admin note: $reviewNote'),
+            if (reviewedAt.millisecondsSinceEpoch > 0)
+              Text(
+                'Reviewed: ${_dateText(reviewedAt)}',
+                style: TextStyle(
+                  color: Colors.grey.shade700,
+                  fontSize: 12,
+                ),
+              ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _openPayCommissionDialog(
+    BuildContext context, {
+    required String cleanDriverId,
+    required double pendingCommission,
+    required double commissionPercent,
+    required Map<String, dynamic> settings,
+  }) async {
+    if (pendingCommission <= 0) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'There is no pending NRD commission to pay.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final String esewa = _settingText(
+      settings,
+      <String>[
+        'esewa',
+        'esewaId',
+        'esewaNumber',
+        'commissionEsewa',
+      ],
+    );
+    final String khalti = _settingText(
+      settings,
+      <String>[
+        'khalti',
+        'khaltiId',
+        'khaltiNumber',
+        'commissionKhalti',
+      ],
+    );
+    final String bankName = _settingText(
+      settings,
+      <String>[
+        'bankName',
+        'commissionBankName',
+      ],
+    );
+    final String bankAccountName = _settingText(
+      settings,
+      <String>[
+        'bankAccountName',
+        'commissionBankAccountName',
+      ],
+    );
+    final String bankAccountNumber = _settingText(
+      settings,
+      <String>[
+        'bankAccountNumber',
+        'commissionBankAccountNumber',
+      ],
+    );
+    final String paymentQrUrl = _settingText(
+      settings,
+      <String>[
+        'paymentQrUrl',
+        'commissionPaymentQrUrl',
+        'qrUrl',
+      ],
+    );
+
+    final List<String> methods = <String>[
+      if (esewa.isNotEmpty) 'eSewa',
+      if (khalti.isNotEmpty) 'Khalti',
+      if (bankAccountNumber.isNotEmpty) 'Bank',
+      if (paymentQrUrl.isNotEmpty) 'QR',
+    ];
+
+    if (methods.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text(
+            'NRD Admin commission receiving account is not configured yet.',
+          ),
+        ),
+      );
+      return;
+    }
+
+    final TextEditingController referenceController =
+        TextEditingController();
+    final TextEditingController noteController =
+        TextEditingController();
+
+    String selectedMethod = methods.first;
+    bool submitting = false;
+
+    await showDialog<void>(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) {
+        return StatefulBuilder(
+          builder: (
+            BuildContext dialogContext,
+            StateSetter setDialogState,
+          ) {
+            return AlertDialog(
+              title: const Text(
+                'Pay Commission to NRD',
+              ),
+              content: SizedBox(
+                width: 430,
+                child: SingleChildScrollView(
+                  child: Column(
+                    crossAxisAlignment:
+                        CrossAxisAlignment.stretch,
+                    mainAxisSize: MainAxisSize.min,
+                    children: <Widget>[
+                      Text(
+                        'Pending Commission: Rs. ${pendingCommission.toStringAsFixed(2)}',
+                        style: const TextStyle(
+                          fontSize: 18,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Customer delivery money belongs to the Delivery Person. Send only the NRD commission shown here.',
+                        style: TextStyle(
+                          color: Colors.blueGrey,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                      const SizedBox(height: 14),
+                      DropdownButtonFormField<String>(
+                        initialValue: selectedMethod,
+                        decoration: const InputDecoration(
+                          labelText: 'Payment Method',
+                          border: OutlineInputBorder(),
+                        ),
+                        items: methods
+                            .map(
+                              (String method) =>
+                                  DropdownMenuItem<String>(
+                                value: method,
+                                child: Text(method),
+                              ),
+                            )
+                            .toList(),
+                        onChanged: submitting
+                            ? null
+                            : (String? value) {
+                                if (value != null) {
+                                  setDialogState(() {
+                                    selectedMethod = value;
+                                  });
+                                }
+                              },
+                      ),
+                      const SizedBox(height: 12),
+                      if (selectedMethod == 'eSewa' &&
+                          esewa.isNotEmpty)
+                        SelectableText(
+                          'NRD eSewa: $esewa',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      if (selectedMethod == 'Khalti' &&
+                          khalti.isNotEmpty)
+                        SelectableText(
+                          'NRD Khalti: $khalti',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      if (selectedMethod == 'Bank' &&
+                          bankAccountNumber.isNotEmpty) ...<Widget>[
+                        if (bankName.isNotEmpty)
+                          SelectableText(
+                            'Bank: $bankName',
+                          ),
+                        if (bankAccountName.isNotEmpty)
+                          SelectableText(
+                            'Account Name: $bankAccountName',
+                          ),
+                        SelectableText(
+                          'Account No: $bankAccountNumber',
+                          style: const TextStyle(
+                            fontWeight: FontWeight.w800,
+                          ),
+                        ),
+                      ],
+                      if (selectedMethod == 'QR' &&
+                          paymentQrUrl.isNotEmpty) ...<Widget>[
+                        const SizedBox(height: 8),
+                        Container(
+                          constraints: const BoxConstraints(
+                            maxHeight: 240,
+                          ),
+                          alignment: Alignment.center,
+                          child: Image.network(
+                            paymentQrUrl,
+                            fit: BoxFit.contain,
+                            errorBuilder: (
+                              BuildContext context,
+                              Object error,
+                              StackTrace? stackTrace,
+                            ) {
+                              return const Padding(
+                                padding: EdgeInsets.all(16),
+                                child: Text(
+                                  'NRD payment QR could not be loaded.',
+                                  textAlign: TextAlign.center,
+                                ),
+                              );
+                            },
+                          ),
+                        ),
+                      ],
+                      const SizedBox(height: 14),
+                      TextField(
+                        controller: referenceController,
+                        enabled: !submitting,
+                        maxLength: 120,
+                        decoration: const InputDecoration(
+                          labelText: 'Transaction / Reference ID',
+                          hintText:
+                              'Enter payment transaction reference',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                      const SizedBox(height: 10),
+                      TextField(
+                        controller: noteController,
+                        enabled: !submitting,
+                        maxLength: 250,
+                        maxLines: 3,
+                        decoration: const InputDecoration(
+                          labelText: 'Note (optional)',
+                          border: OutlineInputBorder(),
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
+              actions: <Widget>[
+                TextButton(
+                  onPressed: submitting
+                      ? null
+                      : () => Navigator.pop(dialogContext),
+                  child: const Text('Cancel'),
+                ),
+                FilledButton.icon(
+                  onPressed: submitting
+                      ? null
+                      : () async {
+                          final String reference =
+                              referenceController.text.trim();
+                          final String note =
+                              noteController.text.trim();
+
+                          if (reference.length < 3 ||
+                              reference.length > 120) {
+                            ScaffoldMessenger.of(
+                              dialogContext,
+                            ).showSnackBar(
+                              const SnackBar(
+                                content: Text(
+                                  'Transaction / Reference ID must be 3 to 120 characters.',
+                                ),
+                              ),
+                            );
+                            return;
+                          }
+
+                          setDialogState(() {
+                            submitting = true;
+                          });
+
+                          try {
+                            final DocumentReference<
+                                Map<String, dynamic>> paymentRef =
+                                FirebaseFirestore.instance
+                                    .collection(
+                                      'delivery_commission_payments',
+                                    )
+                                    .doc();
+
+                            final double submittedAmount =
+                                double.parse(
+                              pendingCommission.toStringAsFixed(2),
+                            );
+
+                            await paymentRef
+                                .set(
+                                  <String, dynamic>{
+                                    'schemaVersion': 1,
+                                    'settingsId': 'main',
+                                    'paymentId': paymentRef.id,
+                                    'driverId': cleanDriverId,
+                                    'driverName': driverName.trim(),
+                                    'submittedByUid': cleanDriverId,
+                                    'amount': submittedAmount,
+                                    'currency': 'Rs.',
+                                    'commissionPercentSnapshot':
+                                        commissionPercent,
+                                    'paymentMethod': selectedMethod,
+                                    'paymentReference': reference,
+                                    'paymentNote': note,
+                                    'status':
+                                        'pending_admin_review',
+                                    'submittedAt':
+                                        FieldValue.serverTimestamp(),
+                                    'updatedAt':
+                                        FieldValue.serverTimestamp(),
+                                  },
+                                )
+                                .timeout(
+                                  const Duration(seconds: 10),
+                                );
+
+                            if (dialogContext.mounted) {
+                              Navigator.pop(dialogContext);
+                            }
+
+                            if (context.mounted) {
+                              ScaffoldMessenger.of(context)
+                                  .showSnackBar(
+                                const SnackBar(
+                                  content: Text(
+                                    'Commission payment submitted to NRD Admin for verification.',
+                                  ),
+                                ),
+                              );
+                            }
+                          } catch (error) {
+                            if (dialogContext.mounted) {
+                              setDialogState(() {
+                                submitting = false;
+                              });
+
+                              ScaffoldMessenger.of(
+                                dialogContext,
+                              ).showSnackBar(
+                                SnackBar(
+                                  content: Text(
+                                    'Could not submit commission payment: $error',
+                                  ),
+                                ),
+                              );
+                            }
+                          }
+                        },
+                  icon: submitting
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(
+                            strokeWidth: 2,
+                          ),
+                        )
+                      : const Icon(
+                          Icons.account_balance_wallet_rounded,
+                        ),
+                  label: Text(
+                    submitting
+                        ? 'Submitting...'
+                        : 'Submit Payment',
+                  ),
+                ),
+              ],
+            );
+          },
+        );
+      },
+    );
+
+    referenceController.dispose();
+    noteController.dispose();
   }
 
   @override
@@ -2869,173 +3454,508 @@ class _DeliveryEarningsPage extends StatelessWidget {
       appBar: AppBar(
         title: const Text(
           'Delivery Earnings',
-          style: TextStyle(fontWeight: FontWeight.w900),
+          style: TextStyle(
+            fontWeight: FontWeight.w900,
+          ),
         ),
         centerTitle: true,
       ),
       body: SafeArea(
         child: cleanDriverId.isEmpty
             ? const Center(
-                child: Text('Delivery Person ID is not available.'),
+                child: Text(
+                  'Delivery Person ID is not available.',
+                ),
               )
-            : StreamBuilder<QuerySnapshot<Map<String, dynamic>>>(
+            : StreamBuilder<
+                DocumentSnapshot<Map<String, dynamic>>>(
                 stream: FirebaseFirestore.instance
-                    .collection('orders')
-                    .where('driverId', isEqualTo: cleanDriverId)
+                    .collection('delivery_business_settings')
+                    .doc('main')
                     .snapshots(),
                 builder: (
                   BuildContext context,
-                  AsyncSnapshot<QuerySnapshot<Map<String, dynamic>>> snapshot,
+                  AsyncSnapshot<
+                          DocumentSnapshot<Map<String, dynamic>>>
+                      settingsSnapshot,
                 ) {
-                  if (snapshot.hasError) {
+                  if (settingsSnapshot.hasError) {
                     return Center(
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Text(
-                          'Could not load Delivery Earnings.\n${snapshot.error}',
+                          'Could not load NRD Delivery commission settings.\n${settingsSnapshot.error}',
                           textAlign: TextAlign.center,
                         ),
                       ),
                     );
                   }
 
-                  if (!snapshot.hasData) {
-                    return const Center(
-                      child: CircularProgressIndicator(),
-                    );
-                  }
+                  final Map<String, dynamic> settings =
+                      settingsSnapshot.data?.data() ??
+                          <String, dynamic>{};
 
-                  final List<_DeliveryIncomeEntry> entries =
-                      _entries(snapshot.data!);
+                  final double commissionPercent =
+                      (_number(
+                                settings['commissionPercent'],
+                              ) ??
+                              _number(
+                                settings[
+                                    'deliveryCommissionPercent'],
+                              ) ??
+                              0.0)
+                          .clamp(0.0, 100.0)
+                          .toDouble();
 
-                  final DateTime now = DateTime.now();
-                  final DateTime startOfToday =
-                      DateTime(now.year, now.month, now.day);
-                  final DateTime startOfWeek = startOfToday.subtract(
-                    Duration(
-                      days: startOfToday.weekday - DateTime.monday,
-                    ),
-                  );
-                  final DateTime startOfMonth =
-                      DateTime(now.year, now.month);
+                  return StreamBuilder<
+                      QuerySnapshot<Map<String, dynamic>>>(
+                    stream: FirebaseFirestore.instance
+                        .collection('orders')
+                        .where(
+                          'driverId',
+                          isEqualTo: cleanDriverId,
+                        )
+                        .snapshots(),
+                    builder: (
+                      BuildContext context,
+                      AsyncSnapshot<
+                              QuerySnapshot<Map<String, dynamic>>>
+                          orderSnapshot,
+                    ) {
+                      if (orderSnapshot.hasError) {
+                        return Center(
+                          child: Padding(
+                            padding: const EdgeInsets.all(24),
+                            child: Text(
+                              'Could not load Delivery Earnings.\n${orderSnapshot.error}',
+                              textAlign: TextAlign.center,
+                            ),
+                          ),
+                        );
+                      }
 
-                  final _DeliveryIncomeSummary today = _summary(
-                    entries.where(
-                      (_DeliveryIncomeEntry entry) =>
-                          !entry.deliveredAt.isBefore(startOfToday),
-                    ),
-                  );
-                  final _DeliveryIncomeSummary week = _summary(
-                    entries.where(
-                      (_DeliveryIncomeEntry entry) =>
-                          !entry.deliveredAt.isBefore(startOfWeek),
-                    ),
-                  );
-                  final _DeliveryIncomeSummary month = _summary(
-                    entries.where(
-                      (_DeliveryIncomeEntry entry) =>
-                          !entry.deliveredAt.isBefore(startOfMonth),
-                    ),
-                  );
-                  final _DeliveryIncomeSummary total = _summary(entries);
-                  final _DeliveryIncomeSummary pending = _summary(
-                    entries.where(
-                      (_DeliveryIncomeEntry entry) =>
-                          entry.payoutStatus != 'Paid',
-                    ),
-                  );
-                  final _DeliveryIncomeSummary paid = _summary(
-                    entries.where(
-                      (_DeliveryIncomeEntry entry) =>
-                          entry.payoutStatus == 'Paid',
-                    ),
-                  );
+                      if (!orderSnapshot.hasData) {
+                        return const Center(
+                          child: CircularProgressIndicator(),
+                        );
+                      }
 
-                  return Center(
-                    child: ConstrainedBox(
-                      constraints: const BoxConstraints(maxWidth: 820),
-                      child: ListView(
-                        padding: const EdgeInsets.all(16),
-                        children: <Widget>[
-                          Card(
-                            child: Padding(
-                              padding: const EdgeInsets.all(16),
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.stretch,
+                      final List<_DeliveryIncomeEntry> entries =
+                          _entries(orderSnapshot.data!);
+
+                      final DateTime now = DateTime.now();
+                      final DateTime startOfToday =
+                          DateTime(
+                        now.year,
+                        now.month,
+                        now.day,
+                      );
+                      final DateTime startOfWeek =
+                          startOfToday.subtract(
+                        Duration(
+                          days: startOfToday.weekday -
+                              DateTime.monday,
+                        ),
+                      );
+                      final DateTime startOfMonth =
+                          DateTime(
+                        now.year,
+                        now.month,
+                      );
+
+                      final Iterable<_DeliveryIncomeEntry>
+                          todayEntries = entries.where(
+                        (_DeliveryIncomeEntry entry) =>
+                            !entry.deliveredAt
+                                .isBefore(startOfToday),
+                      );
+                      final Iterable<_DeliveryIncomeEntry>
+                          weekEntries = entries.where(
+                        (_DeliveryIncomeEntry entry) =>
+                            !entry.deliveredAt
+                                .isBefore(startOfWeek),
+                      );
+                      final Iterable<_DeliveryIncomeEntry>
+                          monthEntries = entries.where(
+                        (_DeliveryIncomeEntry entry) =>
+                            !entry.deliveredAt
+                                .isBefore(startOfMonth),
+                      );
+
+                      final _DeliveryIncomeSummary today =
+                          _summary(todayEntries);
+                      final _DeliveryIncomeSummary week =
+                          _summary(weekEntries);
+                      final _DeliveryIncomeSummary month =
+                          _summary(monthEntries);
+                      final _DeliveryIncomeSummary total =
+                          _summary(entries);
+
+                      final _DeliveryCommissionSummary
+                          todayCommission =
+                          _commissionSummary(
+                        todayEntries,
+                        commissionPercent,
+                      );
+                      final _DeliveryCommissionSummary
+                          weekCommission =
+                          _commissionSummary(
+                        weekEntries,
+                        commissionPercent,
+                      );
+                      final _DeliveryCommissionSummary
+                          monthCommission =
+                          _commissionSummary(
+                        monthEntries,
+                        commissionPercent,
+                      );
+                      final _DeliveryCommissionSummary
+                          totalCommission =
+                          _commissionSummary(
+                        entries,
+                        commissionPercent,
+                      );
+
+                      return StreamBuilder<
+                          QuerySnapshot<
+                              Map<String, dynamic>>>(
+                        stream: FirebaseFirestore.instance
+                            .collection(
+                              'delivery_commission_payments',
+                            )
+                            .where(
+                              'driverId',
+                              isEqualTo: cleanDriverId,
+                            )
+                            .snapshots(),
+                        builder: (
+                          BuildContext context,
+                          AsyncSnapshot<
+                                  QuerySnapshot<
+                                      Map<String, dynamic>>>
+                              paymentSnapshot,
+                        ) {
+                          if (paymentSnapshot.hasError) {
+                            return Center(
+                              child: Padding(
+                                padding:
+                                    const EdgeInsets.all(24),
+                                child: Text(
+                                  'Could not load Delivery commission payments.\n${paymentSnapshot.error}',
+                                  textAlign: TextAlign.center,
+                                ),
+                              ),
+                            );
+                          }
+
+                          final List<
+                                  QueryDocumentSnapshot<
+                                      Map<String, dynamic>>>
+                              paymentDocs =
+                              paymentSnapshot.hasData
+                                  ? _sortedCommissionPayments(
+                                      paymentSnapshot.data!,
+                                    )
+                                  : <QueryDocumentSnapshot<
+                                      Map<String, dynamic>>>[];
+
+                          double approvedCommission = 0;
+                          double underReviewCommission = 0;
+
+                          for (final QueryDocumentSnapshot<
+                                  Map<String, dynamic>>
+                              document in paymentDocs) {
+                            final Map<String, dynamic> data =
+                                document.data();
+                            final double amount =
+                                _commissionPaymentAmount(data);
+
+                            if (_isApprovedCommissionPayment(
+                              data,
+                            )) {
+                              approvedCommission += amount;
+                            } else if (
+                                _isPendingCommissionPayment(
+                              data,
+                            )) {
+                              underReviewCommission += amount;
+                            }
+                          }
+
+                          final double pendingCommission =
+                              (totalCommission.amount -
+                                      approvedCommission)
+                                  .clamp(
+                                    0.0,
+                                    double.infinity,
+                                  )
+                                  .toDouble();
+
+                          final double netDeliveryEarnings =
+                              (total.amount -
+                                      totalCommission.amount)
+                                  .clamp(
+                                    0.0,
+                                    total.amount,
+                                  )
+                                  .toDouble();
+
+                          final bool settingsDocumentExists =
+                              settingsSnapshot.data?.exists == true;
+                          final bool settingsConfigured =
+                              settingsDocumentExists &&
+                                  (_number(
+                                            settings[
+                                                'commissionPercent'],
+                                          ) !=
+                                          null ||
+                                      _number(
+                                            settings[
+                                                'deliveryCommissionPercent'],
+                                          ) !=
+                                          null);
+                          final bool settingsActive =
+                              settings['isActive'] != false;
+                          final bool settingsReady =
+                              settingsConfigured &&
+                                  settingsActive;
+
+                          return Center(
+                            child: ConstrainedBox(
+                              constraints:
+                                  const BoxConstraints(
+                                maxWidth: 820,
+                              ),
+                              child: ListView(
+                                padding:
+                                    const EdgeInsets.all(16),
                                 children: <Widget>[
-                                  Row(
-                                    children: <Widget>[
-                                      const CircleAvatar(
-                                        radius: 24,
-                                        child: Icon(
-                                          Icons.account_balance_wallet_rounded,
-                                        ),
+                                  Card(
+                                    child: Padding(
+                                      padding:
+                                          const EdgeInsets.all(
+                                        16,
                                       ),
-                                      const SizedBox(width: 12),
-                                      Expanded(
-                                        child: Column(
-                                          crossAxisAlignment:
-                                              CrossAxisAlignment.start,
-                                          children: <Widget>[
-                                            const Text(
-                                              'Delivery Earnings',
-                                              style: TextStyle(
-                                                fontSize: 19,
-                                                fontWeight: FontWeight.w900,
+                                      child: Column(
+                                        crossAxisAlignment:
+                                            CrossAxisAlignment
+                                                .stretch,
+                                        children: <Widget>[
+                                          Row(
+                                            children: <Widget>[
+                                              const CircleAvatar(
+                                                radius: 24,
+                                                child: Icon(
+                                                  Icons
+                                                      .account_balance_wallet_rounded,
+                                                ),
                                               ),
-                                            ),
-                                            Text(
-                                              driverName.isEmpty
-                                                  ? 'Delivery Person'
-                                                  : driverName,
-                                            ),
-                                          ],
-                                        ),
-                                      ),
-                                    ],
-                                  ),
-                                  const SizedBox(height: 12),
-                                  const Text(
-                                    'Only the order Delivery Fee is counted here. Product/order total is not counted as Delivery Person income.',
-                                    style: TextStyle(
-                                      fontSize: 12,
-                                      color: Colors.blueGrey,
-                                      fontWeight: FontWeight.w600,
-                                    ),
-                                  ),
-                                  const SizedBox(height: 14),
-                                  Container(
-                                    padding: const EdgeInsets.all(14),
-                                    decoration: BoxDecoration(
-                                      color: const Color(0xFFF7F8FA),
-                                      borderRadius: BorderRadius.circular(14),
-                                    ),
-                                    child: Column(
-                                      children: <Widget>[
-                                        _moneyRow(
-                                          'Total Delivery Earnings',
-                                          total.amount,
-                                          bold: true,
-                                        ),
-                                        _moneyRow(
-                                          'Pending Payout',
-                                          pending.amount,
-                                        ),
-                                        _moneyRow(
-                                          'Paid Earnings',
-                                          paid.amount,
-                                        ),
-                                        const Divider(height: 20),
-                                        Align(
-                                          alignment: Alignment.centerLeft,
-                                          child: Text(
-                                            'Completed deliveries: ${total.deliveries}',
-                                            style: const TextStyle(
-                                              fontWeight: FontWeight.w700,
+                                              const SizedBox(
+                                                width: 12,
+                                              ),
+                                              Expanded(
+                                                child: Column(
+                                                  crossAxisAlignment:
+                                                      CrossAxisAlignment
+                                                          .start,
+                                                  children: <Widget>[
+                                                    const Text(
+                                                      'Delivery Earnings',
+                                                      style:
+                                                          TextStyle(
+                                                        fontSize:
+                                                            19,
+                                                        fontWeight:
+                                                            FontWeight
+                                                                .w900,
+                                                      ),
+                                                    ),
+                                                    Text(
+                                                      driverName
+                                                              .isEmpty
+                                                          ? 'Delivery Person'
+                                                          : driverName,
+                                                    ),
+                                                  ],
+                                                ),
+                                              ),
+                                            ],
+                                          ),
+                                          const SizedBox(
+                                            height: 12,
+                                          ),
+                                          const Text(
+                                            'Customer pays the Delivery Person directly. Only the NRD commission is paid to Admin from this Earnings page.',
+                                            style: TextStyle(
+                                              fontSize: 12,
+                                              color:
+                                                  Colors.blueGrey,
+                                              fontWeight:
+                                                  FontWeight.w700,
                                             ),
                                           ),
-                                        ),
-                                      ],
+                                          const SizedBox(
+                                            height: 14,
+                                          ),
+                                          Container(
+                                            padding:
+                                                const EdgeInsets.all(
+                                              14,
+                                            ),
+                                            decoration:
+                                                BoxDecoration(
+                                              color: const Color(
+                                                0xFFF7F8FA,
+                                              ),
+                                              borderRadius:
+                                                  BorderRadius
+                                                      .circular(14),
+                                            ),
+                                            child: Column(
+                                              children: <Widget>[
+                                                _moneyRow(
+                                                  'Total Delivery Earnings',
+                                                  total.amount,
+                                                  bold: true,
+                                                ),
+                                                _moneyRow(
+                                                  'Total NRD Commission',
+                                                  totalCommission
+                                                      .amount,
+                                                  valueColor:
+                                                      Colors
+                                                          .deepOrange,
+                                                ),
+                                                _moneyRow(
+                                                  'Commission Paid',
+                                                  approvedCommission,
+                                                  valueColor:
+                                                      Colors.green,
+                                                ),
+                                                _moneyRow(
+                                                  'Under Admin Review',
+                                                  underReviewCommission,
+                                                  valueColor:
+                                                      Colors.orange,
+                                                ),
+                                                const Divider(
+                                                  height: 22,
+                                                ),
+                                                _moneyRow(
+                                                  'Total Pending NRD Commission',
+                                                  pendingCommission,
+                                                  bold: true,
+                                                  valueColor:
+                                                      Colors.red,
+                                                ),
+                                                _moneyRow(
+                                                  'Net Delivery Earnings',
+                                                  netDeliveryEarnings,
+                                                  bold: true,
+                                                  valueColor:
+                                                      Colors
+                                                          .green
+                                                          .shade700,
+                                                ),
+                                                const Divider(
+                                                  height: 20,
+                                                ),
+                                                Align(
+                                                  alignment:
+                                                      Alignment
+                                                          .centerLeft,
+                                                  child: Text(
+                                                    'Completed deliveries: ${total.deliveries}',
+                                                    style:
+                                                        const TextStyle(
+                                                      fontWeight:
+                                                          FontWeight
+                                                              .w700,
+                                                    ),
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                          if (!settingsReady) ...<Widget>[
+                                            const SizedBox(
+                                              height: 12,
+                                            ),
+                                            Container(
+                                              padding:
+                                                  const EdgeInsets
+                                                      .all(12),
+                                              decoration:
+                                                  BoxDecoration(
+                                                color: Colors.orange
+                                                    .withValues(
+                                                  alpha: 0.08,
+                                                ),
+                                                borderRadius:
+                                                    BorderRadius
+                                                        .circular(12),
+                                                border: Border.all(
+                                                  color: Colors
+                                                      .orange
+                                                      .shade200,
+                                                ),
+                                              ),
+                                              child: const Text(
+                                                'Admin has not configured the Delivery commission percentage yet. Earnings remain visible, but NRD commission payment stays unavailable until Admin setup is completed.',
+                                                style: TextStyle(
+                                                  fontWeight:
+                                                      FontWeight
+                                                          .w700,
+                                                ),
+                                              ),
+                                            ),
+                                          ],
+                                          const SizedBox(
+                                            height: 14,
+                                          ),
+                                          SizedBox(
+                                            height: 50,
+                                            child:
+                                                FilledButton.icon(
+                                              onPressed:
+                                                  !settingsReady ||
+                                                          pendingCommission <=
+                                                              0 ||
+                                                          underReviewCommission >
+                                                              0
+                                                      ? null
+                                                      : () {
+                                                          _openPayCommissionDialog(
+                                                            context,
+                                                            cleanDriverId:
+                                                                cleanDriverId,
+                                                            pendingCommission:
+                                                                pendingCommission,
+                                                            commissionPercent:
+                                                                commissionPercent,
+                                                            settings:
+                                                                settings,
+                                                          );
+                                                        },
+                                              icon: const Icon(
+                                                Icons
+                                                    .payments_rounded,
+                                              ),
+                                              label: Text(
+                                                !settingsReady
+                                                    ? 'Admin Commission Setup Required'
+                                                    : underReviewCommission >
+                                                            0
+                                                        ? 'Commission Under Admin Review'
+                                                        : pendingCommission <=
+                                                                0
+                                                            ? 'No Pending Commission'
+                                                            : 'Pay Rs. ${pendingCommission.toStringAsFixed(2)} Commission to NRD',
+                                              ),
+                                            ),
+                                          ),
+                                        ],
+                                      ),
                                     ),
                                   ),
                                   const SizedBox(height: 12),
@@ -3045,6 +3965,7 @@ class _DeliveryEarningsPage extends StatelessWidget {
                                         child: _statCard(
                                           'Today',
                                           today.amount,
+                                          todayCommission.amount,
                                           today.deliveries,
                                         ),
                                       ),
@@ -3053,6 +3974,7 @@ class _DeliveryEarningsPage extends StatelessWidget {
                                         child: _statCard(
                                           'This Week',
                                           week.amount,
+                                          weekCommission.amount,
                                           week.deliveries,
                                         ),
                                       ),
@@ -3065,6 +3987,7 @@ class _DeliveryEarningsPage extends StatelessWidget {
                                         child: _statCard(
                                           'This Month',
                                           month.amount,
+                                          monthCommission.amount,
                                           month.deliveries,
                                         ),
                                       ),
@@ -3073,39 +3996,89 @@ class _DeliveryEarningsPage extends StatelessWidget {
                                         child: _statCard(
                                           'All Time',
                                           total.amount,
+                                          totalCommission.amount,
                                           total.deliveries,
                                         ),
                                       ),
                                     ],
                                   ),
+                                  const SizedBox(height: 18),
+                                  const Text(
+                                    'Commission Payment History',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight:
+                                          FontWeight.w900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  if (!paymentSnapshot.hasData)
+                                    const Card(
+                                      child: Padding(
+                                        padding:
+                                            EdgeInsets.all(20),
+                                        child: Center(
+                                          child:
+                                              CircularProgressIndicator(),
+                                        ),
+                                      ),
+                                    )
+                                  else if (paymentDocs.isEmpty)
+                                    const Card(
+                                      child: Padding(
+                                        padding:
+                                            EdgeInsets.all(20),
+                                        child: Text(
+                                          'No NRD commission payment submitted yet.',
+                                          textAlign:
+                                              TextAlign.center,
+                                        ),
+                                      ),
+                                    )
+                                  else
+                                    ...paymentDocs.map(
+                                      _commissionPaymentHistoryCard,
+                                    ),
+                                  const SizedBox(height: 18),
+                                  const Text(
+                                    'Completed Delivery History',
+                                    style: TextStyle(
+                                      fontSize: 18,
+                                      fontWeight:
+                                          FontWeight.w900,
+                                    ),
+                                  ),
+                                  const SizedBox(height: 10),
+                                  if (entries.isEmpty)
+                                    const Card(
+                                      child: Padding(
+                                        padding:
+                                            EdgeInsets.all(24),
+                                        child: Text(
+                                          'No completed deliveries yet. Earnings will appear after an assigned order is marked Delivered.',
+                                          textAlign:
+                                              TextAlign.center,
+                                        ),
+                                      ),
+                                    )
+                                  else
+                                    ...entries.map(
+                                      (
+                                        _DeliveryIncomeEntry
+                                            entry,
+                                      ) =>
+                                          _historyCard(
+                                        entry,
+                                        commissionPercent,
+                                      ),
+                                    ),
                                 ],
                               ),
                             ),
-                          ),
-                          const SizedBox(height: 16),
-                          const Text(
-                            'Completed Delivery History',
-                            style: TextStyle(
-                              fontSize: 18,
-                              fontWeight: FontWeight.w900,
-                            ),
-                          ),
-                          const SizedBox(height: 10),
-                          if (entries.isEmpty)
-                            const Card(
-                              child: Padding(
-                                padding: EdgeInsets.all(24),
-                                child: Text(
-                                  'No completed deliveries yet. Earnings will appear after an assigned order is marked Delivered.',
-                                  textAlign: TextAlign.center,
-                                ),
-                              ),
-                            )
-                          else
-                            ...entries.map(_historyCard),
-                        ],
-                      ),
-                    ),
+                          );
+                        },
+                      );
+                    },
                   );
                 },
               ),

@@ -12,14 +12,9 @@ service cloud.firestore {
 
     function isAdmin() {
       return signedIn()
-        && (
-          request.auth.uid == 'sy7uYYhHSDaukxkqeAKcSQ0L4rP2'
-          || (
-            exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-            && adminData().isActive == true
-            && adminData().role in ['admin', 'superAdmin']
-          )
-        );
+        && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        && adminData().isActive == true
+        && adminData().role in ['admin', 'superAdmin'];
     }
 
     function sellerData() {
@@ -592,6 +587,158 @@ service cloud.firestore {
     match /ride_business_settings/{settingsId} {
       allow read: if signedIn();
       allow create, update, delete: if isAdmin();
+    }
+
+
+    // ============================================================
+    // NRD DELIVERY BUSINESS SETTINGS
+    // ============================================================
+    // Active Delivery Persons need the current commission percentage and
+    // NRD receiving details. Only an active Admin/SuperAdmin can change them.
+    match /delivery_business_settings/{settingsId} {
+      function validDeliverySettings() {
+        return settingsId == 'main'
+          && request.resource.data.schemaVersion == 1
+          && request.resource.data.settingsId == 'main'
+          && request.resource.data.commissionPercent is number
+          && request.resource.data.commissionPercent >= 0
+          && request.resource.data.commissionPercent <= 50
+          && request.resource.data.deliveryCommissionPercent
+            == request.resource.data.commissionPercent
+          && request.resource.data.currency == 'Rs.'
+          && request.resource.data.isActive is bool
+          && request.resource.data.esewa is string
+          && request.resource.data.esewa.size() <= 120
+          && request.resource.data.khalti is string
+          && request.resource.data.khalti.size() <= 120
+          && request.resource.data.bankName is string
+          && request.resource.data.bankName.size() <= 160
+          && request.resource.data.bankAccountName is string
+          && request.resource.data.bankAccountName.size() <= 160
+          && request.resource.data.bankAccountNumber is string
+          && request.resource.data.bankAccountNumber.size() <= 160
+          && request.resource.data.paymentQrUrl is string
+          && request.resource.data.paymentQrUrl.size() <= 1000
+          && request.resource.data.updatedByAdminUid == request.auth.uid
+          && request.resource.data.updatedAt is timestamp
+          && request.resource.data.keys().hasOnly([
+            'schemaVersion',
+            'settingsId',
+            'commissionPercent',
+            'deliveryCommissionPercent',
+            'currency',
+            'isActive',
+            'esewa',
+            'khalti',
+            'bankName',
+            'bankAccountName',
+            'bankAccountNumber',
+            'paymentQrUrl',
+            'updatedByAdminUid',
+            'updatedAt'
+          ]);
+      }
+
+      allow read: if isAdmin() || isActiveDriver();
+
+      allow create, update: if isAdmin()
+        && validDeliverySettings();
+
+      // Keep the business configuration auditable; Admin may overwrite it,
+      // but the canonical settings document is not deleted from the client.
+      allow delete: if false;
+    }
+
+
+    // ============================================================
+    // NRD DELIVERY COMMISSION PAYMENTS
+    // ============================================================
+    // Delivery Person submits only their own payment proof.
+    // Admin/SuperAdmin alone may approve/reject it.
+    // Approved/rejected records remain immutable audit history.
+    match /delivery_commission_payments/{paymentId} {
+      function deliveryCommissionSettingsExist() {
+        return exists(
+          /databases/$(database)/documents/delivery_business_settings/main
+        );
+      }
+
+      function deliveryCommissionSettingsData() {
+        return get(
+          /databases/$(database)/documents/delivery_business_settings/main
+        ).data;
+      }
+
+      allow read: if isAdmin()
+        || (signedIn()
+          && resource.data.driverId == request.auth.uid);
+
+      allow create: if isActiveDriver()
+        && deliveryCommissionSettingsExist()
+        && deliveryCommissionSettingsData().isActive == true
+        && request.resource.data.schemaVersion == 1
+        && request.resource.data.settingsId == 'main'
+        && request.resource.data.paymentId == paymentId
+        && request.resource.data.driverId == request.auth.uid
+        && request.resource.data.submittedByUid == request.auth.uid
+        && request.resource.data.driverName is string
+        && request.resource.data.driverName.size() <= 120
+        && request.resource.data.driverName
+          == driverData().get('name', '')
+        && request.resource.data.amount is number
+        && request.resource.data.amount > 0
+        && request.resource.data.amount <= 100000000
+        && request.resource.data.currency == 'Rs.'
+        && request.resource.data.commissionPercentSnapshot is number
+        && request.resource.data.commissionPercentSnapshot >= 0
+        && request.resource.data.commissionPercentSnapshot <= 50
+        && request.resource.data.commissionPercentSnapshot
+          == deliveryCommissionSettingsData().commissionPercent
+        && request.resource.data.paymentMethod
+          in ['eSewa', 'Khalti', 'Bank', 'QR']
+        && request.resource.data.paymentReference is string
+        && request.resource.data.paymentReference.size() >= 3
+        && request.resource.data.paymentReference.size() <= 120
+        && request.resource.data.paymentNote is string
+        && request.resource.data.paymentNote.size() <= 250
+        && request.resource.data.status == 'pending_admin_review'
+        && request.resource.data.submittedAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.keys().hasOnly([
+          'schemaVersion',
+          'settingsId',
+          'paymentId',
+          'driverId',
+          'driverName',
+          'submittedByUid',
+          'amount',
+          'currency',
+          'commissionPercentSnapshot',
+          'paymentMethod',
+          'paymentReference',
+          'paymentNote',
+          'status',
+          'submittedAt',
+          'updatedAt'
+        ]);
+
+      allow update: if isAdmin()
+        && resource.data.status == 'pending_admin_review'
+        && request.resource.data.status in ['approved', 'rejected']
+        && request.resource.data.reviewNote is string
+        && request.resource.data.reviewNote.size() <= 500
+        && request.resource.data.reviewedByAdminUid == request.auth.uid
+        && request.resource.data.reviewedAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status',
+          'reviewNote',
+          'reviewedByAdminUid',
+          'reviewedAt',
+          'updatedAt'
+        ]);
+
+      allow delete: if false;
     }
 
 
