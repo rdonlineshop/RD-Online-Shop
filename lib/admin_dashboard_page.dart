@@ -22,6 +22,7 @@ import 'admin_earnings_page.dart';
 import 'admin_notification_center_page.dart';
 import 'admin_order_page.dart';
 import 'admin_product_page.dart';
+import 'admin_property_management_page.dart';
 import 'admin_ride_driver_management_page.dart';
 import 'admin_ride_earnings_page.dart';
 import 'admin_ride_history_page.dart';
@@ -548,6 +549,19 @@ class _AdminDashboardPageState extends State<AdminDashboardPage> {
                 onTap: () =>
                     _openRideDashboard(
                   context,
+                ),
+              ),
+              _dashboardCard(
+                icon:
+                    Icons.real_estate_agent_rounded,
+                title: 'Property & Rent Admin',
+                onTap: () =>
+                    Navigator.push<void>(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        const AdminPropertyManagementPage(),
+                  ),
                 ),
               ),
               _dashboardCard(

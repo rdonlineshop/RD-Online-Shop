@@ -16,6 +16,7 @@ import 'order_data.dart';
 import 'customer_notifications_page.dart';
 import 'product_card.dart';
 import 'profile_page.dart';
+import 'property_marketplace_page.dart';
 import 'ride_booking_hub_page.dart';
 import 'stay_venue_booking_hub_page.dart';
 import 'krishi_marketplace_page.dart';
@@ -1870,6 +1871,20 @@ class _HomePageState extends State<HomePage> {
                     );
                   },
                   iconColor: const Color(0xFF2E7D32),
+                ),
+                item(
+                  Icons.landscape_rounded,
+                  'Property & Rent',
+                  () {
+                    Navigator.push<void>(
+                      context,
+                      MaterialPageRoute<void>(
+                        builder: (_) =>
+                            const PropertyMarketplacePage(),
+                      ),
+                    );
+                  },
+                  iconColor: const Color(0xFF795548),
                 ),
               ],
             ),
