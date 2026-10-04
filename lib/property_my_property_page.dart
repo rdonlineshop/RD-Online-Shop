@@ -2,7 +2,7 @@ import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 
-import 'property_marketplace_page.dart';
+import 'property_post_page.dart';
 
 class PropertyMyPropertyPage extends StatefulWidget {
   const PropertyMyPropertyPage({super.key});
@@ -188,11 +188,127 @@ class _PropertyMyPropertyPageState
   }
 
   void _openAddProperty() {
-    Navigator.push<void>(
-      context,
-      MaterialPageRoute<void>(
-        builder: (_) => const PropertyMarketplacePage(),
-      ),
+    const List<String> saleCategories = <String>[
+      'House Sale',
+      'Land Sale',
+      'Plot Sale',
+      'Apartment Sale',
+      'Flat Sale',
+      'Villa / Bungalow Sale',
+      'Commercial Building Sale',
+      'Commercial Land Sale',
+      'Office Sale',
+      'Shop / Shutter Sale',
+      'Warehouse / Godown Sale',
+      'Hotel / Resort Sale',
+      'Restaurant Space Sale',
+      'Agricultural Land Sale',
+      'Industrial Property Sale',
+      'Farmhouse Sale',
+      'Other Property Sale',
+    ];
+
+    const List<String> rentCategories = <String>[
+      'House Rent',
+      'Apartment Rent',
+      'Flat Rent',
+      'Room Rent',
+      'Shop / Shutter Rent',
+      'Office Rent',
+      'Commercial Space Rent',
+      'Warehouse / Godown Rent',
+      'Hostel / PG Rent',
+      'Hotel / Resort Lease',
+      'Restaurant Space Rent',
+      'Land Lease',
+      'Industrial Space Rent',
+      'Farmhouse Rent',
+      'Other Property Rent / Lease',
+    ];
+
+    showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      showDragHandle: true,
+      builder: (BuildContext sheetContext) {
+        Widget categorySection(
+          String title,
+          IconData icon,
+          List<String> categories,
+        ) {
+          return ExpansionTile(
+            initiallyExpanded: title == 'For Sale',
+            leading: Icon(icon),
+            title: Text(
+              title,
+              style: const TextStyle(
+                fontWeight: FontWeight.w900,
+              ),
+            ),
+            children: categories
+                .map(
+                  (String category) => ListTile(
+                    title: Text(category),
+                    trailing: const Icon(
+                      Icons.chevron_right_rounded,
+                    ),
+                    onTap: () {
+                      Navigator.pop(sheetContext);
+                      Navigator.push<void>(
+                        context,
+                        MaterialPageRoute<void>(
+                          builder: (_) => PropertyPostPage(
+                            category: category,
+                          ),
+                        ),
+                      );
+                    },
+                  ),
+                )
+                .toList(),
+          );
+        }
+
+        return SafeArea(
+          child: FractionallySizedBox(
+            heightFactor: 0.88,
+            child: Column(
+              children: <Widget>[
+                const Padding(
+                  padding: EdgeInsets.fromLTRB(20, 8, 20, 12),
+                  child: Align(
+                    alignment: Alignment.centerLeft,
+                    child: Text(
+                      'Add Property',
+                      style: TextStyle(
+                        fontSize: 22,
+                        fontWeight: FontWeight.w900,
+                      ),
+                    ),
+                  ),
+                ),
+                const Divider(height: 1),
+                Expanded(
+                  child: ListView(
+                    children: <Widget>[
+                      categorySection(
+                        'For Sale',
+                        Icons.sell_rounded,
+                        saleCategories,
+                      ),
+                      categorySection(
+                        'For Rent',
+                        Icons.key_rounded,
+                        rentCategories,
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        );
+      },
     );
   }
 

@@ -12,12 +12,14 @@ class ActiveSessionRole {
   static const String hotelPartner = 'hotel_partner';
   static const String homestayPartner = 'homestay_partner';
   static const String resortPartner = 'resort_partner';
+  static const String propertyPartner = 'property_partner';
 
   static const Set<String> _knownRoles = <String>{
     admin,
     hotelPartner,
     homestayPartner,
     resortPartner,
+    propertyPartner,
   };
 
   static Future<void> setRole(String role) async {

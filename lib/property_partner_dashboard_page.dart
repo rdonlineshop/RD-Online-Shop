@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import 'property_my_property_page.dart';
+import 'property_partner_profile_page.dart';
 
 class PropertyPartnerDashboardPage extends StatelessWidget {
   const PropertyPartnerDashboardPage({super.key});
@@ -98,10 +99,15 @@ class PropertyPartnerDashboardPage extends StatelessWidget {
               ),
             ),
             OutlinedButton.icon(
-              onPressed: () => _showComingSoon(
-                context,
-                'Property Partner Profile',
-              ),
+              onPressed: () {
+                Navigator.push<void>(
+                  context,
+                  MaterialPageRoute<void>(
+                    builder: (_) =>
+                        const PropertyPartnerProfilePage(),
+                  ),
+                );
+              },
               icon: const Icon(
                 Icons.manage_accounts_rounded,
               ),
@@ -159,8 +165,10 @@ class PropertyPartnerDashboardPage extends StatelessWidget {
                       crossAxisCount: columns,
                       crossAxisSpacing: 12,
                       mainAxisSpacing: 12,
+                      mainAxisExtent:
+                          columns == 1 ? 190 : null,
                       childAspectRatio:
-                          columns == 1 ? 2.6 : 1.35,
+                          columns == 1 ? 1.0 : 1.35,
                     ),
                     itemBuilder: (
                       BuildContext context,
@@ -180,6 +188,17 @@ class PropertyPartnerDashboardPage extends StatelessWidget {
                                 MaterialPageRoute<void>(
                                   builder: (_) =>
                                       const PropertyMyPropertyPage(),
+                                ),
+                              );
+                              return;
+                            }
+
+                            if (item.title == 'My Profile') {
+                              Navigator.push<void>(
+                                context,
+                                MaterialPageRoute<void>(
+                                  builder: (_) =>
+                                      const PropertyPartnerProfilePage(),
                                 ),
                               );
                               return;

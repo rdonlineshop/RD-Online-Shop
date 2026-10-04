@@ -1,5 +1,5 @@
-name: rd_online_shop_new
-description: RD Online Shop
+name: nrd_online_shop_new
+description: NRD Online Shop
 publish_to: 'none'
 
 version: 1.0.0+1
@@ -53,3 +53,4 @@ flutter:
     - assets/products/
     - assets/categories/
     - assets/sounds/
+    - assets/property/

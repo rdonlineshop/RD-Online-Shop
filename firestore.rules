@@ -1,26 +1,21 @@
 rules_version = '2';
-
 service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() {
       return request.auth != null;
     }
-
     function adminData() {
       return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data;
     }
-
     function isAdmin() {
       return signedIn()
         && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
         && adminData().isActive == true
         && adminData().role in ['admin', 'superAdmin'];
     }
-
     function sellerData() {
       return get(/databases/$(database)/documents/sellers/$(request.auth.uid)).data;
     }
-
     function isActiveSeller() {
       return signedIn()
         && exists(/databases/$(database)/documents/sellers/$(request.auth.uid))
@@ -28,8 +23,6 @@ service cloud.firestore {
         && (
           sellerData().role == 'seller'
           || (
-            // Compatibility for already-approved Krishi seller accounts
-            // created before the unified seller role was enforced.
             sellerData().get('sellerType', '') == 'krishi'
             && sellerData().get('krishiSeller', false) == true
             && sellerData().get('accountStatus', '') == 'active'
@@ -37,11 +30,9 @@ service cloud.firestore {
           )
         );
     }
-
     function customerData() {
       return get(/databases/$(database)/documents/customers/$(request.auth.uid)).data;
     }
-
     function hasCustomerSession() {
       return signedIn()
         && exists(/databases/$(database)/documents/customers/$(request.auth.uid))
@@ -49,11 +40,9 @@ service cloud.firestore {
         && customerData().role == 'customer'
         && customerData().customerId is string;
     }
-
     function driverData() {
       return get(/databases/$(database)/documents/delivery_persons/$(request.auth.uid)).data;
     }
-
     function isActiveDriver() {
       return signedIn()
         && exists(/databases/$(database)/documents/delivery_persons/$(request.auth.uid))
@@ -61,16 +50,13 @@ service cloud.firestore {
         && driverData().isApproved == true
         && driverData().role == 'delivery_person';
     }
-
     function isOnlineDeliveryDriver() {
       return isActiveDriver()
         && driverData().get('isOnline', false) == true;
     }
-
     function rideDriverData() {
       return get(/databases/$(database)/documents/ride_drivers/$(request.auth.uid)).data;
     }
-
     function isActiveRideDriver() {
       return signedIn()
         && exists(/databases/$(database)/documents/ride_drivers/$(request.auth.uid))
@@ -79,13 +65,11 @@ service cloud.firestore {
         && rideDriverData().drivingLicenseVerified == true
         && rideDriverData().role == 'ride_driver';
     }
-
     function busOperatorData() {
       return get(
         /databases/$(database)/documents/bus_operators/$(request.auth.uid)
       ).data;
     }
-
     function isActiveBusOperator() {
       return signedIn()
         && exists(
@@ -95,17 +79,11 @@ service cloud.firestore {
         && busOperatorData().isApproved == true
         && busOperatorData().isActive == true;
     }
-
-
-    // ============================================================
-    // RD HOTEL PARTNER HELPERS
-    // ============================================================
     function hotelPartnerData() {
       return get(
         /databases/$(database)/documents/hotel_partners/$(request.auth.uid)
       ).data;
     }
-
     function isActiveHotelPartner() {
       return signedIn()
         && exists(
@@ -115,16 +93,11 @@ service cloud.firestore {
         && hotelPartnerData().isApproved == true
         && hotelPartnerData().isActive == true;
     }
-
-    // ============================================================
-    // RD RESORT PARTNER HELPERS
-    // ============================================================
     function resortPartnerData() {
       return get(
         /databases/$(database)/documents/resort_partners/$(request.auth.uid)
       ).data;
     }
-
     function isActiveResortPartner() {
       return signedIn()
         && exists(
@@ -133,24 +106,20 @@ service cloud.firestore {
         && resortPartnerData().isApproved == true
         && resortPartnerData().isActive == true;
     }
-
     match /admins/{adminId} {
       allow read: if signedIn() && request.auth.uid == adminId;
       allow read: if isAdmin();
       allow create, update, delete: if isAdmin();
     }
-
     match /customers/{authUid} {
       allow read: if isAdmin()
         || (signedIn() && request.auth.uid == authUid);
-
       allow create: if signedIn()
         && request.auth.uid == authUid
         && request.resource.data.authUid == request.auth.uid
         && request.resource.data.customerId is string
         && request.resource.data.role == 'customer'
         && request.resource.data.isActive == true;
-
       allow update: if isAdmin()
         || (signedIn()
           && request.auth.uid == authUid
@@ -185,14 +154,11 @@ service cloud.firestore {
             'linkedAt',
             'updatedAt'
           ]));
-
       allow delete: if isAdmin();
     }
-
     match /customer_device_links/{linkCode} {
       allow get: if signedIn();
       allow list: if false;
-
       allow create: if (
           (
             hasCustomerSession()
@@ -216,7 +182,6 @@ service cloud.firestore {
           'expiresAt',
           'used'
         ]);
-
       allow update: if signedIn()
         && resource.data.used == false
         && resource.data.expiresAt > request.time
@@ -230,14 +195,10 @@ service cloud.firestore {
           'usedByUid',
           'usedAt'
         ]);
-
       allow delete: if isAdmin();
     }
-
     match /sellers/{sellerId} {
-      // Customer pages and tracking need seller shop/contact/location data.
       allow read: if signedIn();
-
       allow create: if isAdmin()
         || (
           signedIn()
@@ -246,24 +207,20 @@ service cloud.firestore {
                   && request.resource.data.role == 'seller'
                   && request.resource.data.isActive == false
         );
-
       allow update: if isAdmin()
         || (signedIn()
           && request.auth.uid == sellerId
           && request.resource.data.sellerId == resource.data.sellerId
           && request.resource.data.role == resource.data.role
           && request.resource.data.isActive == resource.data.isActive);
-
       allow delete: if isAdmin();
     }
-
     match /delivery_persons/{driverId} {
       allow read: if isAdmin()
         || (signedIn() && request.auth.uid == driverId)
         || (isActiveSeller()
           && resource.data.isActive == true
           && resource.data.isApproved == true);
-
       allow create: if isAdmin()
         || (
           signedIn()
@@ -272,7 +229,6 @@ service cloud.firestore {
                   && request.resource.data.role == 'delivery_person'
                   && request.resource.data.isApproved == false
         );
-
       allow update: if isAdmin()
         || (signedIn()
           && request.auth.uid == driverId
@@ -288,20 +244,12 @@ service cloud.firestore {
             'locationUpdatedAt',
             'currentOrderId'
           ]));
-
       allow delete: if isAdmin();
     }
-
-
-    // ============================================================
-    // DELIVERY PRESENCE
-    // Public operational fields only; licence/profile documents stay private.
-    // ============================================================
     match /delivery_presence/{driverId} {
       allow read: if isAdmin()
         || isActiveSeller()
         || (signedIn() && request.auth.uid == driverId);
-
       function validOwnPresence() {
         return isActiveDriver()
           && request.auth.uid == driverId
@@ -337,24 +285,18 @@ service cloud.firestore {
             'updatedAt'
           ]);
       }
-
       allow create: if validOwnPresence();
-
       allow update: if validOwnPresence()
         && resource.data.driverId == request.auth.uid;
-
       allow delete: if isAdmin()
         || (signedIn() && request.auth.uid == driverId);
     }
-
-
     match /ride_drivers/{rideDriverId} {
       allow read: if isAdmin()
         || (signedIn() && request.auth.uid == rideDriverId)
         || (signedIn()
           && resource.data.isActive == true
           && resource.data.isOnline == true);
-
       allow create: if isAdmin()
         || (
           signedIn()
@@ -387,7 +329,6 @@ service cloud.firestore {
                   && request.resource.data.driverAgreementAcceptedAt is timestamp
                   && request.resource.data.driverAgreementReacceptRequired == false
         );
-
       allow update: if isAdmin()
         || (signedIn()
           && request.auth.uid == rideDriverId
@@ -489,12 +430,8 @@ service cloud.firestore {
             'reactivationRequestedAt',
             'updatedAt'
           ]));
-
       allow delete: if isAdmin();
     }
-
-    // Immutable account action log. Admin writes suspension/reactivation
-    // events; the driver may read only their own account history.
     match /ride_driver_account_history/{eventId} {
       allow read: if isAdmin()
         || (signedIn()
@@ -507,247 +444,15 @@ service cloud.firestore {
         && request.resource.data.action.size() > 0;
       allow update, delete: if false;
     }
-
-
-
-    // ============================================================
-    // RD RIDE COMMISSION PAYMENTS
-    // ============================================================
-    // Ride Drivers submit only their own NRD commission payment.
-    // Admin verifies/rejects it. A pending request never reduces the
-    // outstanding commission until Admin approves it.
-    match /ride_commission_payments/{paymentId} {
-      allow read: if isAdmin()
-        || (signedIn()
-          && resource.data.driverId == request.auth.uid);
-
-      allow create: if signedIn()
-        && request.resource.data.paymentId == paymentId
-        && request.resource.data.driverId == request.auth.uid
-        && request.resource.data.amount is number
-        && request.resource.data.amount > 0
-        && request.resource.data.currency is string
-        && request.resource.data.currency.size() > 0
-        && request.resource.data.method is string
-        && request.resource.data.method.size() > 0
-        && request.resource.data.method.size() <= 40
-        && request.resource.data.reference is string
-        && request.resource.data.reference.size() > 0
-        && request.resource.data.reference.size() <= 120
-        && request.resource.data.note is string
-        && request.resource.data.note.size() <= 300
-        && request.resource.data.status == 'pending_admin_review'
-        && request.resource.data.createdAt is timestamp
-        && request.resource.data.updatedAt is timestamp
-        && request.resource.data.keys().hasOnly([
-          'paymentId',
-          'driverId',
-          'amount',
-          'currency',
-          'method',
-          'reference',
-          'note',
-          'status',
-          'createdAt',
-          'updatedAt'
-        ]);
-
-      allow update: if isAdmin()
-        && request.resource.data.paymentId == resource.data.paymentId
-        && request.resource.data.driverId == resource.data.driverId
-        && request.resource.data.amount == resource.data.amount
-        && request.resource.data.currency == resource.data.currency
-        && request.resource.data.method == resource.data.method
-        && request.resource.data.reference == resource.data.reference
-        && request.resource.data.note == resource.data.note
-        && resource.data.status == 'pending_admin_review'
-        && request.resource.data.status in ['approved', 'rejected']
-        && request.resource.data.reviewedAt is timestamp
-        && request.resource.data.reviewedByUid is string
-        && request.resource.data.reviewNote is string
-        && request.resource.data.reviewNote.size() <= 300
-        && request.resource.data.updatedAt is timestamp
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'status',
-          'reviewedAt',
-          'reviewedByUid',
-          'reviewNote',
-          'updatedAt'
-        ]);
-
-      allow delete: if isAdmin();
-    }
-
-
-    // ============================================================
-    // RD RIDE BUSINESS SETTINGS
-    // ============================================================
-    // Signed-in customers/drivers may read the current commission so each
-    // new ride can snapshot it. Only Admin/SuperAdmin may change it.
     match /ride_business_settings/{settingsId} {
       allow read: if signedIn();
       allow create, update, delete: if isAdmin();
     }
-
-
-    // ============================================================
-    // NRD DELIVERY BUSINESS SETTINGS
-    // ============================================================
-    // Active Delivery Persons need the current commission percentage and
-    // NRD receiving details. Only an active Admin/SuperAdmin can change them.
-    match /delivery_business_settings/{settingsId} {
-      function validDeliverySettings() {
-        return settingsId == 'main'
-          && request.resource.data.schemaVersion == 1
-          && request.resource.data.settingsId == 'main'
-          && request.resource.data.commissionPercent is number
-          && request.resource.data.commissionPercent >= 0
-          && request.resource.data.commissionPercent <= 50
-          && request.resource.data.deliveryCommissionPercent
-            == request.resource.data.commissionPercent
-          && request.resource.data.currency == 'Rs.'
-          && request.resource.data.isActive is bool
-          && request.resource.data.esewa is string
-          && request.resource.data.esewa.size() <= 120
-          && request.resource.data.khalti is string
-          && request.resource.data.khalti.size() <= 120
-          && request.resource.data.bankName is string
-          && request.resource.data.bankName.size() <= 160
-          && request.resource.data.bankAccountName is string
-          && request.resource.data.bankAccountName.size() <= 160
-          && request.resource.data.bankAccountNumber is string
-          && request.resource.data.bankAccountNumber.size() <= 160
-          && request.resource.data.paymentQrUrl is string
-          && request.resource.data.paymentQrUrl.size() <= 1000
-          && request.resource.data.updatedByAdminUid == request.auth.uid
-          && request.resource.data.updatedAt is timestamp
-          && request.resource.data.keys().hasOnly([
-            'schemaVersion',
-            'settingsId',
-            'commissionPercent',
-            'deliveryCommissionPercent',
-            'currency',
-            'isActive',
-            'esewa',
-            'khalti',
-            'bankName',
-            'bankAccountName',
-            'bankAccountNumber',
-            'paymentQrUrl',
-            'updatedByAdminUid',
-            'updatedAt'
-          ]);
-      }
-
-      allow read: if isAdmin() || isActiveDriver();
-
-      allow create, update: if isAdmin()
-        && validDeliverySettings();
-
-      // Keep the business configuration auditable; Admin may overwrite it,
-      // but the canonical settings document is not deleted from the client.
-      allow delete: if false;
-    }
-
-
-    // ============================================================
-    // NRD DELIVERY COMMISSION PAYMENTS
-    // ============================================================
-    // Delivery Person submits only their own payment proof.
-    // Admin/SuperAdmin alone may approve/reject it.
-    // Approved/rejected records remain immutable audit history.
-    match /delivery_commission_payments/{paymentId} {
-      function deliveryCommissionSettingsExist() {
-        return exists(
-          /databases/$(database)/documents/delivery_business_settings/main
-        );
-      }
-
-      function deliveryCommissionSettingsData() {
-        return get(
-          /databases/$(database)/documents/delivery_business_settings/main
-        ).data;
-      }
-
-      allow read: if isAdmin()
-        || (signedIn()
-          && resource.data.driverId == request.auth.uid);
-
-      allow create: if isActiveDriver()
-        && deliveryCommissionSettingsExist()
-        && deliveryCommissionSettingsData().isActive == true
-        && request.resource.data.schemaVersion == 1
-        && request.resource.data.settingsId == 'main'
-        && request.resource.data.paymentId == paymentId
-        && request.resource.data.driverId == request.auth.uid
-        && request.resource.data.submittedByUid == request.auth.uid
-        && request.resource.data.driverName is string
-        && request.resource.data.driverName.size() <= 120
-        && request.resource.data.driverName
-          == driverData().get('name', '')
-        && request.resource.data.amount is number
-        && request.resource.data.amount > 0
-        && request.resource.data.amount <= 100000000
-        && request.resource.data.currency == 'Rs.'
-        && request.resource.data.commissionPercentSnapshot is number
-        && request.resource.data.commissionPercentSnapshot >= 0
-        && request.resource.data.commissionPercentSnapshot <= 50
-        && request.resource.data.commissionPercentSnapshot
-          == deliveryCommissionSettingsData().commissionPercent
-        && request.resource.data.paymentMethod
-          in ['eSewa', 'Khalti', 'Bank', 'QR']
-        && request.resource.data.paymentReference is string
-        && request.resource.data.paymentReference.size() >= 3
-        && request.resource.data.paymentReference.size() <= 120
-        && request.resource.data.paymentNote is string
-        && request.resource.data.paymentNote.size() <= 250
-        && request.resource.data.status == 'pending_admin_review'
-        && request.resource.data.submittedAt is timestamp
-        && request.resource.data.updatedAt is timestamp
-        && request.resource.data.keys().hasOnly([
-          'schemaVersion',
-          'settingsId',
-          'paymentId',
-          'driverId',
-          'driverName',
-          'submittedByUid',
-          'amount',
-          'currency',
-          'commissionPercentSnapshot',
-          'paymentMethod',
-          'paymentReference',
-          'paymentNote',
-          'status',
-          'submittedAt',
-          'updatedAt'
-        ]);
-
-      allow update: if isAdmin()
-        && resource.data.status == 'pending_admin_review'
-        && request.resource.data.status in ['approved', 'rejected']
-        && request.resource.data.reviewNote is string
-        && request.resource.data.reviewNote.size() <= 500
-        && request.resource.data.reviewedByAdminUid == request.auth.uid
-        && request.resource.data.reviewedAt is timestamp
-        && request.resource.data.updatedAt is timestamp
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'status',
-          'reviewNote',
-          'reviewedByAdminUid',
-          'reviewedAt',
-          'updatedAt'
-        ]);
-
-      allow delete: if false;
-    }
-
-
     match /ride_requests/{rideRequestId} {
       function rideDriverOwnsRequest() {
         return isActiveRideDriver()
           && resource.data.driverId == request.auth.uid;
       }
-
       function assignedRideDriverCanRead() {
         return signedIn()
           && exists(/databases/$(database)/documents/ride_drivers/$(request.auth.uid))
@@ -755,16 +460,13 @@ service cloud.firestore {
           && rideDriverData().role == 'ride_driver'
           && resource.data.driverId == request.auth.uid;
       }
-
       function customerOwnsRequest() {
         return signedIn()
           && resource.data.customerAuthUid == request.auth.uid;
       }
-
       function rideCommissionPercentSnapshot() {
         return resource.data.get('rdCommissionPercent', 0.0);
       }
-
       function rideIdentityUnchanged() {
         return request.resource.data.rideRequestId == resource.data.rideRequestId
           && request.resource.data.driverId == resource.data.driverId
@@ -775,57 +477,10 @@ service cloud.firestore {
           && request.resource.data.pickupAddress == resource.data.pickupAddress
           && request.resource.data.destinationAddress == resource.data.destinationAddress;
       }
-
-      function rideCompletionPrivateExists() {
-        return exists(
-          /databases/$(database)/documents/ride_requests/$(rideRequestId)/private/completion
-        );
-      }
-
-      function rideCompletionPrivateData() {
-        return get(
-          /databases/$(database)/documents/ride_requests/$(rideRequestId)/private/completion
-        ).data;
-      }
-
-      function rideCompletionConfirmationExistsAfter() {
-        return existsAfter(
-          /databases/$(database)/documents/ride_requests/$(rideRequestId)/completion_confirmations/current
-        );
-      }
-
-      function rideCompletionConfirmationAfterData() {
-        return getAfter(
-          /databases/$(database)/documents/ride_requests/$(rideRequestId)/completion_confirmations/current
-        ).data;
-      }
-
-      function validRideCompletionConfirmation() {
-        return rideCompletionPrivateExists()
-          && rideCompletionConfirmationExistsAfter()
-          && rideCompletionConfirmationAfterData().rideRequestId == rideRequestId
-          && rideCompletionConfirmationAfterData().driverId == request.auth.uid
-          && rideCompletionConfirmationAfterData().method in ['code', 'qr']
-          && (
-            (
-              rideCompletionConfirmationAfterData().method == 'code'
-              && rideCompletionConfirmationAfterData().proof
-                == rideCompletionPrivateData().rideCompletionOtp
-            )
-            ||
-            (
-              rideCompletionConfirmationAfterData().method == 'qr'
-              && rideCompletionConfirmationAfterData().proof
-                == rideCompletionPrivateData().rideCompletionQrPayload
-            )
-          );
-      }
-
       allow read: if isAdmin()
         || (signedIn()
           && resource.data.customerAuthUid == request.auth.uid)
         || assignedRideDriverCanRead();
-
       allow create: if signedIn()
         && request.resource.data.rideRequestId == rideRequestId
         && request.resource.data.customerAuthUid == request.auth.uid
@@ -855,7 +510,6 @@ service cloud.firestore {
         && request.resource.data.estimatedDriverIncome
           == request.resource.data.estimatedFare
             - request.resource.data.estimatedRdCommission;
-
       allow update: if isAdmin()
         || (customerOwnsRequest()
           && rideIdentityUnchanged()
@@ -1014,55 +668,6 @@ service cloud.firestore {
               && resource.data.get('paymentStage', 'not_started') == 'not_started'
               && request.resource.data.status == 'in_progress'
               && request.resource.data.driverResponse == 'accepted'
-              && request.resource.data.paymentStage == 'awaiting_payment'
-              && request.resource.data.paymentStatus
-                == 'awaiting_customer_payment'
-              && request.resource.data.paymentFare is number
-              && request.resource.data.paymentFare >= 0
-              && request.resource.data.paymentFare == resource.data.liveFare
-              && request.resource.data.paymentDistanceKm is number
-              && request.resource.data.paymentDistanceKm >= 0
-              && request.resource.data.paymentDistanceKm
-                == resource.data.actualDistanceKm
-              && request.resource.data.paymentRequestedAt is timestamp
-              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                'paymentStage',
-                'paymentStatus',
-                'paymentFare',
-                'paymentDistanceKm',
-                'paymentRequestedAt',
-                'updatedAt'
-              ])
-            )
-            || (
-              resource.data.status == 'in_progress'
-              && resource.data.driverResponse == 'accepted'
-              && resource.data.get('paymentStage', '') == 'awaiting_payment'
-              && resource.data.get('paymentStatus', '')
-                == 'awaiting_customer_payment'
-              && request.resource.data.status == 'in_progress'
-              && request.resource.data.driverResponse == 'accepted'
-              && request.resource.data.paymentStage == 'payment_received'
-              && request.resource.data.paymentStatus == 'received'
-              && request.resource.data.paymentMethod in ['cash', 'online_qr']
-              && request.resource.data.paymentReceivedAt is timestamp
-              && request.resource.data.paymentConfirmedByDriverId
-                == request.auth.uid
-              && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-                'paymentStage',
-                'paymentStatus',
-                'paymentMethod',
-                'paymentReceivedAt',
-                'paymentConfirmedByDriverId',
-                'updatedAt'
-              ])
-            )
-            || (
-              resource.data.status == 'in_progress'
-              && resource.data.driverResponse == 'accepted'
-              && resource.data.get('paymentStage', 'not_started') == 'not_started'
-              && request.resource.data.status == 'in_progress'
-              && request.resource.data.driverResponse == 'accepted'
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
                 'actualDistanceKm',
                 'liveFare',
@@ -1080,9 +685,6 @@ service cloud.firestore {
             || (
               resource.data.status == 'in_progress'
               && resource.data.driverResponse == 'accepted'
-              && resource.data.get('paymentStage', '') == 'payment_received'
-              && resource.data.get('paymentStatus', '') == 'received'
-              && validRideCompletionConfirmation()
               && request.resource.data.status == 'completed'
               && request.resource.data.driverResponse == 'accepted'
               && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -1092,20 +694,12 @@ service cloud.firestore {
                 'finalFare',
                 'finalRdCommission',
                 'driverNetIncome',
-                'rideCompletionVerifiedAt',
-                'rideCompletionMethod',
                 'updatedAt'
               ])
-              && request.resource.data.rideCompletionVerifiedAt is timestamp
-              && request.resource.data.rideCompletionMethod
-                == rideCompletionConfirmationAfterData().method
               && request.resource.data.finalDistanceKm is number
               && request.resource.data.finalDistanceKm >= 0
-              && request.resource.data.finalDistanceKm
-                == resource.data.paymentDistanceKm
               && request.resource.data.finalFare is number
               && request.resource.data.finalFare >= 0
-              && request.resource.data.finalFare == resource.data.paymentFare
               && request.resource.data.finalRdCommission is number
               && request.resource.data.finalRdCommission >= 0
               && request.resource.data.driverNetIncome is number
@@ -1118,54 +712,28 @@ service cloud.firestore {
                   - request.resource.data.finalRdCommission
             )
           ));
-
       allow delete: if isAdmin();
-
-      // Customer-only private data for a ride. The real Trip Start OTP is
-      // stored here so the assigned driver can only see the hash on the
-      // parent ride request and must ask the customer for the 6-digit code.
       match /private/{privateDoc} {
         function parentRideAfterCreate() {
           return getAfter(
             /databases/$(database)/documents/ride_requests/$(rideRequestId)
           ).data;
         }
-
         function parentRide() {
           return get(
             /databases/$(database)/documents/ride_requests/$(rideRequestId)
           ).data;
         }
-
         allow read: if isAdmin()
           || (signedIn()
             && parentRide().customerAuthUid == request.auth.uid);
-
         allow create: if signedIn()
+          && privateDoc == 'customer'
           && parentRideAfterCreate().customerAuthUid == request.auth.uid
           && request.resource.data.rideRequestId == rideRequestId
-          && (
-            (
-              privateDoc == 'customer'
-              && request.resource.data.tripStartOtp is string
-              && request.resource.data.tripStartOtp.matches('^[0-9]{6}$')
-            )
-            ||
-            (
-              privateDoc == 'completion'
-              && request.resource.data.rideCompletionOtp is string
-              && request.resource.data.rideCompletionOtp.matches('^[0-9]{6}$')
-              && request.resource.data.rideCompletionQrPayload is string
-              && request.resource.data.rideCompletionQrPayload.size() >= 20
-              && request.resource.data.rideCompletionQrPayload.size() <= 200
-            )
-          );
-
+          && request.resource.data.tripStartOtp is string
+          && request.resource.data.tripStartOtp.matches('^[0-9]{6}$');
         allow update: if isAdmin();
-
-        // Start OTP and final completion proof stay private from the driver.
-        // The driver may only delete the matching private proof in the same
-        // verified transition where it is no longer needed.
         allow delete: if isAdmin()
           || (
             signedIn()
@@ -1178,107 +746,33 @@ service cloud.firestore {
             && parentRideAfterCreate().driverId == request.auth.uid
             && (
               (
-                privateDoc == 'customer'
-                && parentRideAfterCreate().status == 'in_progress'
+                parentRideAfterCreate().status == 'in_progress'
                 && parentRideAfterCreate().tripStartOtpVerifiedAt is timestamp
               )
               || (
-                privateDoc in ['customer', 'completion']
-                && parentRideAfterCreate().status == 'cancelled'
+                parentRideAfterCreate().status == 'cancelled'
                 && parentRideAfterCreate().cancelledBy == 'driver'
               )
             )
-          )
-          || (
-            isActiveRideDriver()
-            && privateDoc == 'completion'
-            && parentRideAfterCreate().driverId == request.auth.uid
-            && parentRideAfterCreate().status == 'completed'
-            && parentRideAfterCreate().rideCompletionVerifiedAt is timestamp
           );
       }
-
-      // Driver submits the customer-provided final code/QR without being able
-      // to read the private proof. Rules compare it to the customer-private
-      // completion document.
-      match /completion_confirmations/{confirmationId} {
-        function confirmationRide() {
-          return get(
-            /databases/$(database)/documents/ride_requests/$(rideRequestId)
-          ).data;
-        }
-
-        function completionPrivate() {
-          return get(
-            /databases/$(database)/documents/ride_requests/$(rideRequestId)/private/completion
-          ).data;
-        }
-
-        allow read: if isAdmin()
-          || (signedIn()
-            && confirmationRide().customerAuthUid == request.auth.uid)
-          || (signedIn()
-            && confirmationRide().driverId == request.auth.uid);
-
-        allow create: if confirmationId == 'current'
-          && isActiveRideDriver()
-          && confirmationRide().driverId == request.auth.uid
-          && confirmationRide().status == 'in_progress'
-          && confirmationRide().get('paymentStatus', '') == 'received'
-          && request.resource.data.rideRequestId == rideRequestId
-          && request.resource.data.driverId == request.auth.uid
-          && request.resource.data.method in ['code', 'qr']
-          && request.resource.data.proof is string
-          && request.resource.data.createdAt is timestamp
-          && (
-            (
-              request.resource.data.method == 'code'
-              && request.resource.data.proof
-                == completionPrivate().rideCompletionOtp
-            )
-            ||
-            (
-              request.resource.data.method == 'qr'
-              && request.resource.data.proof
-                == completionPrivate().rideCompletionQrPayload
-            )
-          )
-          && request.resource.data.keys().hasOnly([
-            'rideRequestId',
-            'driverId',
-            'method',
-            'proof',
-            'createdAt'
-          ]);
-
-        allow update: if false;
-        allow delete: if isAdmin();
-      }
-
-      // Private real-time chat between the customer and the assigned Ride
-      // Driver. Customer/driver can read only while the ride is active.
-      // After completion the evidence is Admin-only and immutable.
       match /messages/{messageId} {
         function chatRide() {
           return get(
             /databases/$(database)/documents/ride_requests/$(rideRequestId)
           ).data;
         }
-
         function chatCustomer() {
           return signedIn()
             && chatRide().customerAuthUid == request.auth.uid;
         }
-
         function chatDriver() {
           return isActiveRideDriver()
             && chatRide().driverId == request.auth.uid;
         }
-
         function activeRideChat() {
           return chatRide().status in ['accepted', 'arrived', 'in_progress'];
         }
-
         function validChatSenderRole() {
           return request.resource.data.senderRole is string
             && (
@@ -1290,7 +784,6 @@ service cloud.firestore {
                 && isAdmin())
             );
         }
-
         function validEvidenceExpiry() {
           return request.resource.data.evidenceExpiresAt is timestamp
             && request.resource.data.evidenceExpiresAt
@@ -1298,14 +791,12 @@ service cloud.firestore {
             && request.resource.data.evidenceExpiresAt
               <= request.time + duration.value(91, 'd');
         }
-
         function validTextMessage() {
           return request.resource.data.messageType == 'text'
             && request.resource.data.get('text', '') is string
             && request.resource.data.get('text', '').size() > 0
             && request.resource.data.get('text', '').size() <= 1000;
         }
-
         function validVoiceMessage() {
           return request.resource.data.messageType == 'voice'
             && request.resource.data.get('text', '') == ''
@@ -1318,10 +809,8 @@ service cloud.firestore {
             && request.resource.data.get('voiceByteLength', 0) <= 700000
             && request.resource.data.get('voiceMimeType', '') == 'audio/wav';
         }
-
         allow read: if isAdmin()
           || ((chatCustomer() || chatDriver()) && activeRideChat());
-
         allow create: if (chatCustomer() || chatDriver() || isAdmin())
           && activeRideChat()
           && request.resource.data.messageId == messageId
@@ -1332,44 +821,30 @@ service cloud.firestore {
           && request.resource.data.senderName.size() <= 120
           && validEvidenceExpiry()
           && (validTextMessage() || validVoiceMessage());
-
-        // Evidence is append-only. Customer, driver and Admin cannot edit or
-        // manually delete original messages. Firestore TTL may remove them
-        // automatically after evidenceExpiresAt.
         allow update, delete: if false;
       }
-
-      // Voice payload is stored separately from message metadata so normal
-      // chat loading stays small. It is fetched only when Play is pressed.
-      // Customer/driver can read it only while the ride is active; Admin can
-      // review it during the evidence retention period.
       match /message_audio/{messageId} {
         function audioRide() {
           return get(
             /databases/$(database)/documents/ride_requests/$(rideRequestId)
           ).data;
         }
-
         function audioCustomer() {
           return signedIn()
             && audioRide().customerAuthUid == request.auth.uid;
         }
-
         function audioDriver() {
           return isActiveRideDriver()
             && audioRide().driverId == request.auth.uid;
         }
-
         function activeAudioChat() {
           return audioRide().status in ['accepted', 'arrived', 'in_progress'];
         }
-
         function pairedMessageAfterCreate() {
           return getAfter(
             /databases/$(database)/documents/ride_requests/$(rideRequestId)/messages/$(messageId)
           ).data;
         }
-
         function validAudioSenderRole() {
           return request.resource.data.senderRole is string
             && (
@@ -1381,10 +856,8 @@ service cloud.firestore {
                 && isAdmin())
             );
         }
-
         allow read: if isAdmin()
           || ((audioCustomer() || audioDriver()) && activeAudioChat());
-
         allow create: if (audioCustomer() || audioDriver() || isAdmin())
           && activeAudioChat()
           && request.resource.data.messageId == messageId
@@ -1412,26 +885,84 @@ service cloud.firestore {
           && pairedMessageAfterCreate().voicePayloadId == messageId
           && pairedMessageAfterCreate().voiceByteLength
             == request.resource.data.byteLength;
-
         allow update, delete: if false;
       }
+      function paymentRideDriver() {
+        return isActiveRideDriver()
+          && resource.data.driverId == request.auth.uid;
+      }
+      function paymentRideIdentityUnchanged() {
+        return request.resource.data.rideRequestId == resource.data.rideRequestId
+          && request.resource.data.driverId == resource.data.driverId
+          && request.resource.data.customerAuthUid == resource.data.customerAuthUid
+          && request.resource.data.customerId == resource.data.customerId
+          && request.resource.data.requestType == resource.data.requestType
+          && request.resource.data.vehicleType == resource.data.vehicleType;
+      }
+      allow update: if paymentRideDriver()
+        && paymentRideIdentityUnchanged()
+        && (
+          (
+            resource.data.status == 'in_progress'
+            && resource.data.driverResponse == 'accepted'
+            && resource.data.get('paymentStage', 'not_started') == 'not_started'
+            && request.resource.data.status == 'in_progress'
+            && request.resource.data.driverResponse == 'accepted'
+            && request.resource.data.paymentStage == 'awaiting_payment'
+            && request.resource.data.paymentStatus == 'awaiting_customer_payment'
+            && request.resource.data.paymentFare is number
+            && request.resource.data.paymentFare >= 0
+            && request.resource.data.paymentFare == resource.data.liveFare
+            && request.resource.data.paymentDistanceKm is number
+            && request.resource.data.paymentDistanceKm >= 0
+            && request.resource.data.paymentDistanceKm == resource.data.actualDistanceKm
+            && request.resource.data.paymentRequestedAt is timestamp
+            && request.resource.data.updatedAt is timestamp
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'paymentStage',
+              'paymentStatus',
+              'paymentFare',
+              'paymentDistanceKm',
+              'paymentRequestedAt',
+              'updatedAt'
+            ])
+          )
+          ||
+          (
+            resource.data.status == 'in_progress'
+            && resource.data.driverResponse == 'accepted'
+            && resource.data.get('paymentStage', '') == 'awaiting_payment'
+            && resource.data.get('paymentStatus', '') == 'awaiting_customer_payment'
+            && request.resource.data.status == 'in_progress'
+            && request.resource.data.driverResponse == 'accepted'
+            && request.resource.data.paymentStage == 'payment_received'
+            && request.resource.data.paymentStatus == 'received'
+            && request.resource.data.paymentMethod in ['cash', 'online_qr']
+            && request.resource.data.paymentReceivedAt is timestamp
+            && request.resource.data.paymentConfirmedByDriverId == request.auth.uid
+            && request.resource.data.updatedAt is timestamp
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'paymentStage',
+              'paymentStatus',
+              'paymentMethod',
+              'paymentReceivedAt',
+              'paymentConfirmedByDriverId',
+              'updatedAt'
+            ])
+          )
+        );
+    
     }
-
-    // RD Ride SOS alerts. One active slot is used per ride + sender role
-    // to prevent repeated taps from creating duplicate active alerts.
     match /ride_sos_alerts/{alertId} {
       function sourceRidePath() {
         return /databases/$(database)/documents/ride_requests/$(request.resource.data.rideRequestId);
       }
-
       function sourceRideExists() {
         return exists(sourceRidePath());
       }
-
       function sourceRide() {
         return get(sourceRidePath()).data;
       }
-
       function validSosCreateShape() {
         return request.resource.data.keys().hasOnly([
           'rideRequestId',
@@ -1500,14 +1031,12 @@ service cloud.firestore {
         && request.resource.data.updatedAt is timestamp
         && request.resource.data.resolvedAt == null;
       }
-
       function sosAlertIdMatches() {
         return alertId
           == request.resource.data.rideRequestId
             + '__'
             + request.resource.data.triggeredBy;
       }
-
       function sosMatchesSourceRide() {
         return sourceRideExists()
           && sourceRide().status in ['accepted', 'arrived', 'in_progress']
@@ -1529,17 +1058,14 @@ service cloud.firestore {
           && request.resource.data.destinationAddress
             == sourceRide().get('destinationAddress', '');
       }
-
       function customerCanCreateSos() {
         return request.resource.data.triggeredBy == 'customer'
           && sourceRide().customerAuthUid == request.auth.uid;
       }
-
       function driverCanCreateSos() {
         return request.resource.data.triggeredBy == 'driver'
           && sourceRide().driverId == request.auth.uid;
       }
-
       allow create: if signedIn()
         && validSosCreateShape()
         && sosAlertIdMatches()
@@ -1548,7 +1074,6 @@ service cloud.firestore {
           customerCanCreateSos()
           || driverCanCreateSos()
         );
-
       allow read: if isAdmin()
         || (
           signedIn()
@@ -1557,7 +1082,6 @@ service cloud.firestore {
             || resource.data.driverId == request.auth.uid
           )
         );
-
       allow update: if (
         isAdmin()
         && resource.data.status == 'active'
@@ -1588,19 +1112,15 @@ service cloud.firestore {
           || driverCanCreateSos()
         )
       );
-
       allow delete: if isAdmin();
     }
-
     match /ride_driver_ratings/{rideRequestId} {
       function sourceRatedRide() {
         return getAfter(
           /databases/$(database)/documents/ride_requests/$(rideRequestId)
         ).data;
       }
-
       allow read: if signedIn();
-
       allow create: if signedIn()
         && request.resource.data.keys().hasOnly([
           'rideRequestId',
@@ -1631,55 +1151,44 @@ service cloud.firestore {
             && sourceRatedRide().driverId == request.auth.uid
           )
         );
-
       allow update, delete: if isAdmin();
     }
-
     match /products/{productId} {
       allow read: if true;
-
       allow create: if isAdmin()
         || (isActiveSeller()
           && request.resource.data.sellerId == request.auth.uid);
-
       allow update: if isAdmin()
         || (isActiveSeller()
           && resource.data.sellerId == request.auth.uid
           && request.resource.data.sellerId == request.auth.uid);
-
       allow delete: if isAdmin()
         || (isActiveSeller()
           && resource.data.sellerId == request.auth.uid);
     }
-
     match /orders/{orderId} {
       function customerOwnsOrder() {
         return hasCustomerSession()
           && resource.data.customerId == customerData().customerId;
       }
-
       function customerOwnsNewOrder() {
         return hasCustomerSession()
           && request.resource.data.customerId == customerData().customerId;
       }
-
       function sellerCanReadOrder() {
         return signedIn()
           && resource.data.sellerIds.hasAny([request.auth.uid]);
       }
-
       function sellerOwnsOrder() {
         return isActiveSeller()
           && resource.data.sellerIds is list
           && request.auth.uid in resource.data.sellerIds;
       }
-
       function driverOwnsOrder() {
         return isActiveDriver()
           && resource.data.driverId is string
           && resource.data.driverId == request.auth.uid;
       }
-
       function validCustomerCancellationRequest() {
         return customerOwnsOrder()
           && request.resource.data.customerId == resource.data.customerId
@@ -1711,7 +1220,6 @@ service cloud.firestore {
             'updatedAt'
           ]);
       }
-
       function validCustomerReturnRequest() {
         return customerOwnsOrder()
           && request.resource.data.customerId == resource.data.customerId
@@ -1738,7 +1246,6 @@ service cloud.firestore {
             'updatedAt'
           ]);
       }
-
       function validSellerCancellationReview() {
         return sellerOwnsOrder()
           && request.resource.data.customerId == resource.data.customerId
@@ -1806,7 +1313,6 @@ service cloud.firestore {
             )
           );
       }
-
       function validSellerReturnReview() {
         return sellerOwnsOrder()
           && request.resource.data.customerId == resource.data.customerId
@@ -1861,31 +1367,26 @@ service cloud.firestore {
             )
           );
       }
-
       function pickupPrivateExists() {
         return exists(
           /databases/$(database)/documents/orders/$(orderId)/pickup_private/verification
         );
       }
-
       function pickupPrivateData() {
         return get(
           /databases/$(database)/documents/orders/$(orderId)/pickup_private/verification
         ).data;
       }
-
       function pickupConfirmationExists() {
         return exists(
           /databases/$(database)/documents/orders/$(orderId)/pickup_confirmations/current
         );
       }
-
       function pickupConfirmationData() {
         return get(
           /databases/$(database)/documents/orders/$(orderId)/pickup_confirmations/current
         ).data;
       }
-
       function validSellerPickupConfirmation() {
         return sellerOwnsOrder()
           && resource.data.get('pickupConfirmed', false) != true
@@ -1912,43 +1413,36 @@ service cloud.firestore {
             )
           );
       }
-
       function krishiPoolExists() {
         return exists(
           /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
         );
       }
-
       function krishiPoolData() {
         return get(
           /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
         ).data;
       }
-
       function krishiPoolPrivateExists() {
         return exists(
           /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_private/verification
         );
       }
-
       function krishiPoolPrivateData() {
         return get(
           /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_private/verification
         ).data;
       }
-
       function krishiPoolConfirmationExists() {
         return exists(
           /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_confirmations/current
         );
       }
-
       function krishiPoolConfirmationData() {
         return get(
           /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_confirmations/current
         ).data;
       }
-
       function validSellerKrishiPoolPickupConfirmation() {
         return sellerOwnsOrder()
           && resource.data.get('pickupConfirmed', false) != true
@@ -1991,24 +1485,15 @@ service cloud.firestore {
             )
           );
       }
-
-      // Keep Admin read isolated from customer/seller/driver checks.
-      // Some older orders may not contain sellerIds/driverId; evaluating those
-      // role checks in the same expression can deny an otherwise valid Admin
-      // collection query. Admin access is therefore its own allow rule.
       allow read: if isAdmin();
-
       allow read: if customerOwnsOrder()
         || sellerCanReadOrder()
         || driverOwnsOrder();
-
       allow create: if isAdmin()
         || (customerOwnsNewOrder()
           && request.resource.data.status == 'Pending'
           && request.resource.data.driverId == '');
-
       allow update: if isAdmin();
-
       allow update: if customerOwnsOrder()
         && request.resource.data.customerId == resource.data.customerId
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
@@ -2019,13 +1504,6 @@ service cloud.firestore {
           'customerLocationUpdatedAt',
           'updatedAt'
         ]);
-
-      // Secure recovery without reading somebody else's order first.
-      // The caller must know both the Order ID and the original phone number.
-      //
-      // New orders use recoveryPhoneKey. Older RD orders may only have
-      // phone / customerPhone / mobile, so those legacy fields are accepted
-      // as recovery proof as well.
       function recoveryProofMatches() {
         return request.resource.data.recoveryProof is string
           && request.resource.data.recoveryProof.size() >= 6
@@ -2062,7 +1540,6 @@ service cloud.firestore {
             )
           );
       }
-
       allow update: if hasCustomerSession()
         && recoveryProofMatches()
         && request.resource.data.customerId == customerData().customerId
@@ -2075,8 +1552,6 @@ service cloud.firestore {
           'recoveredAt',
           'updatedAt'
         ]);
-
-      // Merge orders already owned by the new device into the linked customer.
       allow update: if customerOwnsOrder()
         && request.resource.data.linkedViaCode is string
         && exists(
@@ -2100,18 +1575,10 @@ service cloud.firestore {
           'linkedAt',
           'updatedAt'
         ]);
-
-      // Customer may submit one cancellation or return request using only
-      // the dedicated request fields.
       allow update: if validCustomerCancellationRequest()
         || validCustomerReturnRequest();
-
-      // Seller may review a pending customer request for an order they own.
-      // Refund amount stays at 0 here; Admin validates and selects the final
-      // amount before money is actually marked as refunded.
       allow update: if validSellerCancellationReview()
         || validSellerReturnReview();
-
       allow update: if validSellerPickupConfirmation()
         && request.resource.data.customerId == resource.data.customerId
         && request.resource.data.sellerIds == resource.data.sellerIds
@@ -2135,9 +1602,6 @@ service cloud.firestore {
           'pickupConfirmationDriverId',
           'pickupConfirmationMethod'
         ]);
-
-      // Nearby Krishi reservation becomes a real driver assignment only after
-      // the farm verifies the reserved driver's QR/code while handing over.
       allow update: if validSellerKrishiPoolPickupConfirmation()
         && request.resource.data.customerId == resource.data.customerId
         && request.resource.data.sellerIds == resource.data.sellerIds
@@ -2181,7 +1645,6 @@ service cloud.firestore {
           'driverLocationUpdatedAt',
           'deliveryAssignmentType'
         ]);
-
       allow update: if sellerOwnsOrder()
         && request.resource.data.customerId == resource.data.customerId
         && request.resource.data.sellerIds == resource.data.sellerIds
@@ -2217,7 +1680,6 @@ service cloud.firestore {
           request.resource.data.get('trackingStatus', '') != 'Picked Up'
           || resource.data.get('pickupConfirmed', false) == true
         );
-
       allow update: if driverOwnsOrder()
         && request.resource.data.customerId == resource.data.customerId
         && request.resource.data.sellerIds == resource.data.sellerIds
@@ -2246,25 +1708,20 @@ service cloud.firestore {
         && (request.resource.data.status != 'Delivered'
           || (request.resource.data.deliveryOtpVerified == true
             && request.resource.data.deliveredByDriverId == request.auth.uid));
-
       allow delete: if isAdmin();
-
       match /pickup_private/{documentId} {
         function parentOrder() {
           return get(
             /databases/$(database)/documents/orders/$(orderId)
           ).data;
         }
-
         function assignedDeliveryPerson() {
           return isActiveDriver()
             && parentOrder().driverId is string
             && parentOrder().driverId == request.auth.uid;
         }
-
         allow read: if isAdmin()
           || assignedDeliveryPerson();
-
         function validPickupPrivateWrite() {
           return documentId == 'verification'
             && assignedDeliveryPerson()
@@ -2290,9 +1747,7 @@ service cloud.firestore {
               'updatedAt'
             ]);
         }
-
         allow create: if validPickupPrivateWrite();
-
         allow update: if validPickupPrivateWrite()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'orderId',
@@ -2303,38 +1758,31 @@ service cloud.firestore {
             'createdAt',
             'updatedAt'
           ]);
-
         allow delete: if isAdmin()
           || assignedDeliveryPerson();
       }
-
       match /pickup_confirmations/{documentId} {
         function parentOrder() {
           return get(
             /databases/$(database)/documents/orders/$(orderId)
           ).data;
         }
-
         function sellerOwnsParentOrder() {
           return isActiveSeller()
             && parentOrder().sellerIds is list
             && request.auth.uid in parentOrder().sellerIds;
         }
-
         function privateVerificationExists() {
           return exists(
             /databases/$(database)/documents/orders/$(orderId)/pickup_private/verification
           );
         }
-
         function privateVerification() {
           return get(
             /databases/$(database)/documents/orders/$(orderId)/pickup_private/verification
           ).data;
         }
-
         allow read: if isAdmin();
-
         function validPickupConfirmationWrite() {
           return documentId == 'current'
             && sellerOwnsParentOrder()
@@ -2372,9 +1820,7 @@ service cloud.firestore {
               )
             );
         }
-
         allow create: if validPickupConfirmationWrite();
-
         allow update: if validPickupConfirmationWrite()
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'orderId',
@@ -2384,49 +1830,35 @@ service cloud.firestore {
             'proof',
             'confirmedAt'
           ]);
-
         allow delete: if isAdmin();
       }
     }
-
-
-    // ============================================================
-    // KRISHI NEARBY DELIVERY POOL
-    // Nearby discovery data includes Farm GPS plus Customer GPS so an online
-    // delivery person can preview Driver -> Farm -> Customer routing before pickup.
-    // Customer phone number and text address remain protected inside /orders.
-    // ============================================================
     match /krishi_delivery_pool/{orderId} {
       function sourceOrderExists() {
         return exists(
           /databases/$(database)/documents/orders/$(orderId)
         );
       }
-
       function sourceOrderData() {
         return get(
           /databases/$(database)/documents/orders/$(orderId)
         ).data;
       }
-
       function poolSellerOwns() {
         return isActiveSeller()
           && resource.data.sellerId == request.auth.uid;
       }
-
       function sellerOwnsSourceOrder() {
         return isActiveSeller()
           && sourceOrderExists()
           && sourceOrderData().sellerIds is list
           && request.auth.uid in sourceOrderData().sellerIds;
       }
-
       function customerOwnsSourceOrder() {
         return hasCustomerSession()
           && sourceOrderExists()
           && sourceOrderData().customerId == customerData().customerId;
       }
-
       function sourceOrderEligibleForNearbyPool() {
         return sourceOrderExists()
           && sourceOrderData().sellerIds is list
@@ -2438,7 +1870,6 @@ service cloud.firestore {
             'Processing'
           ];
       }
-
       function validPoolPublisher() {
         return (
             sellerOwnsSourceOrder()
@@ -2451,13 +1882,11 @@ service cloud.firestore {
               in sourceOrderData().sellerIds
           );
       }
-
       allow read: if isAdmin()
         || sellerOwnsSourceOrder()
         || poolSellerOwns()
         || (isOnlineDeliveryDriver()
           && resource.data.get('active', false) == true);
-
       allow create: if validPoolPublisher()
         && sourceOrderEligibleForNearbyPool()
         && request.resource.data.orderId == orderId
@@ -2523,37 +1952,29 @@ service cloud.firestore {
           'createdAt',
           'updatedAt'
         ]);
-
-      // Seller may refresh/close its own sanitized pool entry, but may never
-      // change the source order ID or seller ownership.
       allow update: if poolSellerOwns()
         && request.resource.data.orderId == resource.data.orderId
         && request.resource.data.sellerId == resource.data.sellerId;
-
       function ownDeliveryPresenceExists() {
         return exists(
           /databases/$(database)/documents/delivery_presence/$(request.auth.uid)
         );
       }
-
       function ownDeliveryPresence() {
         return get(
           /databases/$(database)/documents/delivery_presence/$(request.auth.uid)
         ).data;
       }
-
       function ownAcceptedPickupRequestAfterExists() {
         return existsAfter(
           /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_requests/$(request.auth.uid)
         );
       }
-
       function ownAcceptedPickupRequestAfter() {
         return getAfter(
           /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_requests/$(request.auth.uid)
         ).data;
       }
-
       function validDriverReserve() {
         return isOnlineDeliveryDriver()
           && ownAcceptedPickupRequestAfterExists()
@@ -2609,7 +2030,6 @@ service cloud.firestore {
             'updatedAt'
           ]);
       }
-
       function validDriverRelease() {
         return isActiveDriver()
           && resource.data.active == true
@@ -2635,193 +2055,16 @@ service cloud.firestore {
             'updatedAt'
           ]);
       }
-
       allow update: if validDriverReserve()
         || validDriverRelease();
-
       allow delete: if isAdmin()
         || poolSellerOwns();
-
-      match /pickup_requests/{driverId} {
-        function parentPool() {
-          return get(
-            /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
-          ).data;
-        }
-
-        function parentPoolAfter() {
-          return getAfter(
-            /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
-          ).data;
-        }
-
-        function sellerOwnsPool() {
-          return isActiveSeller()
-            && parentPool().sellerId == request.auth.uid;
-        }
-
-        function driverOwnsRequest() {
-          return isActiveDriver()
-            && request.auth.uid == driverId;
-        }
-
-        function driverPresenceExists() {
-          return exists(
-            /databases/$(database)/documents/delivery_presence/$(driverId)
-          );
-        }
-
-        function driverPresence() {
-          return get(
-            /databases/$(database)/documents/delivery_presence/$(driverId)
-          ).data;
-        }
-
-        function validBaseRequest() {
-          return request.resource.data.orderId == orderId
-            && request.resource.data.sellerId == parentPool().sellerId
-            && request.resource.data.driverId == driverId
-            && request.resource.data.driverName is string
-            && request.resource.data.driverName.size() <= 160
-            && request.resource.data.driverPhone is string
-            && request.resource.data.driverPhone.size() <= 40
-            && request.resource.data.driverEmail is string
-            && request.resource.data.driverEmail.size() <= 200
-            && request.resource.data.requestedBy in ['driver', 'seller']
-            && request.resource.data.status in [
-              'pending_seller',
-              'pending_driver',
-              'accepted',
-              'rejected',
-              'cancelled'
-            ]
-            && request.resource.data.createdAt is timestamp
-            && request.resource.data.updatedAt is timestamp
-            && (
-              request.resource.data.get('respondedAt', null) == null
-              || request.resource.data.respondedAt is timestamp
-            )
-            && request.resource.data.keys().hasOnly([
-              'orderId',
-              'sellerId',
-              'driverId',
-              'driverName',
-              'driverPhone',
-              'driverEmail',
-              'requestedBy',
-              'status',
-              'createdAt',
-              'updatedAt',
-              'respondedAt'
-            ]);
-        }
-
-        function parentAvailable() {
-          return parentPool().active == true
-            && parentPool().readyForPickup == true
-            && parentPool().get('state', 'available') == 'available';
-        }
-
-        allow read: if isAdmin()
-          || sellerOwnsPool()
-          || driverOwnsRequest();
-
-        allow create: if validBaseRequest()
-          && parentAvailable()
-          && (
-            (
-              driverOwnsRequest()
-              && driverPresenceExists()
-              && driverPresence().isOnline == true
-              && request.resource.data.requestedBy == 'driver'
-              && request.resource.data.status == 'pending_seller'
-              && request.resource.data.driverName == driverPresence().name
-              && request.resource.data.driverPhone == driverPresence().phone
-              && request.resource.data.driverEmail == driverPresence().email
-            )
-            ||
-            (
-              sellerOwnsPool()
-              && driverPresenceExists()
-              && driverPresence().isOnline == true
-              && request.resource.data.requestedBy == 'seller'
-              && request.resource.data.status == 'pending_driver'
-              && request.resource.data.driverName == driverPresence().name
-              && request.resource.data.driverPhone == driverPresence().phone
-              && request.resource.data.driverEmail == driverPresence().email
-            )
-          );
-
-        function immutableRequestFields() {
-          return request.resource.data.orderId == resource.data.orderId
-            && request.resource.data.sellerId == resource.data.sellerId
-            && request.resource.data.driverId == resource.data.driverId
-            && request.resource.data.driverName == resource.data.driverName
-            && request.resource.data.driverPhone == resource.data.driverPhone
-            && request.resource.data.driverEmail == resource.data.driverEmail
-            && request.resource.data.requestedBy == resource.data.requestedBy
-            && request.resource.data.createdAt == resource.data.createdAt;
-        }
-
-        function acceptedParentMatchesDriver() {
-          return parentPoolAfter().state == 'reserved'
-            && parentPoolAfter().reservedDriverId == driverId
-            && parentPoolAfter().reservationKey is string
-            && parentPoolAfter().reservationKey.size() >= 20
-            && parentPoolAfter().reservationExpiresAt is timestamp
-            && parentPoolAfter().reservationExpiresAt > request.time;
-        }
-
-        allow update: if validBaseRequest()
-          && immutableRequestFields()
-          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status',
-            'respondedAt',
-            'updatedAt'
-          ])
-          && (
-            (
-              sellerOwnsPool()
-              && resource.data.requestedBy == 'driver'
-              && resource.data.status == 'pending_seller'
-              && request.resource.data.status in ['accepted', 'rejected']
-              && (
-                request.resource.data.status != 'accepted'
-                || acceptedParentMatchesDriver()
-              )
-            )
-            ||
-            (
-              driverOwnsRequest()
-              && resource.data.requestedBy == 'seller'
-              && resource.data.status == 'pending_driver'
-              && request.resource.data.status in ['accepted', 'rejected']
-              && (
-                request.resource.data.status != 'accepted'
-                || acceptedParentMatchesDriver()
-              )
-            )
-            ||
-            (
-              driverOwnsRequest()
-              && resource.data.requestedBy == 'driver'
-              && resource.data.status == 'pending_seller'
-              && request.resource.data.status == 'cancelled'
-            )
-          );
-
-        allow delete: if isAdmin()
-          || sellerOwnsPool()
-          || driverOwnsRequest();
-      }
-
       match /pickup_private/{documentId} {
         function parentPool() {
           return get(
             /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
           ).data;
         }
-
         function reservedDeliveryPerson() {
           return isActiveDriver()
             && parentPool().active == true
@@ -2831,10 +2074,8 @@ service cloud.firestore {
             && parentPool().reservationExpiresAt is timestamp
             && parentPool().reservationExpiresAt > request.time;
         }
-
         allow read: if isAdmin()
           || reservedDeliveryPerson();
-
         function validPrivateProof() {
           return documentId == 'verification'
             && reservedDeliveryPerson()
@@ -2864,39 +2105,31 @@ service cloud.firestore {
               'updatedAt'
             ]);
         }
-
         allow create: if validPrivateProof();
-
         allow update: if validPrivateProof();
-
         allow delete: if isAdmin()
           || reservedDeliveryPerson();
       }
-
       match /pickup_confirmations/{documentId} {
         function parentPool() {
           return get(
             /databases/$(database)/documents/krishi_delivery_pool/$(orderId)
           ).data;
         }
-
         function privateProofExists() {
           return exists(
             /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_private/verification
           );
         }
-
         function privateProof() {
           return get(
             /databases/$(database)/documents/krishi_delivery_pool/$(orderId)/pickup_private/verification
           ).data;
         }
-
         function sellerOwnsPool() {
           return isActiveSeller()
             && parentPool().sellerId == request.auth.uid;
         }
-
         function validSellerProof() {
           return documentId == 'current'
             && sellerOwnsPool()
@@ -2941,20 +2174,14 @@ service cloud.firestore {
               )
             );
         }
-
         allow read: if isAdmin()
           || sellerOwnsPool();
-
         allow create: if validSellerProof();
-
         allow update: if validSellerProof();
-
         allow delete: if isAdmin()
           || sellerOwnsPool();
       }
     }
-
-
     match /reviews/{reviewId} {
       function reviewOrderExists() {
         return request.resource.data.orderId is string
@@ -2962,13 +2189,11 @@ service cloud.firestore {
             /databases/$(database)/documents/orders/$(request.resource.data.orderId)
           );
       }
-
       function reviewOrderData() {
         return get(
           /databases/$(database)/documents/orders/$(request.resource.data.orderId)
         ).data;
       }
-
       function validReviewContent() {
         return request.resource.data.rating is int
           && request.resource.data.rating >= 1
@@ -2977,28 +2202,13 @@ service cloud.firestore {
           && request.resource.data.comment.size() > 0
           && request.resource.data.comment.size() <= 500;
       }
-
-      // Admin can read all reviews.
       allow read: if isAdmin();
-
-      // Active seller can read only reviews belonging to that seller.
       allow read: if isActiveSeller()
         && resource.data.sellerId is string
         && resource.data.sellerId == request.auth.uid;
-
-      // Customer can read only their own submitted review.
       allow read: if hasCustomerSession()
         && resource.data.customerId is string
         && resource.data.customerId == customerData().customerId;
-
-      // Customer can create a review only for an order that:
-      // 1) belongs to this customer,
-      // 2) is Delivered,
-      // 3) contains this seller.
-      //
-      // Keep create validation intentionally focused on ownership/content.
-      // Client metadata such as timestamps/product labels is not used as an
-      // authorization condition, which avoids false permission-denied errors.
       allow create: if hasCustomerSession()
         && request.resource.data.reviewId == reviewId
         && request.resource.data.customerId is string
@@ -3011,9 +2221,6 @@ service cloud.firestore {
         && reviewOrderData().status == 'Delivered'
         && reviewOrderData().sellerIds is list
         && request.resource.data.sellerId in reviewOrderData().sellerIds;
-
-      // Customer may edit only rating/comment/time on their own review.
-      // Order/customer/seller/product identity cannot be transferred.
       allow update: if hasCustomerSession()
         && resource.data.customerId == customerData().customerId
         && request.resource.data.reviewId == resource.data.reviewId
@@ -3033,25 +2240,8 @@ service cloud.firestore {
           'comment',
           'updatedAt'
         ]);
-
-      // Admin moderation only.
       allow delete: if isAdmin();
     }
-
-
-    // ============================================================
-    // ADMIN NOTIFICATIONS
-    // ============================================================
-    //
-    // audience values:
-    // - customers : all customers
-    // - sellers   : all sellers
-    // - both      : all customers + all sellers
-    // - customer  : one customer (targetCustomerId)
-    // - seller    : one seller (targetSellerId)
-    //
-    // Only Admin can create/update/delete notifications.
-    // Customers/Sellers can only read notifications meant for them.
     match /admin_notifications/{notificationId} {
       function customerCanReadNotification() {
         return hasCustomerSession()
@@ -3065,7 +2255,6 @@ service cloud.firestore {
             )
           );
       }
-
       function sellerCanReadNotification() {
         return signedIn()
           && exists(
@@ -3085,48 +2274,27 @@ service cloud.firestore {
             )
           );
       }
-
       allow read: if isAdmin()
         || customerCanReadNotification()
         || sellerCanReadNotification();
-
       allow create, update, delete: if isAdmin();
     }
-
-
-    // ============================================================
-    // RD RIDE FARE SETTINGS
-    // ============================================================
-    // Signed-in customers/drivers can read the current fare table.
-    // Only Admin/SuperAdmin can create, update, or delete fare rates.
     match /ride_fare_settings/{fareId} {
       allow read: if signedIn();
       allow create, update, delete: if isAdmin();
     }
-
-
-
-    // ============================================================
-    // RD TICKET BOOKINGS
-    // ============================================================
-    // Customer can create/read only their own booking requests.
-    // Customers cannot self-confirm payment, provider verification,
-    // PNR or e-ticket issuance. Those fields are locked on create.
     match /ticket_bookings/{bookingId} {
       function ticketOwner() {
         return signedIn()
           && resource.data.customerAuthUid == request.auth.uid;
       }
-
       allow read: if isAdmin() || ticketOwner();
-
       allow create: if signedIn()
         && request.resource.data.bookingId == bookingId
         && request.resource.data.bookingVersion == 2
         && request.resource.data.serviceType == 'flight'
         && request.resource.data.customerAuthUid == request.auth.uid
         && request.resource.data.customerId is string
-
         && request.resource.data.tripType
           in ['one_way', 'round_trip']
         && request.resource.data.from is string
@@ -3142,7 +2310,6 @@ service cloud.firestore {
           request.resource.data.returnDate == null
           || request.resource.data.returnDate is timestamp
         )
-
         && request.resource.data.adultCount is int
         && request.resource.data.adultCount >= 1
         && request.resource.data.adultCount <= 9
@@ -3166,7 +2333,6 @@ service cloud.firestore {
         && request.resource.data.passengerTypes is list
         && request.resource.data.passengerTypes.size()
           == request.resource.data.passengerCount
-
         && request.resource.data.contactPhone is string
         && request.resource.data.contactPhone.size() >= 7
         && request.resource.data.contactPhone.size() <= 30
@@ -3176,7 +2342,6 @@ service cloud.firestore {
           in ['Economy', 'Premium Economy', 'Business']
         && request.resource.data.directOnly is bool
         && request.resource.data.flexibleDates is bool
-
         && request.resource.data.airlineName is string
         && request.resource.data.airlineName.size() > 0
         && request.resource.data.flightNumber is string
@@ -3193,7 +2358,6 @@ service cloud.firestore {
         )
         && request.resource.data.baggage is string
         && request.resource.data.refundable is bool
-
         && request.resource.data.baseFare is number
         && request.resource.data.baseFare >= 0
         && request.resource.data.taxes is number
@@ -3211,14 +2375,10 @@ service cloud.firestore {
             + request.resource.data.taxes
             + request.resource.data.serviceFee + 0.05
         && request.resource.data.currency == 'Rs.'
-
         && request.resource.data.quoteId is string
         && request.resource.data.quoteId.size() > 0
         && request.resource.data.quoteSource == 'demo'
         && request.resource.data.quoteExpiresAt is timestamp
-
-        // Anti-fraud locks: customer cannot create a fake
-        // verified/paid/issued ticket.
         && request.resource.data.providerVerified == false
         && request.resource.data.providerName == ''
         && request.resource.data.providerBookingReference == ''
@@ -3232,10 +2392,8 @@ service cloud.firestore {
           == 'not_issued'
         && request.resource.data.fraudReviewStatus
           == 'unreviewed'
-
         && request.resource.data.createdAt is timestamp
         && request.resource.data.updatedAt is timestamp
-
         && request.resource.data.keys().hasOnly([
           'bookingId',
           'bookingVersion',
@@ -3286,19 +2444,12 @@ service cloud.firestore {
           'createdAt',
           'updatedAt'
         ]);
-
-
-      // Flight booking v3: richer passenger/preferences/payment foundation.
-      // Keep this rule intentionally compact so Firestore can compile it
-      // safely. Security-critical fields remain locked on customer create;
-      // only Admin can later verify provider/payment or issue a real ticket.
       allow create: if signedIn()
         && request.resource.data.bookingId == bookingId
         && request.resource.data.bookingVersion == 3
         && request.resource.data.serviceType == 'flight'
         && request.resource.data.customerAuthUid == request.auth.uid
         && request.resource.data.customerId is string
-
         && request.resource.data.travelScope
           in ['domestic', 'international']
         && request.resource.data.tripType
@@ -3313,7 +2464,6 @@ service cloud.firestore {
         && request.resource.data.toCode is string
         && request.resource.data.toCode.size() == 3
         && request.resource.data.departureDate is timestamp
-
         && request.resource.data.adultCount is int
         && request.resource.data.adultCount >= 1
         && request.resource.data.childCount is int
@@ -3338,20 +2488,17 @@ service cloud.firestore {
         && request.resource.data.passengerDob is list
         && request.resource.data.passengerDob.size()
           == request.resource.data.passengerCount
-
         && request.resource.data.contactPhone is string
         && request.resource.data.contactPhone.size() >= 7
         && request.resource.data.contactEmail is string
         && request.resource.data.cabinClass
           in ['Economy', 'Premium Economy', 'Business', 'First Class']
-
         && request.resource.data.airlineName is string
         && request.resource.data.airlineName.size() > 0
         && request.resource.data.flightNumber is string
         && request.resource.data.flightNumber.size() > 0
         && request.resource.data.outboundDeparture is timestamp
         && request.resource.data.outboundArrival is timestamp
-
         && request.resource.data.baseFare is number
         && request.resource.data.baseFare >= 0
         && request.resource.data.taxes is number
@@ -3361,7 +2508,6 @@ service cloud.firestore {
         && request.resource.data.totalFare is number
         && request.resource.data.totalFare >= 0
         && request.resource.data.currency == 'Rs.'
-
         && request.resource.data.paymentOption
           in ['online', 'pay_at_office']
         && request.resource.data.paymentMethod is string
@@ -3370,13 +2516,10 @@ service cloud.firestore {
           request.resource.data.paymentStatus == 'online_pending'
           || request.resource.data.paymentStatus == 'pay_at_office_pending'
         )
-
         && request.resource.data.quoteId is string
         && request.resource.data.quoteId.size() > 0
         && request.resource.data.quoteSource == 'demo'
         && request.resource.data.quoteExpiresAt is timestamp
-
-        // Anti-fraud locks: customer cannot self-verify or self-issue.
         && request.resource.data.providerVerified == false
         && request.resource.data.providerName == ''
         && request.resource.data.providerBookingReference == ''
@@ -3388,38 +2531,25 @@ service cloud.firestore {
         && request.resource.data.fraudReviewStatus == 'unreviewed'
         && request.resource.data.createdAt is timestamp
         && request.resource.data.updatedAt is timestamp;
-
-      // Only trusted admin-side workflow can review/change
-      // provider/payment/ticket issuance fields.
       allow update, delete: if isAdmin();
     }
-
-
-
-    // ============================================================
-    // RD FLIGHT CANCELLATION / REFUND REQUESTS
-    // ============================================================
     match /flight_cancellation_requests/{requestId} {
       function cancellationOwner() {
         return signedIn()
           && resource.data.customerAuthUid == request.auth.uid;
       }
-
       function sourceFlightBookingExists() {
         return request.resource.data.bookingId is string
           && exists(
             /databases/$(database)/documents/ticket_bookings/$(request.resource.data.bookingId)
           );
       }
-
       function sourceFlightBooking() {
         return get(
           /databases/$(database)/documents/ticket_bookings/$(request.resource.data.bookingId)
         ).data;
       }
-
       allow read: if isAdmin() || cancellationOwner();
-
       allow create: if signedIn()
         && request.resource.data.requestId == requestId
         && request.resource.data.customerAuthUid == request.auth.uid
@@ -3451,31 +2581,18 @@ service cloud.firestore {
           'createdAt',
           'updatedAt'
         ]);
-
       allow update, delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD FLIGHT PUBLIC QR / TOKEN VERIFICATION
-    // ============================================================
     match /flight_ticket_public_verify/{token} {
-      // App users, including the anonymous customer session, can verify
-      // a token. Only Admin may create/change verification records.
       allow read: if signedIn();
       allow create, update, delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD BUS OPERATORS
-    // ============================================================
     match /bus_operators/{operatorId} {
       allow read: if isAdmin()
         || (
           signedIn()
           && request.auth.uid == operatorId
         );
-
-      // Registration creates only a pending/unapproved operator.
       allow create: if isAdmin()
         || (
           signedIn()
@@ -3496,7 +2613,6 @@ service cloud.firestore {
                   && request.resource.data.address is string
                   && request.resource.data.email is string
         );
-
       allow update: if isAdmin()
         || (
           signedIn()
@@ -3544,13 +2660,8 @@ service cloud.firestore {
               'updatedAt'
             ])
         );
-
       allow delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD BUS OPERATOR PUBLIC PRESENCE
-    // ============================================================
     match /bus_operator_presence/{operatorId} {
       function validBusPresenceWrite() {
         return request.resource.data.keys().hasOnly([
@@ -3569,30 +2680,17 @@ service cloud.firestore {
             )
           && request.resource.data.updatedAt is timestamp;
       }
-
-      // Customers can read only this small public service-presence document.
       allow read: if signedIn();
-
       allow create, update: if isAdmin()
         || (
           isActiveBusOperator()
           && request.auth.uid == operatorId
           && validBusPresenceWrite()
         );
-
       allow delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD BUS SCHEDULES
-    // ============================================================
     match /bus_schedules/{scheduleId} {
-      // Signed-in users can search schedules. Customer app itself
-      // only shows active + fare-approved schedules.
       allow read: if signedIn();
-
-      // New operator schedules always start with PENDING fare approval.
-      // Admin approval is required before the schedule can become active.
       allow create: if isActiveBusOperator()
         && request.resource.data.scheduleId == scheduleId
         && request.resource.data.operatorId == request.auth.uid
@@ -3647,14 +2745,7 @@ service cloud.firestore {
         && request.resource.data.fareChangeRequestedBy == request.auth.uid
         && request.resource.data.createdAt is timestamp
         && request.resource.data.updatedAt is timestamp;
-
-      // Admin may approve/reject fare and change any schedule fields.
       allow update: if isAdmin();
-
-      // Operator may edit own schedule details, request a new fare,
-      // or toggle active state after the schedule has been approved.
-      // The already-approved fare itself and RD commission cannot be
-      // changed directly by the operator.
       allow update: if isActiveBusOperator()
         && resource.data.operatorId == request.auth.uid
         && request.resource.data.operatorId == resource.data.operatorId
@@ -3679,7 +2770,6 @@ service cloud.firestore {
         && request.resource.data.get('fareEverApproved', true)
           == resource.data.get('fareEverApproved', true)
         && (
-          // No fare-status change: normal schedule edit / active toggle.
           (
             request.resource.data.get('fareApprovalStatus', 'approved')
               == resource.data.get('fareApprovalStatus', 'approved')
@@ -3687,7 +2777,6 @@ service cloud.firestore {
               == resource.data.get('pendingFarePerSeat', -1)
           )
           ||
-          // Submit or replace a pending fare request.
           (
             request.resource.data.fareApprovalStatus == 'pending'
             && request.resource.data.pendingFarePerSeat is number
@@ -3696,8 +2785,6 @@ service cloud.firestore {
               == request.auth.uid
           )
           ||
-          // Cancel a pending/rejected request by returning to the
-          // already-approved fare. The approved fare value is unchanged.
           (
             request.resource.data.fareApprovalStatus == 'approved'
             && !request.resource.data.keys().hasAny(['pendingFarePerSeat'])
@@ -3707,21 +2794,14 @@ service cloud.firestore {
           request.resource.data.isActive == resource.data.isActive
           || resource.data.get('fareEverApproved', true) == true
         );
-
       allow delete: if isAdmin()
         || (
           isActiveBusOperator()
           && resource.data.operatorId == request.auth.uid
         );
     }
-
-    // ============================================================
-    // RD BUS SEAT LOCKS
-    // ============================================================
     match /bus_seat_locks/{lockId} {
-      // Customers need to see occupied seat codes.
       allow read: if signedIn();
-
       allow create: if isAdmin()
         || (
           isActiveBusOperator()
@@ -3737,8 +2817,6 @@ service cloud.firestore {
           ).data.operatorId == request.auth.uid
         )
         || (
-          // Customer may reserve a selected seat only as part of
-          // the same atomic transaction that creates their booking.
           signedIn()
           && request.resource.data.customerAuthUid
             == request.auth.uid
@@ -3767,7 +2845,6 @@ service cloud.firestore {
             /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
           ).data.selectedSeats
         );
-
       allow update: if isAdmin()
         || (
           isActiveBusOperator()
@@ -3776,8 +2853,6 @@ service cloud.firestore {
             == resource.data.operatorId
         )
         || (
-          // Customer may reuse only an INACTIVE old seat-lock
-          // while atomically creating their own booking.
           signedIn()
           && resource.data.get('active', false) == false
           && request.resource.data.customerAuthUid
@@ -3817,22 +2892,15 @@ service cloud.firestore {
             'reservedAt'
           ])
         );
-
       allow delete: if isAdmin()
         || (
           isActiveBusOperator()
           && resource.data.operatorId == request.auth.uid
         );
     }
-
-    // ============================================================
-    // RD BUS PUBLIC TICKET VERIFICATION
-    // ============================================================
     match /bus_ticket_public_verify/{verificationToken} {
-      // Exact-token ticket verification.
       allow get: if signedIn();
       allow list: if false;
-
       allow create: if isAdmin()
         || (
           isActiveBusOperator()
@@ -3846,7 +2914,6 @@ service cloud.firestore {
             /databases/$(database)/documents/bus_ticket_bookings/$(request.resource.data.bookingId)
           ).data.operatorId == request.auth.uid
         );
-
       allow update, delete: if isAdmin()
         || (
           isActiveBusOperator()
@@ -3866,10 +2933,6 @@ service cloud.firestore {
             == request.auth.uid
         );
     }
-
-    // ============================================================
-    // RD BUS OPERATOR MONTHLY FEE PAYMENTS
-    // ============================================================
     match /bus_operator_monthly_fee_payments/{paymentId} {
       function paymentOperatorExists() {
         return request.resource.data.operatorId is string
@@ -3877,13 +2940,11 @@ service cloud.firestore {
             /databases/$(database)/documents/bus_operators/$(request.resource.data.operatorId)
           );
       }
-
       function paymentOperatorData() {
         return get(
           /databases/$(database)/documents/bus_operators/$(request.resource.data.operatorId)
         ).data;
       }
-
       function immutablePaymentCore() {
         return request.resource.data.paymentId == resource.data.paymentId
           && request.resource.data.operatorId == resource.data.operatorId
@@ -3899,14 +2960,11 @@ service cloud.firestore {
             == resource.data.commissionPercentSnapshot
           && request.resource.data.createdAt == resource.data.createdAt;
       }
-
       allow read: if isAdmin()
         || (
           isActiveBusOperator()
           && resource.data.operatorId == request.auth.uid
         );
-
-      // Operator submits only bank/wallet/online proof. Operator cannot mark PAID.
       allow create: if isActiveBusOperator()
         && request.resource.data.keys().hasOnly([
           'paymentId',
@@ -3957,8 +3015,6 @@ service cloud.firestore {
         && request.resource.data.submittedByOperatorUid == request.auth.uid
         && request.resource.data.recordedByAdminUid == ''
         && request.resource.data.receiptNumber == '';
-
-      // A rejected proof may be corrected and resubmitted by the same operator.
       allow update: if isActiveBusOperator()
         && resource.data.operatorId == request.auth.uid
         && resource.data.paymentStatus == 'rejected'
@@ -3976,8 +3032,6 @@ service cloud.firestore {
           'submittedAt',
           'updatedAt'
         ]);
-
-      // Admin may record cash directly as PAID when no record exists.
       allow create: if isAdmin()
         && paymentOperatorExists()
         && request.resource.data.paymentId == paymentId
@@ -4000,8 +3054,6 @@ service cloud.firestore {
         && request.resource.data.receiptNumber is string
         && request.resource.data.receiptNumber.size() > 0
         && request.resource.data.recordedByAdminUid == request.auth.uid;
-
-      // Admin verifies submitted proof, rejects it, or records cash after rejection.
       allow update: if isAdmin()
         && immutablePaymentCore()
         && (
@@ -4055,50 +3107,33 @@ service cloud.firestore {
             ])
           )
         );
-
-      // Financial ledger records are never deleted from the app.
       allow delete: if false;
     }
-
-    // ============================================================
-    // RD BUS TICKET BOOKINGS
-    // ============================================================
     match /bus_ticket_bookings/{bookingId} {
       function busTicketOwner() {
         return signedIn()
           && resource.data.customerAuthUid == request.auth.uid;
       }
-
       function busOperatorOwnBooking() {
         return isActiveBusOperator()
           && resource.data.operatorId == request.auth.uid;
       }
-
       function bookingScheduleExists() {
         return exists(
           /databases/$(database)/documents/bus_schedules/$(request.resource.data.scheduleId)
         );
       }
-
       function bookingScheduleData() {
         return get(
           /databases/$(database)/documents/bus_schedules/$(request.resource.data.scheduleId)
         ).data;
       }
-
       allow read: if isAdmin()
         || busTicketOwner()
         || busOperatorOwnBooking();
-
-      // Customer creates a booking from an ACTIVE schedule.
-      // Keep the security-critical checks strict (customer, schedule,
-      // seat codes, fare, payment/status), but do not re-compare every
-      // display-only snapshot field. That avoids false PERMISSION_DENIED
-      // failures from harmless legacy/format differences.
       allow create: if signedIn()
         && bookingScheduleExists()
         && bookingScheduleData().isActive == true
-
         && request.resource.data.bookingId == bookingId
         && request.resource.data.bookingCode is string
         && request.resource.data.bookingCode.size() > 0
@@ -4106,7 +3141,6 @@ service cloud.firestore {
         && request.resource.data.serviceType == 'bus'
         && request.resource.data.customerAuthUid == request.auth.uid
         && request.resource.data.customerId is string
-
         && request.resource.data.scheduleId is string
         && request.resource.data.operatorId
           == bookingScheduleData().operatorId
@@ -4114,7 +3148,6 @@ service cloud.firestore {
           == bookingScheduleData().from
         && request.resource.data.to
           == bookingScheduleData().to
-
         && request.resource.data.passengerCount is int
         && request.resource.data.passengerCount >= 1
         && request.resource.data.passengerCount <= 6
@@ -4129,14 +3162,12 @@ service cloud.firestore {
         && request.resource.data.contactPhone.size() <= 30
         && request.resource.data.contactEmail is string
         && request.resource.data.contactEmail.size() <= 180
-
         && request.resource.data.boardingPoint is string
         && request.resource.data.boardingPoint
           in bookingScheduleData().boardingPoints
         && request.resource.data.dropPoint is string
         && request.resource.data.dropPoint
           in bookingScheduleData().dropPoints
-
         && request.resource.data.selectedSeats is list
         && request.resource.data.selectedSeats.size()
           == request.resource.data.passengerCount
@@ -4145,7 +3176,6 @@ service cloud.firestore {
         && request.resource.data.selectedSeats.hasOnly(
           bookingScheduleData().seatCodes
         )
-
         && request.resource.data.farePerSeat
           == bookingScheduleData().farePerSeat
         && request.resource.data.serviceFee == 0
@@ -4156,7 +3186,6 @@ service cloud.firestore {
         && request.resource.data.baseFare
           <= bookingScheduleData().farePerSeat
             * request.resource.data.passengerCount + 0.05
-
         && request.resource.data.commissionPercent is number
         && request.resource.data.commissionPercent >= 0
         && request.resource.data.commissionPercent <= 100
@@ -4186,7 +3215,6 @@ service cloud.firestore {
           <= request.resource.data.baseFare + 0.05
         && request.resource.data.currency == 'Rs.'
         && request.resource.data.scheduleSource == 'operator'
-
         && request.resource.data.paymentOption
           in ['online', 'pay_on_bus']
         && (
@@ -4205,17 +3233,14 @@ service cloud.firestore {
           )
         )
         && request.resource.data.paymentReference == ''
-
         && request.resource.data.operatorVerified == false
         && request.resource.data.seatLockStatus == 'reserved'
         && request.resource.data.bookingStatus
           == 'request_submitted'
         && request.resource.data.ticketStatus == 'not_issued'
         && request.resource.data.qrVerificationToken == ''
-
         && request.resource.data.createdAt is timestamp
         && request.resource.data.updatedAt is timestamp
-
         && request.resource.data.keys().hasOnly([
           'bookingId',
           'bookingCode',
@@ -4266,13 +3291,7 @@ service cloud.firestore {
           'createdAt',
           'updatedAt'
         ]);
-
-      // Admin controls every booking.
       allow update, delete: if isAdmin();
-
-      // Approved Bus Operator may update only status/verification
-      // fields on its own bookings. Customer/fare/operator identity
-      // fields remain immutable.
       allow update: if busOperatorOwnBooking()
         && request.resource.data
           .diff(resource.data)
@@ -4308,59 +3327,58 @@ service cloud.firestore {
               == 'refund_pending'
           )
         );
-
       allow delete: if false;
     }
-
-
-    // HOTEL PRIVACY:
-    // Admin: all Hotel data.
-    // Hotel Partner: own Hotel/rooms/inventory/bookings/fees only.
-    // Customer/non-Hotel-Partner session: approved active Hotel public
-    // data/rooms/availability only for booking discovery.
-    // Customer booking records: booking owner, own Hotel Partner, or Admin only.
-
-    // ============================================================
-    // RD HOTEL PARTNERS
-    // ============================================================
-    match /hotel_partners/{partnerId} {
-      allow read: if isAdmin()
-        || (
-          signedIn()
-          && request.auth.uid == partnerId
+    match /{stayPartnerCollection}/{partnerId} {
+      function stayPartnerCollectionAllowed() {
+        return stayPartnerCollection in ['hotel_partners', 'resort_partners'];
+      }
+      function validStayPartnerRole() {
+        return (
+          stayPartnerCollection == 'hotel_partners'
+          && request.resource.data.role == 'hotel_partner'
+        ) || (
+          stayPartnerCollection == 'resort_partners'
+          && request.resource.data.role == 'resort_partner'
         );
-
-      allow create: if isAdmin()
-        || (
-          signedIn()
-                  && request.auth.uid == partnerId
-                  && request.resource.data.partnerId == request.auth.uid
-                  && request.resource.data.authUid == request.auth.uid
-                  && request.resource.data.role == 'hotel_partner'
-                  && request.resource.data.isApproved == false
-                  && request.resource.data.isActive == false
-                  && request.resource.data.status == 'pending'
-                  && request.resource.data.ownerName is string
-                  && request.resource.data.ownerName.size() > 0
-                  && request.resource.data.phone is string
-                  && request.resource.data.phone.size() >= 7
-                  && request.resource.data.phone.size() <= 30
+      }
+      allow read: if stayPartnerCollectionAllowed()
+        && (
+          isAdmin()
+          || (signedIn() && request.auth.uid == partnerId)
         );
-
-      allow update: if isAdmin()
-        || (
-          signedIn()
-          && request.auth.uid == partnerId
-          && request.resource.data.partnerId == resource.data.partnerId
-          && request.resource.data.authUid == resource.data.authUid
-          && request.resource.data.role == resource.data.role
-          && request.resource.data.isApproved == resource.data.isApproved
-          && request.resource.data.isActive == resource.data.isActive
-          && request.resource.data.status == resource.data.status
-          && request.resource.data
-            .diff(resource.data)
-            .affectedKeys()
-            .hasOnly([
+      allow create: if stayPartnerCollectionAllowed()
+        && (
+          isAdmin()
+          || (
+            signedIn()
+            && request.auth.uid == partnerId
+            && request.resource.data.partnerId == request.auth.uid
+            && request.resource.data.authUid == request.auth.uid
+            && validStayPartnerRole()
+            && request.resource.data.isApproved == false
+            && request.resource.data.isActive == false
+            && request.resource.data.status == 'pending'
+            && request.resource.data.ownerName is string
+            && request.resource.data.ownerName.size() > 0
+            && request.resource.data.phone is string
+            && request.resource.data.phone.size() >= 7
+            && request.resource.data.phone.size() <= 30
+          )
+        );
+      allow update: if stayPartnerCollectionAllowed()
+        && (
+          isAdmin()
+          || (
+            signedIn()
+            && request.auth.uid == partnerId
+            && request.resource.data.partnerId == resource.data.partnerId
+            && request.resource.data.authUid == resource.data.authUid
+            && request.resource.data.role == resource.data.role
+            && request.resource.data.isApproved == resource.data.isApproved
+            && request.resource.data.isActive == resource.data.isActive
+            && request.resource.data.status == resource.data.status
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'businessName',
               'ownerName',
               'phone',
@@ -4379,25 +3397,19 @@ service cloud.firestore {
               'lastLoginAt',
               'updatedAt'
             ])
+          )
         );
-
-      allow delete: if isAdmin();
+      allow delete: if stayPartnerCollectionAllowed() && isAdmin();
     }
-
-    // ============================================================
-    // RD HOTELS
-    // ============================================================
     match /hotels/{hotelId} {
       function ownsHotel() {
         return isActiveHotelPartner()
           && resource.data.partnerId == request.auth.uid;
       }
-
       function ownsNewHotel() {
         return isActiveHotelPartner()
           && request.resource.data.partnerId == request.auth.uid;
       }
-
       allow read: if isAdmin()
         || ownsHotel()
         || (
@@ -4405,7 +3417,6 @@ service cloud.firestore {
           && resource.data.isApproved == true
           && resource.data.isActive == true
         );
-
       allow create: if ownsNewHotel()
         && request.resource.data.hotelId == hotelId
         && request.resource.data.isApproved == false
@@ -4416,7 +3427,6 @@ service cloud.firestore {
         && request.resource.data.location is string
         && request.resource.data.phone is string
         && request.resource.data.phone.size() >= 7;
-
       allow update: if isAdmin()
         || (
           ownsHotel()
@@ -4450,13 +3460,8 @@ service cloud.firestore {
               'updatedAt'
             ])
         );
-
       allow delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD HOTEL ROOMS
-    // ============================================================
     match /hotel_rooms/{roomId} {
       function roomHotelExists() {
         return resource.data.hotelId is string
@@ -4464,31 +3469,26 @@ service cloud.firestore {
             /databases/$(database)/documents/hotels/$(resource.data.hotelId)
           );
       }
-
       function roomHotelData() {
         return get(
           /databases/$(database)/documents/hotels/$(resource.data.hotelId)
         ).data;
       }
-
       function newRoomHotelExists() {
         return request.resource.data.hotelId is string
           && exists(
             /databases/$(database)/documents/hotels/$(request.resource.data.hotelId)
           );
       }
-
       function newRoomHotelData() {
         return get(
           /databases/$(database)/documents/hotels/$(request.resource.data.hotelId)
         ).data;
       }
-
       function ownsRoom() {
         return isActiveHotelPartner()
           && resource.data.partnerId == request.auth.uid;
       }
-
       allow read: if isAdmin()
         || ownsRoom()
         || (
@@ -4498,7 +3498,6 @@ service cloud.firestore {
           && roomHotelData().isApproved == true
           && roomHotelData().isActive == true
         );
-
       allow create: if isActiveHotelPartner()
         && request.resource.data.roomId == roomId
         && request.resource.data.partnerId == request.auth.uid
@@ -4513,7 +3512,6 @@ service cloud.firestore {
         && request.resource.data.totalRooms is int
         && request.resource.data.totalRooms >= 1
         && request.resource.data.isActive == true;
-
       allow update: if isAdmin()
         || (
           ownsRoom()
@@ -4541,14 +3539,42 @@ service cloud.firestore {
               'updatedAt'
             ])
         );
-
       allow delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD HOTEL DATE-WISE ROOM INVENTORY
-    // ============================================================
-    match /hotel_room_inventory/{inventoryId} {
+    match /{stayInventoryCollection}/{inventoryId} {
+      function stayInventoryCollectionAllowed() {
+        return stayInventoryCollection in [
+          'hotel_room_inventory',
+          'resort_room_inventory'
+        ];
+      }
+      function activeStayPartner() {
+        return (
+          stayInventoryCollection == 'hotel_room_inventory'
+          && isActiveHotelPartner()
+        ) || (
+          stayInventoryCollection == 'resort_room_inventory'
+          && isActiveResortPartner()
+        );
+      }
+      function validStayIdOnCreate() {
+        return (
+          stayInventoryCollection == 'hotel_room_inventory'
+          && request.resource.data.hotelId is string
+        ) || (
+          stayInventoryCollection == 'resort_room_inventory'
+          && request.resource.data.resortId is string
+        );
+      }
+      function sameStayIdOnUpdate() {
+        return (
+          stayInventoryCollection == 'hotel_room_inventory'
+          && request.resource.data.hotelId == resource.data.hotelId
+        ) || (
+          stayInventoryCollection == 'resort_room_inventory'
+          && request.resource.data.resortId == resource.data.resortId
+        );
+      }
       function validInventoryCounts() {
         return request.resource.data.totalRooms is int
           && request.resource.data.blockedRooms is int
@@ -4563,48 +3589,35 @@ service cloud.firestore {
             + request.resource.data.availableRooms
             == request.resource.data.totalRooms;
       }
-
-      function ownsNewInventory() {
-        return isActiveHotelPartner()
-          && request.resource.data.partnerId == request.auth.uid;
-      }
-
-      function ownsInventory() {
-        return isActiveHotelPartner()
-          && resource.data.partnerId == request.auth.uid;
-      }
-
-      // Inventory contains only room/date availability counts.
-      // Signed-in sessions must be able to GET a date inventory document,
-      // including dates where that document does not exist yet, before
-      // create/update logic runs. Writes stay owner/Admin restricted below.
-      allow read: if signedIn();
-
-      allow create: if isAdmin()
-        || (
-          ownsNewInventory()
-          && request.resource.data.inventoryId == inventoryId
-          && request.resource.data.hotelId is string
-          && request.resource.data.roomId is string
-          && request.resource.data.date is timestamp
-          && request.resource.data.isOpen is bool
-          && validInventoryCounts()
+      allow read: if stayInventoryCollectionAllowed() && signedIn();
+      allow create: if stayInventoryCollectionAllowed()
+        && (
+          isAdmin()
+          || (
+            activeStayPartner()
+            && request.resource.data.partnerId == request.auth.uid
+            && request.resource.data.inventoryId == inventoryId
+            && validStayIdOnCreate()
+            && request.resource.data.roomId is string
+            && request.resource.data.date is timestamp
+            && request.resource.data.isOpen is bool
+            && validInventoryCounts()
+          )
         );
-
-      allow update: if isAdmin()
-        || (
-          ownsInventory()
-          && request.resource.data.inventoryId == resource.data.inventoryId
-          && request.resource.data.hotelId == resource.data.hotelId
-          && request.resource.data.roomId == resource.data.roomId
-          && request.resource.data.partnerId == resource.data.partnerId
-          && request.resource.data.date == resource.data.date
-          && request.resource.data.isOpen is bool
-          && validInventoryCounts()
-          && request.resource.data
-            .diff(resource.data)
-            .affectedKeys()
-            .hasOnly([
+      allow update: if stayInventoryCollectionAllowed()
+        && (
+          isAdmin()
+          || (
+            activeStayPartner()
+            && resource.data.partnerId == request.auth.uid
+            && request.resource.data.inventoryId == resource.data.inventoryId
+            && sameStayIdOnUpdate()
+            && request.resource.data.roomId == resource.data.roomId
+            && request.resource.data.partnerId == resource.data.partnerId
+            && request.resource.data.date == resource.data.date
+            && request.resource.data.isOpen is bool
+            && validInventoryCounts()
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'totalRooms',
               'blockedRooms',
               'bookedRooms',
@@ -4613,55 +3626,44 @@ service cloud.firestore {
               'lastBookingId',
               'updatedAt'
             ])
+          )
         );
-
-      allow delete: if isAdmin();
+      allow delete: if stayInventoryCollectionAllowed() && isAdmin();
     }
-
-    // ============================================================
-    // RD HOTEL BOOKINGS
-    // ============================================================
     match /hotel_bookings/{bookingId} {
       function hotelBookingOwner() {
         return signedIn()
           && resource.data.customerAuthUid == request.auth.uid;
       }
-
       function hotelPartnerOwnBooking() {
         return isActiveHotelPartner()
           && resource.data.partnerId == request.auth.uid;
       }
-
       function bookingHotelExists() {
         return request.resource.data.hotelId is string
           && exists(
             /databases/$(database)/documents/hotels/$(request.resource.data.hotelId)
           );
       }
-
       function bookingHotelData() {
         return get(
           /databases/$(database)/documents/hotels/$(request.resource.data.hotelId)
         ).data;
       }
-
       function bookingRoomExists() {
         return request.resource.data.roomId is string
           && exists(
             /databases/$(database)/documents/hotel_rooms/$(request.resource.data.roomId)
           );
       }
-
       function bookingRoomData() {
         return get(
           /databases/$(database)/documents/hotel_rooms/$(request.resource.data.roomId)
         ).data;
       }
-
       allow read: if isAdmin()
         || hotelBookingOwner()
         || hotelPartnerOwnBooking();
-
       allow create: if signedIn()
         && request.resource.data.bookingId == bookingId
         && request.resource.data.serviceType == 'hotel'
@@ -4722,9 +3724,7 @@ service cloud.firestore {
         && request.resource.data.get('refundStatus', 'none') == 'none'
         && request.resource.data.createdAt is timestamp
         && request.resource.data.updatedAt is timestamp;
-
       allow update: if isAdmin();
-
       allow update: if hotelPartnerOwnBooking()
         && request.resource.data.bookingId == resource.data.bookingId
         && request.resource.data.customerAuthUid == resource.data.customerAuthUid
@@ -4751,7 +3751,6 @@ service cloud.firestore {
             'paidAt',
             'updatedAt'
           ]);
-
       allow update: if hotelBookingOwner()
         && resource.data.bookingStatus
           in ['request_submitted', 'confirmed']
@@ -4765,17 +3764,8 @@ service cloud.firestore {
             'cancelRequestedAt',
             'updatedAt'
           ]);
-
       allow delete: if false;
     }
-
-
-
-    // ============================================================
-    // RD HOTEL DIRECT PAYMENT ACCOUNTS
-    // Active Hotel Partners manage only their own receiving details.
-    // Signed-in customers may read only an enabled receiving profile.
-    // ============================================================
     match /hotel_direct_payment_accounts/{partnerId} {
       allow read: if isAdmin()
         || (
@@ -4786,13 +3776,11 @@ service cloud.firestore {
           signedIn()
           && resource.data.enabled == true
         );
-
       allow create: if isActiveHotelPartner()
         && request.auth.uid == partnerId
         && request.resource.data.partnerId == request.auth.uid
         && request.resource.data.hotelId == request.auth.uid
         && request.resource.data.enabled is bool;
-
       allow update: if isAdmin()
         || (
           isActiveHotelPartner()
@@ -4802,47 +3790,64 @@ service cloud.firestore {
           && request.resource.data.hotelId == resource.data.hotelId
           && request.resource.data.enabled is bool
         );
-
       allow delete: if isAdmin()
         || (
           isActiveHotelPartner()
           && request.auth.uid == partnerId
         );
     }
-
-    // ============================================================
-    // RD HOTEL FEE SETTINGS
-    // Admin controls monthly fee, commission, due date and
-    // payment instructions. Approved Hotel Partners can read it.
-    // ============================================================
-    match /hotel_fee_settings/{settingId} {
-      allow read: if isAdmin()
-        || isActiveHotelPartner();
-
-      allow create, update, delete: if isAdmin();
-    }
-
-    // ============================================================
-    // RD HOTEL FEE INVOICES
-    // Invoice calculation / status is Admin-controlled.
-    // A Hotel Partner can only read its own invoices.
-    // ============================================================
-    match /hotel_fee_invoices/{invoiceId} {
-      allow read: if isAdmin()
-        || (
-          isActiveHotelPartner()
-          && resource.data.partnerId == request.auth.uid
+    match /{stayFeeSettingsCollection}/{settingId} {
+      function stayFeeSettingsCollectionAllowed() {
+        return stayFeeSettingsCollection in [
+          'hotel_fee_settings',
+          'resort_fee_settings'
+        ];
+      }
+      function activeStayFeePartner() {
+        return (
+          stayFeeSettingsCollection == 'hotel_fee_settings'
+          && isActiveHotelPartner()
+        ) || (
+          stayFeeSettingsCollection == 'resort_fee_settings'
+          && isActiveResortPartner()
         );
-
-      allow create, update, delete: if isAdmin();
+      }
+      allow read: if stayFeeSettingsCollectionAllowed()
+        && (isAdmin() || activeStayFeePartner());
+      allow create, update, delete:
+        if stayFeeSettingsCollectionAllowed() && isAdmin();
     }
-
-    // ============================================================
-    // RD HOTEL FEE PAYMENTS
-    // Hotel Partner may submit payment proof only for an invoice
-    // that belongs to the same authenticated Hotel Partner.
-    // Verification / rejection is Admin-only.
-    // ============================================================
+    match /{stayFeeInvoiceCollection}/{invoiceId} {
+      function stayFeeInvoiceCollectionAllowed() {
+        return stayFeeInvoiceCollection in [
+          'hotel_fee_invoices',
+          'resort_fee_invoices',
+          'homestay_fee_invoices'
+        ];
+      }
+      function activeInvoicePartner() {
+        return (
+          stayFeeInvoiceCollection == 'hotel_fee_invoices'
+          && isActiveHotelPartner()
+        ) || (
+          stayFeeInvoiceCollection == 'resort_fee_invoices'
+          && isActiveResortPartner()
+        ) || (
+          stayFeeInvoiceCollection == 'homestay_fee_invoices'
+          && isActiveHomestayPartner()
+        );
+      }
+      allow read: if stayFeeInvoiceCollectionAllowed()
+        && (
+          isAdmin()
+          || (
+            activeInvoicePartner()
+            && resource.data.partnerId == request.auth.uid
+          )
+        );
+      allow create, update, delete:
+        if stayFeeInvoiceCollectionAllowed() && isAdmin();
+    }
     match /hotel_fee_payments/{paymentId} {
       function feeInvoiceExists() {
         return request.resource.data.invoiceId is string
@@ -4850,19 +3855,16 @@ service cloud.firestore {
             /databases/$(database)/documents/hotel_fee_invoices/$(request.resource.data.invoiceId)
           );
       }
-
       function feeInvoiceData() {
         return get(
           /databases/$(database)/documents/hotel_fee_invoices/$(request.resource.data.invoiceId)
         ).data;
       }
-
       allow read: if isAdmin()
         || (
           isActiveHotelPartner()
           && resource.data.partnerId == request.auth.uid
         );
-
       allow create: if isAdmin()
         || (
           isActiveHotelPartner()
@@ -4892,111 +3894,29 @@ service cloud.firestore {
           && request.resource.data.createdAt is timestamp
           && request.resource.data.updatedAt is timestamp
         );
-
       allow update, delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD HOTEL FEE ADMIN AUDIT LOG
-    // Keeps a server-side Firestore history of fee settings,
-    // invoice, payment verification, cash and waive actions.
-    // ============================================================
-    match /hotel_fee_audit_logs/{logId} {
-      allow read, create: if isAdmin();
+    match /{stayFeeAuditCollection}/{logId} {
+      function stayFeeAuditCollectionAllowed() {
+        return stayFeeAuditCollection in [
+          'hotel_fee_audit_logs',
+          'resort_fee_audit_logs',
+          'homestay_fee_audit_logs'
+        ];
+      }
+      allow read, create:
+        if stayFeeAuditCollectionAllowed() && isAdmin();
       allow update, delete: if false;
     }
-
-    // ============================================================
-    match /hotel_fee_audit_logs/{logId} {
-      allow read, create: if isAdmin();
-      allow update, delete: if false;
-    }
-
-    // RESORT PRIVACY:
-    // Admin: all Resort data.
-    // Resort Partner: own Resort/rooms/inventory/bookings/fees only.
-    // Customer/non-Resort-Partner session: approved active Resort public
-    // data/rooms/availability only for booking discovery.
-    // Customer booking records: booking owner, own Resort Partner, or Admin only.
-
-    // ============================================================
-    // RD RESORT PARTNERS
-    // ============================================================
-    match /resort_partners/{partnerId} {
-      allow read: if isAdmin()
-        || (
-          signedIn()
-          && request.auth.uid == partnerId
-        );
-
-      allow create: if isAdmin()
-        || (
-          signedIn()
-                  && request.auth.uid == partnerId
-                  && request.resource.data.partnerId == request.auth.uid
-                  && request.resource.data.authUid == request.auth.uid
-                  && request.resource.data.role == 'resort_partner'
-                  && request.resource.data.isApproved == false
-                  && request.resource.data.isActive == false
-                  && request.resource.data.status == 'pending'
-                  && request.resource.data.ownerName is string
-                  && request.resource.data.ownerName.size() > 0
-                  && request.resource.data.phone is string
-                  && request.resource.data.phone.size() >= 7
-                  && request.resource.data.phone.size() <= 30
-        );
-
-      allow update: if isAdmin()
-        || (
-          signedIn()
-          && request.auth.uid == partnerId
-          && request.resource.data.partnerId == resource.data.partnerId
-          && request.resource.data.authUid == resource.data.authUid
-          && request.resource.data.role == resource.data.role
-          && request.resource.data.isApproved == resource.data.isApproved
-          && request.resource.data.isActive == resource.data.isActive
-          && request.resource.data.status == resource.data.status
-          && request.resource.data
-            .diff(resource.data)
-            .affectedKeys()
-            .hasOnly([
-              'businessName',
-              'ownerName',
-              'phone',
-              'email',
-              'address',
-              'registrationNumber',
-              'panVatNumber',
-              'photoUrl',
-              'documentUrls',
-              'bankName',
-              'bankAccountName',
-              'bankAccountNumber',
-              'latitude',
-              'longitude',
-              'locationUpdatedAt',
-              'lastLoginAt',
-              'updatedAt'
-            ])
-        );
-
-      allow delete: if isAdmin();
-    }
-
-    // ============================================================
-    // RD RESORTS
-    // ============================================================
     match /resorts/{resortId} {
       function ownsResort() {
         return isActiveResortPartner()
           && resource.data.partnerId == request.auth.uid;
       }
-
       function ownsNewResort() {
         return isActiveResortPartner()
           && request.resource.data.partnerId == request.auth.uid;
       }
-
       allow read: if isAdmin()
         || ownsResort()
         || (
@@ -5004,7 +3924,6 @@ service cloud.firestore {
           && resource.data.isApproved == true
           && resource.data.isActive == true
         );
-
       allow create: if ownsNewResort()
         && request.resource.data.resortId == resortId
         && request.resource.data.isApproved == false
@@ -5015,7 +3934,6 @@ service cloud.firestore {
         && request.resource.data.location is string
         && request.resource.data.phone is string
         && request.resource.data.phone.size() >= 7;
-
       allow update: if isAdmin()
         || (
           ownsResort()
@@ -5049,13 +3967,8 @@ service cloud.firestore {
               'updatedAt'
             ])
         );
-
       allow delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD RESORT ROOMS
-    // ============================================================
     match /resort_rooms/{roomId} {
       function roomResortExists() {
         return resource.data.resortId is string
@@ -5063,31 +3976,26 @@ service cloud.firestore {
             /databases/$(database)/documents/resorts/$(resource.data.resortId)
           );
       }
-
       function roomResortData() {
         return get(
           /databases/$(database)/documents/resorts/$(resource.data.resortId)
         ).data;
       }
-
       function newRoomResortExists() {
         return request.resource.data.resortId is string
           && exists(
             /databases/$(database)/documents/resorts/$(request.resource.data.resortId)
           );
       }
-
       function newRoomResortData() {
         return get(
           /databases/$(database)/documents/resorts/$(request.resource.data.resortId)
         ).data;
       }
-
       function ownsRoom() {
         return isActiveResortPartner()
           && resource.data.partnerId == request.auth.uid;
       }
-
       allow read: if isAdmin()
         || ownsRoom()
         || (
@@ -5097,7 +4005,6 @@ service cloud.firestore {
           && roomResortData().isApproved == true
           && roomResortData().isActive == true
         );
-
       allow create: if isActiveResortPartner()
         && request.resource.data.roomId == roomId
         && request.resource.data.partnerId == request.auth.uid
@@ -5112,7 +4019,6 @@ service cloud.firestore {
         && request.resource.data.totalRooms is int
         && request.resource.data.totalRooms >= 1
         && request.resource.data.isActive == true;
-
       allow update: if isAdmin()
         || (
           ownsRoom()
@@ -5140,127 +4046,42 @@ service cloud.firestore {
               'updatedAt'
             ])
         );
-
       allow delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD RESORT DATE-WISE ROOM INVENTORY
-    // ============================================================
-    match /resort_room_inventory/{inventoryId} {
-      function validInventoryCounts() {
-        return request.resource.data.totalRooms is int
-          && request.resource.data.blockedRooms is int
-          && request.resource.data.bookedRooms is int
-          && request.resource.data.availableRooms is int
-          && request.resource.data.totalRooms >= 0
-          && request.resource.data.blockedRooms >= 0
-          && request.resource.data.bookedRooms >= 0
-          && request.resource.data.availableRooms >= 0
-          && request.resource.data.blockedRooms
-            + request.resource.data.bookedRooms
-            + request.resource.data.availableRooms
-            == request.resource.data.totalRooms;
-      }
-
-      function ownsNewInventory() {
-        return isActiveResortPartner()
-          && request.resource.data.partnerId == request.auth.uid;
-      }
-
-      function ownsInventory() {
-        return isActiveResortPartner()
-          && resource.data.partnerId == request.auth.uid;
-      }
-
-      // Inventory contains only room/date availability counts.
-      // Signed-in sessions must be able to GET a date inventory document,
-      // including dates where that document does not exist yet, before
-      // create/update logic runs. Writes stay owner/Admin restricted below.
-      allow read: if signedIn();
-
-      allow create: if isAdmin()
-        || (
-          ownsNewInventory()
-          && request.resource.data.inventoryId == inventoryId
-          && request.resource.data.resortId is string
-          && request.resource.data.roomId is string
-          && request.resource.data.date is timestamp
-          && request.resource.data.isOpen is bool
-          && validInventoryCounts()
-        );
-
-      allow update: if isAdmin()
-        || (
-          ownsInventory()
-          && request.resource.data.inventoryId == resource.data.inventoryId
-          && request.resource.data.resortId == resource.data.resortId
-          && request.resource.data.roomId == resource.data.roomId
-          && request.resource.data.partnerId == resource.data.partnerId
-          && request.resource.data.date == resource.data.date
-          && request.resource.data.isOpen is bool
-          && validInventoryCounts()
-          && request.resource.data
-            .diff(resource.data)
-            .affectedKeys()
-            .hasOnly([
-              'totalRooms',
-              'blockedRooms',
-              'bookedRooms',
-              'availableRooms',
-              'isOpen',
-              'lastBookingId',
-              'updatedAt'
-            ])
-        );
-
-      allow delete: if isAdmin();
-    }
-
-    // ============================================================
-    // RD RESORT BOOKINGS
-    // ============================================================
     match /resort_bookings/{bookingId} {
       function resortBookingOwner() {
         return signedIn()
           && resource.data.customerAuthUid == request.auth.uid;
       }
-
       function resortPartnerOwnBooking() {
         return isActiveResortPartner()
           && resource.data.partnerId == request.auth.uid;
       }
-
       function bookingResortExists() {
         return request.resource.data.resortId is string
           && exists(
             /databases/$(database)/documents/resorts/$(request.resource.data.resortId)
           );
       }
-
       function bookingResortData() {
         return get(
           /databases/$(database)/documents/resorts/$(request.resource.data.resortId)
         ).data;
       }
-
       function bookingRoomExists() {
         return request.resource.data.roomId is string
           && exists(
             /databases/$(database)/documents/resort_rooms/$(request.resource.data.roomId)
           );
       }
-
       function bookingRoomData() {
         return get(
           /databases/$(database)/documents/resort_rooms/$(request.resource.data.roomId)
         ).data;
       }
-
       allow read: if isAdmin()
         || resortBookingOwner()
         || resortPartnerOwnBooking();
-
       allow create: if signedIn()
         && request.resource.data.bookingId == bookingId
         && request.resource.data.serviceType == 'resort'
@@ -5321,9 +4142,7 @@ service cloud.firestore {
         && request.resource.data.get('refundStatus', 'none') == 'none'
         && request.resource.data.createdAt is timestamp
         && request.resource.data.updatedAt is timestamp;
-
       allow update: if isAdmin();
-
       allow update: if resortPartnerOwnBooking()
         && request.resource.data.bookingId == resource.data.bookingId
         && request.resource.data.customerAuthUid == resource.data.customerAuthUid
@@ -5350,7 +4169,6 @@ service cloud.firestore {
             'paidAt',
             'updatedAt'
           ]);
-
       allow update: if resortBookingOwner()
         && resource.data.bookingStatus
           in ['request_submitted', 'confirmed']
@@ -5364,17 +4182,8 @@ service cloud.firestore {
             'cancelRequestedAt',
             'updatedAt'
           ]);
-
       allow delete: if false;
     }
-
-
-
-    // ============================================================
-    // RD RESORT DIRECT PAYMENT ACCOUNTS
-    // Active Resort Partners manage only their own receiving details.
-    // Signed-in customers may read only an enabled receiving profile.
-    // ============================================================
     match /resort_direct_payment_accounts/{partnerId} {
       allow read: if isAdmin()
         || (
@@ -5385,13 +4194,11 @@ service cloud.firestore {
           signedIn()
           && resource.data.enabled == true
         );
-
       allow create: if isActiveResortPartner()
         && request.auth.uid == partnerId
         && request.resource.data.partnerId == request.auth.uid
         && request.resource.data.resortId == request.auth.uid
         && request.resource.data.enabled is bool;
-
       allow update: if isAdmin()
         || (
           isActiveResortPartner()
@@ -5401,47 +4208,12 @@ service cloud.firestore {
           && request.resource.data.resortId == resource.data.resortId
           && request.resource.data.enabled is bool
         );
-
       allow delete: if isAdmin()
         || (
           isActiveResortPartner()
           && request.auth.uid == partnerId
         );
     }
-
-    // ============================================================
-    // RD RESORT FEE SETTINGS
-    // Admin controls monthly fee, commission, due date and
-    // payment instructions. Approved Resort Partners can read it.
-    // ============================================================
-    match /resort_fee_settings/{settingId} {
-      allow read: if isAdmin()
-        || isActiveResortPartner();
-
-      allow create, update, delete: if isAdmin();
-    }
-
-    // ============================================================
-    // RD RESORT FEE INVOICES
-    // Invoice calculation / status is Admin-controlled.
-    // A Resort Partner can only read its own invoices.
-    // ============================================================
-    match /resort_fee_invoices/{invoiceId} {
-      allow read: if isAdmin()
-        || (
-          isActiveResortPartner()
-          && resource.data.partnerId == request.auth.uid
-        );
-
-      allow create, update, delete: if isAdmin();
-    }
-
-    // ============================================================
-    // RD RESORT FEE PAYMENTS
-    // Resort Partner may submit payment proof only for an invoice
-    // that belongs to the same authenticated Resort Partner.
-    // Verification / rejection is Admin-only.
-    // ============================================================
     match /resort_fee_payments/{paymentId} {
       function feeInvoiceExists() {
         return request.resource.data.invoiceId is string
@@ -5449,19 +4221,16 @@ service cloud.firestore {
             /databases/$(database)/documents/resort_fee_invoices/$(request.resource.data.invoiceId)
           );
       }
-
       function feeInvoiceData() {
         return get(
           /databases/$(database)/documents/resort_fee_invoices/$(request.resource.data.invoiceId)
         ).data;
       }
-
       allow read: if isAdmin()
         || (
           isActiveResortPartner()
           && resource.data.partnerId == request.auth.uid
         );
-
       allow create: if isAdmin()
         || (
           isActiveResortPartner()
@@ -5491,24 +4260,8 @@ service cloud.firestore {
           && request.resource.data.createdAt is timestamp
           && request.resource.data.updatedAt is timestamp
         );
-
       allow update, delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD RESORT FEE ADMIN AUDIT LOG
-    // Keeps a server-side Firestore history of fee settings,
-    // invoice, payment verification, cash and waive actions.
-    // ============================================================
-    match /resort_fee_audit_logs/{logId} {
-      allow read, create: if isAdmin();
-      allow update, delete: if false;
-    }
-
-    // ============================================================
-    // RD HOMESTAY MODULE
-    // ============================================================
-
     function isActiveHomestayPartner() {
       return signedIn()
         && exists(/databases/$(database)/documents/homestay_partners/$(request.auth.uid))
@@ -5516,11 +4269,9 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/homestay_partners/$(request.auth.uid)).data.isActive == true
         && get(/databases/$(database)/documents/homestay_partners/$(request.auth.uid)).data.role == 'homestay_partner';
     }
-
     match /homestay_partners/{partnerId} {
       allow read: if isAdmin()
         || (signedIn() && request.auth.uid == partnerId);
-
       allow create: if isAdmin()
         || (
           signedIn()
@@ -5532,7 +4283,6 @@ service cloud.firestore {
                   && request.resource.data.isActive == false
                   && request.resource.data.status == 'pending'
         );
-
       allow update: if isAdmin()
         || (
           signedIn()
@@ -5546,10 +4296,8 @@ service cloud.firestore {
           && request.resource.data.diff(resource.data).affectedKeys()
             .hasOnly(['lastLoginAt', 'updatedAt'])
         );
-
       allow delete: if isAdmin();
     }
-
     match /homestays/{homestayId} {
       allow read: if isAdmin()
         || (resource.data.isApproved == true && resource.data.isActive == true)
@@ -5557,14 +4305,12 @@ service cloud.firestore {
           isActiveHomestayPartner()
           && homestayId == request.auth.uid
         );
-
       allow create: if isActiveHomestayPartner()
         && homestayId == request.auth.uid
         && request.resource.data.homestayId == request.auth.uid
         && request.resource.data.partnerId == request.auth.uid
         && request.resource.data.isApproved == false
         && request.resource.data.isActive == false;
-
       allow update: if isAdmin()
         || (
           isActiveHomestayPartner()
@@ -5574,13 +4320,10 @@ service cloud.firestore {
           && request.resource.data.isApproved == resource.data.isApproved
           && request.resource.data.isActive == resource.data.isActive
         );
-
       allow delete: if isAdmin();
     }
-
     match /homestay_rooms/{roomId} {
       allow read: if signedIn();
-
       allow create: if isAdmin()
         || (
           isActiveHomestayPartner()
@@ -5592,7 +4335,6 @@ service cloud.firestore {
           && request.resource.data.pricePerNight is number
           && request.resource.data.pricePerNight >= 0
         );
-
       allow update: if isAdmin()
         || (
           isActiveHomestayPartner()
@@ -5601,14 +4343,11 @@ service cloud.firestore {
           && request.resource.data.homestayId == resource.data.homestayId
           && request.resource.data.roomId == resource.data.roomId
         );
-
       allow delete: if isAdmin()
         || (isActiveHomestayPartner() && resource.data.partnerId == request.auth.uid);
     }
-
     match /homestay_inventory/{inventoryId} {
       allow read: if signedIn();
-
       allow create: if isAdmin()
         || (
           isActiveHomestayPartner()
@@ -5623,7 +4362,6 @@ service cloud.firestore {
           && request.resource.data.availableRooms is int
           && request.resource.data.isOpen is bool
         );
-
       allow update: if isAdmin()
         || (
           isActiveHomestayPartner()
@@ -5634,41 +4372,32 @@ service cloud.firestore {
           && request.resource.data.roomId == resource.data.roomId
           && request.resource.data.date == resource.data.date
         );
-
       allow delete: if isAdmin();
     }
-
     match /homestay_bookings/{bookingId} {
       function ownHomestayBooking() {
         return signedIn() && resource.data.customerAuthUid == request.auth.uid;
       }
-
       function ownHomestayPartnerBooking() {
         return isActiveHomestayPartner() && resource.data.partnerId == request.auth.uid;
       }
-
       function targetHomestayExists() {
         return request.resource.data.homestayId is string
           && exists(/databases/$(database)/documents/homestays/$(request.resource.data.homestayId));
       }
-
       function targetHomestayRoomExists() {
         return request.resource.data.roomId is string
           && exists(/databases/$(database)/documents/homestay_rooms/$(request.resource.data.roomId));
       }
-
       function targetHomestay() {
         return get(/databases/$(database)/documents/homestays/$(request.resource.data.homestayId)).data;
       }
-
       function targetHomestayRoom() {
         return get(/databases/$(database)/documents/homestay_rooms/$(request.resource.data.roomId)).data;
       }
-
       allow read: if isAdmin()
         || ownHomestayBooking()
         || ownHomestayPartnerBooking();
-
       allow create: if signedIn()
         && request.resource.data.bookingId == bookingId
         && request.resource.data.serviceType == 'homestay'
@@ -5695,9 +4424,7 @@ service cloud.firestore {
         && request.resource.data.bookingStatus == 'request_submitted'
         && request.resource.data.confirmationStatus == 'pending'
         && request.resource.data.partnerConfirmed == false;
-
       allow update: if isAdmin();
-
       allow update: if ownHomestayPartnerBooking()
         && request.resource.data.bookingId == resource.data.bookingId
         && request.resource.data.customerAuthUid == resource.data.customerAuthUid
@@ -5722,16 +4449,8 @@ service cloud.firestore {
           'paidAt',
           'updatedAt'
         ]);
-
       allow delete: if false;
     }
-
-
-    // ============================================================
-    // RD HOMESTAY DIRECT PAYMENT ACCOUNTS
-    // Active Homestay Partners manage only their own receiving details.
-    // Signed-in customers may read only an enabled receiving profile.
-    // ============================================================
     match /homestay_direct_payment_accounts/{partnerId} {
       allow read: if isAdmin()
         || (
@@ -5742,13 +4461,11 @@ service cloud.firestore {
           signedIn()
           && resource.data.enabled == true
         );
-
       allow create: if isActiveHomestayPartner()
         && request.auth.uid == partnerId
         && request.resource.data.partnerId == request.auth.uid
         && request.resource.data.homestayId == request.auth.uid
         && request.resource.data.enabled is bool;
-
       allow update: if isAdmin()
         || (
           isActiveHomestayPartner()
@@ -5758,45 +4475,16 @@ service cloud.firestore {
           && request.resource.data.homestayId == resource.data.homestayId
           && request.resource.data.enabled is bool
         );
-
       allow delete: if isAdmin()
         || (
           isActiveHomestayPartner()
           && request.auth.uid == partnerId
         );
     }
-
-    // ============================================================
-    // RD HOMESTAY FEE SETTINGS
-    // Admin controls monthly fee, commission, due date and
-    // payment instructions. Approved Homestay Partners can read it.
-    // ============================================================
     match /homestay_settings/{settingId} {
       allow read: if isAdmin() || isActiveHomestayPartner();
       allow create, update, delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD HOMESTAY FEE INVOICES
-    // Invoice calculation / status is Admin-controlled.
-    // A Homestay Partner can only read its own invoices.
-    // ============================================================
-    match /homestay_fee_invoices/{invoiceId} {
-      allow read: if isAdmin()
-        || (
-          isActiveHomestayPartner()
-          && resource.data.partnerId == request.auth.uid
-        );
-
-      allow create, update, delete: if isAdmin();
-    }
-
-    // ============================================================
-    // RD HOMESTAY FEE PAYMENTS
-    // Homestay Partner may submit payment proof only for an invoice
-    // that belongs to the same authenticated Homestay Partner.
-    // Verification / rejection is Admin-only.
-    // ============================================================
     match /homestay_fee_payments/{paymentId} {
       function homestayFeeInvoiceExists() {
         return request.resource.data.invoiceId is string
@@ -5804,19 +4492,16 @@ service cloud.firestore {
             /databases/$(database)/documents/homestay_fee_invoices/$(request.resource.data.invoiceId)
           );
       }
-
       function homestayFeeInvoiceData() {
         return get(
           /databases/$(database)/documents/homestay_fee_invoices/$(request.resource.data.invoiceId)
         ).data;
       }
-
       allow read: if isAdmin()
         || (
           isActiveHomestayPartner()
           && resource.data.partnerId == request.auth.uid
         );
-
       allow create: if isAdmin()
         || (
           isActiveHomestayPartner()
@@ -5846,47 +4531,68 @@ service cloud.firestore {
           && request.resource.data.createdAt is timestamp
           && request.resource.data.updatedAt is timestamp
         );
-
       allow update, delete: if isAdmin();
     }
-
-    // ============================================================
-    // RD HOMESTAY FEE ADMIN AUDIT LOG
-    // Keeps a server-side Firestore history of fee settings,
-    // invoice, payment verification, cash and waive actions.
-    // ============================================================
-    match /homestay_fee_audit_logs/{logId} {
-      allow read, create: if isAdmin();
-      allow update, delete: if false;
-    }
-
-    // ============================================================
-    // RD UNIVERSAL TEST ACCESS BACKUPS
-    // Temporary Admin-only backups used so one authenticated Admin
-    // account can test role dashboards and later restore role docs.
-    // ============================================================
     match /rd_test_role_backups/{backupId} {
       allow read, create, update, delete: if isAdmin();
     }
-
-
-
-    // ============================================================
-    // ADMIN-DELETED ORDER TOMBSTONES
-    // Keeps only deletion markers so old customer local backups cannot
-    // resurrect an order after Admin permanently deletes it.
-    // ============================================================
     match /admin_deleted_orders/{orderId} {
       allow read: if isAdmin()
         || (
           hasCustomerSession()
           && resource.data.customerId == customerData().customerId
         );
-
       allow create, update, delete: if isAdmin();
     }
+    
+    match /property_listings/{listingId} {
+      allow read: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.partnerId == request.auth.uid
+        );
+      allow create: if isAdmin();
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && resource.data.partnerId == request.auth.uid
+          && request.resource.data.partnerId == resource.data.partnerId
+          && request.resource.data.status
+            in ['active', 'sold', 'rented', 'archived', 'deleted']
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status',
+            'isDeleted',
+            'deletedAt',
+            'updatedAt'
+          ])
+        );
+      allow delete: if isAdmin();
+    }
+    match /property_partners/{partnerUid} {
+      allow read: if isAdmin()
+        || (signedIn() && request.auth.uid == partnerUid);
 
+      allow create: if signedIn()
+        && request.auth.uid == partnerUid
+        && request.resource.data.authUid == request.auth.uid
+        && request.resource.data.partnerId is string
+        && request.resource.data.isApproved == false
+        && request.resource.data.status == 'pending';
 
+      allow update: if isAdmin()
+        || (
+          signedIn()
+          && request.auth.uid == partnerUid
+          && resource.data.authUid == request.auth.uid
+          && request.resource.data.authUid == resource.data.authUid
+          && request.resource.data.partnerId == resource.data.partnerId
+          && request.resource.data.isApproved == resource.data.isApproved
+          && request.resource.data.status == resource.data.status
+          && request.resource.data.createdAt == resource.data.createdAt
+        );
+
+      allow delete: if isAdmin();
+    }
     match /{document=**} {
       allow read, write: if false;
     }
