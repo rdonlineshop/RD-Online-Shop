@@ -4593,6 +4593,22 @@ service cloud.firestore {
 
       allow delete: if isAdmin();
     }
+    // ============================================================
+    // NRD PROPERTY ADMIN SUPPORT COLLECTIONS
+    // Admin-only records used by Property & Rent Admin.
+    // ============================================================
+    match /property_admin_settings/{settingId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    match /property_commission_payments/{paymentId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
+    match /property_reports/{reportId} {
+      allow read, create, update, delete: if isAdmin();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

@@ -5,6 +5,9 @@ import 'package:firebase_auth/firebase_auth.dart';
 import 'package:flutter/material.dart';
 import 'package:http/http.dart' as http;
 import 'package:image_picker/image_picker.dart';
+import 'package:url_launcher/url_launcher.dart';
+
+import 'property_location_picker_page.dart';
 
 class PropertyPartnerProfilePage extends StatefulWidget {
   const PropertyPartnerProfilePage({super.key});
@@ -48,6 +51,9 @@ class _PropertyPartnerProfilePageState
   String _officePhotoUrl = '';
   String _status = 'pending';
   bool _isApproved = false;
+
+  double? _latitude;
+  double? _longitude;
 
   static const List<String> _partnerTypes = <String>[
     'Owner',
@@ -104,6 +110,16 @@ class _PropertyPartnerProfilePageState
           data['status']?.toString().trim().toLowerCase() ??
           'pending';
       _isApproved = data['isApproved'] == true;
+
+      final dynamic savedLatitude = data['latitude'];
+      final dynamic savedLongitude = data['longitude'];
+
+      _latitude = savedLatitude is num
+          ? savedLatitude.toDouble()
+          : double.tryParse(savedLatitude?.toString() ?? '');
+      _longitude = savedLongitude is num
+          ? savedLongitude.toDouble()
+          : double.tryParse(savedLongitude?.toString() ?? '');
 
       _fullName.text =
           data['fullName']?.toString().trim() ?? '';
@@ -317,6 +333,13 @@ class _PropertyPartnerProfilePageState
       return;
     }
 
+    if (_latitude == null || _longitude == null) {
+      _showMessage(
+        'Please add the exact Property Partner / Office location.',
+      );
+      return;
+    }
+
     if ((_partnerType == 'Office' ||
             _partnerType == 'Company') &&
         _officePhotoUrl.isEmpty) {
@@ -346,6 +369,9 @@ class _PropertyPartnerProfilePageState
           'district': _district.text.trim(),
           'municipality': _municipality.text.trim(),
           'ward': _ward.text.trim(),
+          'latitude': _latitude,
+          'longitude': _longitude,
+          'locationUpdatedAt': FieldValue.serverTimestamp(),
           'registrationNumber':
               _registrationNumber.text.trim(),
           'panVatNumber': _panVatNumber.text.trim(),
@@ -371,6 +397,130 @@ class _PropertyPartnerProfilePageState
         });
       }
     }
+  }
+
+  Future<void> _pickPartnerLocation() async {
+    final PropertyLocationResult? result =
+        await Navigator.push<PropertyLocationResult>(
+      context,
+      MaterialPageRoute<PropertyLocationResult>(
+        builder: (_) => PropertyLocationPickerPage(
+          title: _officePartner
+              ? 'Office / Company Location'
+              : 'Property Partner Location',
+          initialLatitude: _latitude,
+          initialLongitude: _longitude,
+        ),
+      ),
+    );
+
+    if (result == null || !mounted) {
+      return;
+    }
+
+    setState(() {
+      _latitude = result.latitude;
+      _longitude = result.longitude;
+    });
+  }
+
+  Future<void> _openPartnerMap() async {
+    final double? lat = _latitude;
+    final double? lng = _longitude;
+
+    if (lat == null || lng == null) {
+      _showMessage('Add the Property Partner location first.');
+      return;
+    }
+
+    final Uri uri = Uri.parse(
+      'https://www.google.com/maps/@?api=1'
+      '&map_action=map'
+      '&center=$lat,$lng'
+      '&zoom=20',
+    );
+
+    if (!await launchUrl(
+      uri,
+      mode: LaunchMode.externalApplication,
+    )) {
+      _showMessage('Could not open the saved location.');
+    }
+  }
+
+  Widget _partnerLocationCard() {
+    final bool hasLocation =
+        _latitude != null && _longitude != null;
+
+    return Card(
+      margin: EdgeInsets.zero,
+      child: Padding(
+        padding: const EdgeInsets.all(14),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            const Row(
+              children: <Widget>[
+                Icon(Icons.location_on_rounded),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Exact Partner / Office Location',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 16,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            const Text(
+              'Use live GPS, tap the map, or paste a location shared through WhatsApp, Messenger, Email or Google Maps.',
+              style: TextStyle(
+                color: Colors.black54,
+                height: 1.35,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Text(
+              hasLocation
+                  ? '${_latitude!.toStringAsFixed(6)}, '
+                      '${_longitude!.toStringAsFixed(6)}'
+                  : 'No exact map location selected.',
+              style: TextStyle(
+                fontWeight: FontWeight.w800,
+                color: hasLocation
+                    ? Colors.green.shade800
+                    : Colors.orange.shade800,
+              ),
+            ),
+            const SizedBox(height: 10),
+            Wrap(
+              spacing: 8,
+              runSpacing: 8,
+              children: <Widget>[
+                FilledButton.icon(
+                  onPressed: _saving ? null : _pickPartnerLocation,
+                  icon: const Icon(Icons.map_rounded),
+                  label: Text(
+                    hasLocation
+                        ? 'Change Map Location'
+                        : 'Add Exact Location',
+                  ),
+                ),
+                OutlinedButton.icon(
+                  onPressed:
+                      hasLocation ? _openPartnerMap : null,
+                  icon: const Icon(Icons.open_in_new_rounded),
+                  label: const Text('View on Map'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
   }
 
   Widget _photoCard({
@@ -728,6 +878,8 @@ class _PropertyPartnerProfilePageState
                       required: false,
                     ),
                   ],
+                  const SizedBox(height: 14),
+                  _partnerLocationCard(),
                   const SizedBox(height: 14),
                   _field(
                     controller: _address,

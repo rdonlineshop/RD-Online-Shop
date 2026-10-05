@@ -1,8 +1,14 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_map/flutter_map.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:latlong2/latlong.dart';
 import 'package:url_launcher/url_launcher.dart';
+
+import 'services/ride_incoming_share_service.dart';
+import 'services/ride_location_input_service.dart';
 
 class PropertyLocationResult {
   final double latitude;
@@ -18,10 +24,16 @@ class PropertyLocationResult {
 
 class PropertyLocationPickerPage extends StatefulWidget {
   final bool enableBoundary;
+  final String title;
+  final double? initialLatitude;
+  final double? initialLongitude;
 
   const PropertyLocationPickerPage({
     super.key,
     this.enableBoundary = false,
+    this.title = 'Property Map Location',
+    this.initialLatitude,
+    this.initialLongitude,
   });
 
   @override
@@ -32,6 +44,8 @@ class PropertyLocationPickerPage extends StatefulWidget {
 class _PropertyLocationPickerPageState
     extends State<PropertyLocationPickerPage> {
   final MapController _mapController = MapController();
+  final RideLocationInputService _locationInputService =
+      const RideLocationInputService();
 
   static const LatLng _nepalCenter = LatLng(28.3949, 84.1240);
 
@@ -39,7 +53,57 @@ class _PropertyLocationPickerPageState
   final List<LatLng> _boundaryPoints = <LatLng>[];
 
   bool _isLoadingLocation = false;
+  bool _resolvingSharedLocation = false;
   bool _boundaryMode = false;
+
+  StreamSubscription<String>? _incomingShareSubscription;
+
+  @override
+  void initState() {
+    super.initState();
+
+    final double? lat = widget.initialLatitude;
+    final double? lng = widget.initialLongitude;
+
+    if (lat != null && lng != null) {
+      _selectedPoint = LatLng(lat, lng);
+
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (!mounted || _selectedPoint == null) {
+          return;
+        }
+        _mapController.move(_selectedPoint!, 18);
+      });
+    }
+
+    _incomingShareSubscription =
+        RideIncomingShareService.instance.sharedTextStream.listen(
+      _handleIncomingSharedText,
+    );
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _consumePendingSharedText();
+    });
+  }
+
+  Future<void> _consumePendingSharedText() async {
+    final String? text =
+        RideIncomingShareService.instance.consumePendingText();
+
+    if (text == null || text.trim().isEmpty || !mounted) {
+      return;
+    }
+
+    await _resolveSharedText(text);
+  }
+
+  Future<void> _handleIncomingSharedText(String text) async {
+    if (!mounted || text.trim().isEmpty) {
+      return;
+    }
+
+    await _resolveSharedText(text);
+  }
 
   Future<void> _useCurrentLocation() async {
     if (_isLoadingLocation) {
@@ -143,6 +207,133 @@ class _PropertyLocationPickerPageState
     });
   }
 
+  Future<void> _pasteSharedLocation() async {
+    if (_resolvingSharedLocation) {
+      return;
+    }
+
+    final ClipboardData? data =
+        await Clipboard.getData(Clipboard.kTextPlain);
+
+    final String text = data?.text?.trim() ?? '';
+
+    if (text.isEmpty) {
+      _showMessage(
+        'Clipboard does not contain a map link or GPS coordinates.',
+      );
+      return;
+    }
+
+    await _resolveSharedText(text);
+  }
+
+  Future<void> _typeSharedLocation() async {
+    String typedValue = '';
+
+    final String? value = await showDialog<String>(
+      context: context,
+      builder: (BuildContext dialogContext) {
+        return AlertDialog(
+          title: const Text('Add Shared Location'),
+          content: SizedBox(
+            width: 520,
+            child: TextField(
+              autofocus: true,
+              minLines: 2,
+              maxLines: 5,
+              onChanged: (String value) {
+                typedValue = value;
+              },
+              onSubmitted: (String value) {
+                final String clean = value.trim();
+                if (clean.isNotEmpty) {
+                  Navigator.pop(dialogContext, clean);
+                }
+              },
+              decoration: const InputDecoration(
+                hintText:
+                    'Paste Google Maps / WhatsApp location link or latitude, longitude',
+                border: OutlineInputBorder(),
+              ),
+            ),
+          ),
+          actions: <Widget>[
+            TextButton(
+              onPressed: () => Navigator.pop(dialogContext),
+              child: const Text('Cancel'),
+            ),
+            FilledButton.icon(
+              onPressed: () {
+                final String clean = typedValue.trim();
+                if (clean.isEmpty) {
+                  return;
+                }
+                Navigator.pop(dialogContext, clean);
+              },
+              icon: const Icon(Icons.location_searching_rounded),
+              label: const Text('Use Location'),
+            ),
+          ],
+        );
+      },
+    );
+
+    await WidgetsBinding.instance.endOfFrame;
+
+    if (!mounted || value == null || value.trim().isEmpty) {
+      return;
+    }
+
+    await _resolveSharedText(value.trim());
+  }
+
+  Future<void> _resolveSharedText(String text) async {
+    if (_resolvingSharedLocation) {
+      return;
+    }
+
+    setState(() {
+      _resolvingSharedLocation = true;
+    });
+
+    try {
+      final RideSharedLocation? location =
+          await _locationInputService.resolveSharedLocation(text);
+
+      if (location == null) {
+        _showMessage(
+          'Could not read GPS from that shared location. Try a full Google Maps link, a WhatsApp-shared map link, or latitude, longitude.',
+        );
+        return;
+      }
+
+      final LatLng point = LatLng(
+        location.latitude,
+        location.longitude,
+      );
+
+      if (!mounted) {
+        return;
+      }
+
+      setState(() {
+        _selectedPoint = point;
+      });
+
+      _mapController.move(point, 18);
+
+      _showMessage(
+        'Shared location added. Check the pin on the map, then confirm it.',
+      );
+    } finally {
+      if (mounted) {
+        setState(() {
+          _resolvingSharedLocation = false;
+        });
+      }
+    }
+  }
+
   Future<void> _openSatelliteMap() async {
     final LatLng? point = _selectedPoint;
 
@@ -240,15 +431,22 @@ class _PropertyLocationPickerPageState
   }
 
   @override
+  void dispose() {
+    _incomingShareSubscription?.cancel();
+    _mapController.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
     final LatLng center =
         _selectedPoint ?? _nepalCenter;
 
     return Scaffold(
       appBar: AppBar(
-        title: const Text(
-          'Property Map Location',
-          style: TextStyle(
+        title: Text(
+          widget.title,
+          style: const TextStyle(
             fontWeight: FontWeight.w900,
           ),
         ),
@@ -443,6 +641,23 @@ class _PropertyLocationPickerPageState
                       ),
                   ],
                   const SizedBox(height: 8),
+                  const Text(
+                    'Location Options',
+                    style: TextStyle(
+                      fontWeight: FontWeight.w900,
+                      fontSize: 14,
+                    ),
+                  ),
+                  const SizedBox(height: 4),
+                  const Text(
+                    'You can use your live GPS, select a point on the map, or paste a Google Maps location shared through WhatsApp, Messenger or another app.',
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: Colors.black54,
+                      height: 1.3,
+                    ),
+                  ),
+                  const SizedBox(height: 8),
                   Wrap(
                     spacing: 8,
                     runSpacing: 8,
@@ -465,6 +680,36 @@ class _PropertyLocationPickerPageState
                               ),
                         label: const Text(
                           'Use Live GPS',
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _resolvingSharedLocation
+                            ? null
+                            : _pasteSharedLocation,
+                        icon: _resolvingSharedLocation
+                            ? const SizedBox(
+                                width: 18,
+                                height: 18,
+                                child: CircularProgressIndicator(
+                                  strokeWidth: 2,
+                                ),
+                              )
+                            : const Icon(
+                                Icons.content_paste_rounded,
+                              ),
+                        label: const Text(
+                          'Paste Google Maps Location',
+                        ),
+                      ),
+                      OutlinedButton.icon(
+                        onPressed: _resolvingSharedLocation
+                            ? null
+                            : _typeSharedLocation,
+                        icon: const Icon(
+                          Icons.link_rounded,
+                        ),
+                        label: const Text(
+                          'Paste / Enter Link or GPS',
                         ),
                       ),
                       OutlinedButton.icon(
@@ -497,7 +742,7 @@ class _PropertyLocationPickerPageState
                       padding:
                           EdgeInsets.symmetric(vertical: 12),
                       child: Text(
-                        'Use This Property Location',
+                        'Use This Location',
                         style: TextStyle(
                           fontWeight: FontWeight.w900,
                         ),
